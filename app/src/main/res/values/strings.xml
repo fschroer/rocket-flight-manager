@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Rocket Flight Manager</string>
+    <string name="download_map">Download map</string>
+    <string name="export">Export flight path</string>
+    <string name="locator_settings">Locator Settings</string>
+    <string name="receiver_settings">Receiver Settings</string>
+    <string name="back_button">Back</string>
+    <string name="cancel">Cancel</string>
+    <string name="next">Next</string>
+    <string name="exit">Exit</string>
+</resources>
