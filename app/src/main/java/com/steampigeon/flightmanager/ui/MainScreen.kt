@@ -60,6 +60,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapType
@@ -332,6 +333,12 @@ fun HomeScreen(
                             title = rocketData.deviceName,
                             snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
                         )
+                        Circle(
+                            center = locatorLatLng,
+                            fillColor = Color(0x22ff0000),
+                            radius = (4 * rocketData.hdop).toDouble(),
+                            strokeColor = Color.Transparent,
+                        )
                     }
                     if (isMapLoaded) {
                         // Update camera position when markerPosition changes
@@ -367,7 +374,7 @@ fun HomeScreen(
                                         if (rocketData.latitude.toInt() != 0 || rocketData.longitude.toInt() != 0) {
                                             if (abs((distanceToLocator - previousDistanceToLocator).toFloat() / (previousDistanceToLocator + 1)) > 0.1) {
                                                 cameraPositionStateZoom =
-                                                    24 - log2(distanceToLocator.toFloat())
+                                                    23 - log2(distanceToLocator.toFloat())
                                                 previousDistanceToLocator = distanceToLocator
                                             }
                                         }

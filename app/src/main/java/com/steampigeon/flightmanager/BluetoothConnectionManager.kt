@@ -184,6 +184,13 @@ class BluetoothConnectionManager() {
                 else
                     bluetoothConnectionState = BluetoothConnectionState.Paired
             }
+            BluetoothConnectionState.Pairing -> {
+                bluetoothConnectionState = BluetoothConnectionState.Enabled
+            }
+            BluetoothConnectionState.SelectingDevices -> {
+                if (bluetoothAdapter?.isDiscovering == false)
+                    bluetoothConnectionState = BluetoothConnectionState.Enabled
+            }
             BluetoothConnectionState.Paired -> {
                 if (bluetoothAdapter?.isEnabled == true) {
                     if (locatorDevice?.bondState != BluetoothDevice.BOND_BONDED) {
