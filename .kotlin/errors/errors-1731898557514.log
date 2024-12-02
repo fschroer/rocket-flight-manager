@@ -1,0 +1,327 @@
+kotlin version: 2.0.0
+error message: org.jetbrains.kotlin.backend.common.BackendException: Backend Internal error: Exception during IR lowering
+File being compiled: C:/Users/kyled/AndroidStudioProjects/RocketFlightManager/app/src/main/java/com/steampigeon/flightmanager/ui/MainScreen.kt
+The root cause java.lang.RuntimeException was thrown at: org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:50)
+	at org.jetbrains.kotlin.backend.common.CodegenUtil.reportBackendException(CodegenUtil.kt:253)
+	at org.jetbrains.kotlin.backend.common.CodegenUtil.reportBackendException$default(CodegenUtil.kt:236)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invokeSequential(performByIrFile.kt:65)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invoke(performByIrFile.kt:52)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invoke(performByIrFile.kt:38)
+	at org.jetbrains.kotlin.backend.common.phaser.NamedCompilerPhase.phaseBody(CompilerPhase.kt:166)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.CompositePhase.invoke(PhaseBuilders.kt:29)
+	at org.jetbrains.kotlin.backend.common.phaser.CompositePhase.invoke(PhaseBuilders.kt:16)
+	at org.jetbrains.kotlin.backend.common.phaser.NamedCompilerPhase.phaseBody(CompilerPhase.kt:166)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.CompilerPhaseKt.invokeToplevel(CompilerPhase.kt:62)
+	at org.jetbrains.kotlin.backend.jvm.JvmIrCodegenFactory.invokeCodegen(JvmIrCodegenFactory.kt:371)
+	at org.jetbrains.kotlin.codegen.CodegenFactory.generateModule(CodegenFactory.kt:47)
+	at org.jetbrains.kotlin.backend.jvm.JvmIrCodegenFactory.generateModuleInFrontendIRMode(JvmIrCodegenFactory.kt:433)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineKt.generateCodeFromIr(jvmCompilerPipeline.kt:241)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineKt.compileModulesUsingFrontendIrAndLightTree(jvmCompilerPipeline.kt:140)
+	at org.jetbrains.kotlin.cli.jvm.K2JVMCompiler.doExecute(K2JVMCompiler.kt:155)
+	at org.jetbrains.kotlin.cli.jvm.K2JVMCompiler.doExecute(K2JVMCompiler.kt:50)
+	at org.jetbrains.kotlin.cli.common.CLICompiler.execImpl(CLICompiler.kt:104)
+	at org.jetbrains.kotlin.cli.common.CLICompiler.execImpl(CLICompiler.kt:48)
+	at org.jetbrains.kotlin.cli.common.CLITool.exec(CLITool.kt:101)
+	at org.jetbrains.kotlin.incremental.IncrementalJvmCompilerRunner.runCompiler(IncrementalJvmCompilerRunner.kt:453)
+	at org.jetbrains.kotlin.incremental.IncrementalJvmCompilerRunner.runCompiler(IncrementalJvmCompilerRunner.kt:62)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.doCompile(IncrementalCompilerRunner.kt:506)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.compileImpl(IncrementalCompilerRunner.kt:423)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.tryCompileIncrementally$lambda$9$compile(IncrementalCompilerRunner.kt:249)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.tryCompileIncrementally(IncrementalCompilerRunner.kt:267)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.compile(IncrementalCompilerRunner.kt:120)
+	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.execIncrementalCompiler(CompileServiceImpl.kt:676)
+	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.access$execIncrementalCompiler(CompileServiceImpl.kt:92)
+	at org.jetbrains.kotlin.daemon.CompileServiceImpl.compile(CompileServiceImpl.kt:1661)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(Unknown Source)
+	at java.base/java.lang.reflect.Method.invoke(Unknown Source)
+	at java.rmi/sun.rmi.server.UnicastServerRef.dispatch(Unknown Source)
+	at java.rmi/sun.rmi.transport.Transport$1.run(Unknown Source)
+	at java.rmi/sun.rmi.transport.Transport$1.run(Unknown Source)
+	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
+	at java.rmi/sun.rmi.transport.Transport.serviceCall(Unknown Source)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport.handleMessages(Unknown Source)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run0(Unknown Source)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.lambda$run$0(Unknown Source)
+	at java.base/java.security.AccessController.doPrivileged(Unknown Source)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(Unknown Source)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(Unknown Source)
+	at java.base/java.lang.Thread.run(Unknown Source)
+Caused by: java.lang.RuntimeException: Exception while generating code for:
+FUN name:EnableBluetooth visibility:public modality:FINAL <> ($composer:androidx.compose.runtime.Composer?, $changed:kotlin.Int) returnType:kotlin.Unit
+  annotations:
+    Composable
+    ComposableTarget(applier = "androidx.compose.ui.UiComposable")
+  VALUE_PARAMETER name:$composer index:0 type:androidx.compose.runtime.Composer? [assignable]
+  VALUE_PARAMETER name:$changed index:1 type:kotlin.Int
+  BLOCK_BODY
+    BLOCK type=kotlin.Unit origin=null
+      SET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Unit origin=null
+        CALL 'public abstract fun startRestartGroup (key: kotlin.Int): androidx.compose.runtime.Composer declared in androidx.compose.runtime.Composer' type=androidx.compose.runtime.Composer origin=null
+          $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+          key: CONST Int type=kotlin.Int value=-609691480
+      CALL 'public final fun sourceInformation (composer: androidx.compose.runtime.Composer, sourceInformation: kotlin.String): kotlin.Unit declared in androidx.compose.runtime.ComposerKt' type=kotlin.Unit origin=null
+        composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+        sourceInformation: CONST String type=kotlin.String value="C(EnableBluetooth)455@20646L7,457@20780L37,458@20852L301,470@21238L49,471@21323L7,471@21296L47:MainScreen.kt#z5qgwq"
+    WHEN type=kotlin.Unit origin=IF
+      BRANCH
+        if: CALL 'public final fun OROR (arg0: kotlin.Boolean, arg1: kotlin.Boolean): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+          arg0: CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+            $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+              arg0: GET_VAR '$changed: kotlin.Int declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Int origin=null
+              arg1: CONST Int type=kotlin.Int value=0
+          arg1: CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+            $this: CALL 'public abstract fun <get-skipping> (): kotlin.Boolean declared in androidx.compose.runtime.Composer' type=kotlin.Boolean origin=null
+              $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+        then: BLOCK type=kotlin.Unit origin=null
+          VAR name:context type:android.content.Context [val]
+            CALL 'public final fun <get-current> ($composer: androidx.compose.runtime.Composer?, $changed: kotlin.Int): T of androidx.compose.runtime.CompositionLocal [inline] declared in androidx.compose.runtime.CompositionLocal' type=android.content.Context origin=GET_PROPERTY
+              $this: TYPE_OP type=androidx.compose.runtime.CompositionLocal<T of androidx.compose.runtime.CompositionLocal> origin=IMPLICIT_CAST typeOperand=androidx.compose.runtime.CompositionLocal<T of androidx.compose.runtime.CompositionLocal>
+                CALL 'public final fun <get-LocalContext> (): androidx.compose.runtime.ProvidableCompositionLocal<android.content.Context> declared in androidx.compose.ui.platform.AndroidCompositionLocals_androidKt' type=androidx.compose.runtime.ProvidableCompositionLocal<android.content.Context> origin=GET_PROPERTY
+              $composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+              $changed: CONST Int type=kotlin.Int value=0
+          VAR name:bluetoothManager type:android.bluetooth.BluetoothManager [val]
+            BLOCK type=android.bluetooth.BluetoothManager origin=null
+              VAR IR_TEMPORARY_VARIABLE name:tmp0 type:kotlin.Any? [val]
+                CALL 'public abstract fun getSystemService (p0: @[EnhancedNullability] kotlin.String): @[FlexibleNullability] kotlin.Any? declared in android.content.Context' type=@[FlexibleNullability] kotlin.Any? origin=null
+                  $this: GET_VAR 'val context: android.content.Context [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=android.content.Context origin=null
+                  p0: CONST String type=kotlin.String value="bluetooth"
+              CALL 'public final fun checkNotNull (object: kotlin.Any?, message: kotlin.String): kotlin.Unit declared in kotlin.jvm.internal.Intrinsics' type=kotlin.Unit origin=null
+                object: GET_VAR 'val tmp0: kotlin.Any? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Any? origin=null
+                message: CONST String type=kotlin.String value="null cannot be cast to non-null type android.bluetooth.BluetoothManager"
+              TYPE_OP type=android.bluetooth.BluetoothManager? origin=CAST typeOperand=android.bluetooth.BluetoothManager?
+                GET_VAR 'val tmp0: kotlin.Any? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Any? origin=null
+          VAR name:bluetoothAdapter type:@[FlexibleNullability] android.bluetooth.BluetoothAdapter? [val]
+            BLOCK type=@[FlexibleNullability] android.bluetooth.BluetoothAdapter? origin=null
+              BLOCK type=kotlin.Unit origin=null
+                CALL 'public abstract fun startReplaceGroup (key: kotlin.Int): kotlin.Unit declared in androidx.compose.runtime.Composer' type=kotlin.Unit origin=null
+                  $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                  key: CONST Int type=kotlin.Int value=-1181094052
+                CALL 'public final fun sourceInformation (composer: androidx.compose.runtime.Composer, sourceInformation: kotlin.String): kotlin.Unit declared in androidx.compose.runtime.ComposerKt' type=kotlin.Unit origin=null
+                  composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                  sourceInformation: CONST String type=kotlin.String value="CC(remember):MainScreen.kt#9igjgp"
+              VAR IR_TEMPORARY_VARIABLE name:tmp0_group type:@[FlexibleNullability] android.bluetooth.BluetoothAdapter? [val]
+                CALL 'public final fun cache <T> (invalid: kotlin.Boolean, block: @[DisallowComposableCalls] kotlin.Function0<T of androidx.compose.runtime.ComposerKt.cache>): T of androidx.compose.runtime.ComposerKt.cache [inline] declared in androidx.compose.runtime.ComposerKt' type=@[FlexibleNullability] android.bluetooth.BluetoothAdapter? origin=null
+                  <T>: @[FlexibleNullability] android.bluetooth.BluetoothAdapter?
+                  $receiver: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                  invalid: CONST Boolean type=kotlin.Boolean value=false
+                  block: BLOCK type=kotlin.Function0<@[FlexibleNullability] android.bluetooth.BluetoothAdapter?> origin=LAMBDA
+                    COMPOSITE type=kotlin.Unit origin=null
+                    FUNCTION_REFERENCE 'private final fun EnableBluetooth$lambda$13 ($bluetoothManager: android.bluetooth.BluetoothManager): @[FlexibleNullability] android.bluetooth.BluetoothAdapter? declared in com.steampigeon.flightmanager.ui.MainScreenKt' type=kotlin.Function0<@[FlexibleNullability] android.bluetooth.BluetoothAdapter?> origin=INLINE_LAMBDA reflectionTarget=null
+                      $bluetoothManager: GET_VAR 'val bluetoothManager: android.bluetooth.BluetoothManager [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=android.bluetooth.BluetoothManager origin=null
+              CALL 'public abstract fun endReplaceGroup (): kotlin.Unit declared in androidx.compose.runtime.Composer' type=kotlin.Unit origin=null
+                $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+              GET_VAR 'val tmp0_group: @[FlexibleNullability] android.bluetooth.BluetoothAdapter? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=@[FlexibleNullability] android.bluetooth.BluetoothAdapter? origin=null
+          VAR name:enableBluetoothLauncher type:androidx.activity.compose.ManagedActivityResultLauncher<android.content.Intent, androidx.activity.result.ActivityResult> [val]
+            CALL 'public final fun rememberLauncherForActivityResult <I, O> (contract: androidx.activity.result.contract.ActivityResultContract<I of androidx.activity.compose.ActivityResultRegistryKt.rememberLauncherForActivityResult, O of androidx.activity.compose.ActivityResultRegistryKt.rememberLauncherForActivityResult>, onResult: kotlin.Function1<O of androidx.activity.compose.ActivityResultRegistryKt.rememberLauncherForActivityResult, kotlin.Unit>, $composer: androidx.compose.runtime.Composer?, $changed: kotlin.Int): androidx.activity.compose.ManagedActivityResultLauncher<I of androidx.activity.compose.ActivityResultRegistryKt.rememberLauncherForActivityResult, O of androidx.activity.compose.ActivityResultRegistryKt.rememberLauncherForActivityResult> declared in androidx.activity.compose.ActivityResultRegistryKt' type=androidx.activity.compose.ManagedActivityResultLauncher<android.content.Intent, androidx.activity.result.ActivityResult> origin=null
+              <I>: android.content.Intent
+              <O>: androidx.activity.result.ActivityResult
+              contract: CONSTRUCTOR_CALL 'public constructor <init> () [primary] declared in androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult' type=androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult origin=null
+              onResult: BLOCK type=kotlin.Function1<androidx.activity.result.ActivityResult, kotlin.Unit> origin=LAMBDA
+                COMPOSITE type=kotlin.Unit origin=null
+                CALL 'public final fun <jvm-indy> <T> (dynamicCall: T of kotlin.jvm.internal.<jvm-indy>, bootstrapMethodHandle: kotlin.Any, vararg bootstrapMethodArguments: kotlin.Any): T of kotlin.jvm.internal.<jvm-indy> declared in kotlin.jvm.internal' type=kotlin.Function1<androidx.activity.result.ActivityResult, kotlin.Unit> origin=null
+                  <T>: kotlin.Function1<androidx.activity.result.ActivityResult, kotlin.Unit>
+                  dynamicCall: CALL 'public final fun invoke (): kotlin.Function1<androidx.activity.result.ActivityResult, kotlin.Unit> declared in kotlin.jvm.internal.invokeDynamic' type=kotlin.Function1<androidx.activity.result.ActivityResult, kotlin.Unit> origin=null
+                  bootstrapMethodHandle: CALL 'public final fun <jvm-method-handle> (tag: kotlin.Int, owner: kotlin.String, name: kotlin.String, descriptor: kotlin.String, isInterface: kotlin.Boolean): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                    tag: CONST Int type=kotlin.Int value=6
+                    owner: CONST String type=kotlin.String value="java/lang/invoke/LambdaMetafactory"
+                    name: CONST String type=kotlin.String value="metafactory"
+                    descriptor: CONST String type=kotlin.String value="(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"
+                    isInterface: CONST Boolean type=kotlin.Boolean value=false
+                  bootstrapMethodArguments: VARARG type=kotlin.Array<kotlin.Any> varargElementType=kotlin.Any
+                    CALL 'public final fun <jvm-original-method-type> (method: kotlin.Any): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                      method: RAW_FUNCTION_REFERENCE 'public abstract fun invoke (p1: P1 of kotlin.Function1): R of kotlin.Function1 [operator] declared in kotlin.Function1' type=kotlin.Any
+                    RAW_FUNCTION_REFERENCE 'private final fun EnableBluetooth$lambda$14 (result: androidx.activity.result.ActivityResult): kotlin.Unit? declared in com.steampigeon.flightmanager.ui.MainScreenKt' type=kotlin.Any
+                    CALL 'public final fun <jvm-original-method-type> (method: kotlin.Any): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                      method: RAW_FUNCTION_REFERENCE 'public abstract fun invoke (p1: androidx.activity.result.ActivityResult): kotlin.Unit? [fake_override,operator] declared in kotlin.jvm.internal.invokeDynamic.<fake>' type=kotlin.Any
+              $composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+              $changed: CONST Int type=kotlin.Int value=56
+          BLOCK type=kotlin.Unit origin=null
+            COMPOSITE type=kotlin.Unit origin=null
+            WHEN type=kotlin.Unit origin=IF
+              BRANCH
+                if: CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=EXCLEQ
+                  $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=EXCLEQ
+                    arg0: GET_VAR 'val bluetoothAdapter: @[FlexibleNullability] android.bluetooth.BluetoothAdapter? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=@[FlexibleNullability] android.bluetooth.BluetoothAdapter? origin=null
+                    arg1: CONST Null type=kotlin.Nothing? value=null
+                then: BLOCK type=kotlin.Unit origin=null
+                  CALL 'public final fun Text--4IGK_g (text: kotlin.String, modifier: androidx.compose.ui.Modifier?, color: androidx.compose.ui.graphics.Color, fontSize: androidx.compose.ui.unit.TextUnit, fontStyle: androidx.compose.ui.text.font.FontStyle?, fontWeight: androidx.compose.ui.text.font.FontWeight?, fontFamily: androidx.compose.ui.text.font.FontFamily?, letterSpacing: androidx.compose.ui.unit.TextUnit, textDecoration: androidx.compose.ui.text.style.TextDecoration?, textAlign: androidx.compose.ui.text.style.TextAlign?, lineHeight: androidx.compose.ui.unit.TextUnit, overflow: androidx.compose.ui.text.style.TextOverflow, softWrap: kotlin.Boolean, maxLines: kotlin.Int, minLines: kotlin.Int, onTextLayout: kotlin.Function1<androidx.compose.ui.text.TextLayoutResult, kotlin.Unit>?, style: androidx.compose.ui.text.TextStyle?, $composer: androidx.compose.runtime.Composer?, $changed: kotlin.Int, $changed1: kotlin.Int, $default: kotlin.Int): kotlin.Unit declared in androidx.compose.material3.TextKt' type=kotlin.Unit origin=null
+                    text: CONST String type=kotlin.String value="Bluetooth is not supported on this device"
+                    modifier: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    color: COMPOSITE type=androidx.compose.ui.graphics.Color origin=DEFAULT_VALUE
+                      CALL 'public final fun <unsafe-coerce> <T, R> (v: T of kotlin.jvm.internal.<unsafe-coerce>): R of kotlin.jvm.internal.<unsafe-coerce> declared in kotlin.jvm.internal' type=androidx.compose.ui.graphics.Color origin=null
+                        <T>: kotlin.Long
+                        <R>: androidx.compose.ui.graphics.Color
+                        v: CONST Long type=kotlin.Long value=0
+                    fontSize: COMPOSITE type=androidx.compose.ui.unit.TextUnit origin=DEFAULT_VALUE
+                      CALL 'public final fun <unsafe-coerce> <T, R> (v: T of kotlin.jvm.internal.<unsafe-coerce>): R of kotlin.jvm.internal.<unsafe-coerce> declared in kotlin.jvm.internal' type=androidx.compose.ui.unit.TextUnit origin=null
+                        <T>: kotlin.Long
+                        <R>: androidx.compose.ui.unit.TextUnit
+                        v: CONST Long type=kotlin.Long value=0
+                    fontStyle: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    fontWeight: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    fontFamily: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    letterSpacing: COMPOSITE type=androidx.compose.ui.unit.TextUnit origin=DEFAULT_VALUE
+                      CALL 'public final fun <unsafe-coerce> <T, R> (v: T of kotlin.jvm.internal.<unsafe-coerce>): R of kotlin.jvm.internal.<unsafe-coerce> declared in kotlin.jvm.internal' type=androidx.compose.ui.unit.TextUnit origin=null
+                        <T>: kotlin.Long
+                        <R>: androidx.compose.ui.unit.TextUnit
+                        v: CONST Long type=kotlin.Long value=0
+                    textDecoration: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    textAlign: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    lineHeight: COMPOSITE type=androidx.compose.ui.unit.TextUnit origin=DEFAULT_VALUE
+                      CALL 'public final fun <unsafe-coerce> <T, R> (v: T of kotlin.jvm.internal.<unsafe-coerce>): R of kotlin.jvm.internal.<unsafe-coerce> declared in kotlin.jvm.internal' type=androidx.compose.ui.unit.TextUnit origin=null
+                        <T>: kotlin.Long
+                        <R>: androidx.compose.ui.unit.TextUnit
+                        v: CONST Long type=kotlin.Long value=0
+                    overflow: COMPOSITE type=androidx.compose.ui.text.style.TextOverflow origin=DEFAULT_VALUE
+                      CALL 'public final fun <unsafe-coerce> <T, R> (v: T of kotlin.jvm.internal.<unsafe-coerce>): R of kotlin.jvm.internal.<unsafe-coerce> declared in kotlin.jvm.internal' type=androidx.compose.ui.text.style.TextOverflow origin=null
+                        <T>: kotlin.Int
+                        <R>: androidx.compose.ui.text.style.TextOverflow
+                        v: CONST Int type=kotlin.Int value=0
+                    softWrap: COMPOSITE type=kotlin.Boolean origin=DEFAULT_VALUE
+                      CONST Boolean type=kotlin.Boolean value=false
+                    maxLines: COMPOSITE type=kotlin.Int origin=DEFAULT_VALUE
+                      CONST Int type=kotlin.Int value=0
+                    minLines: COMPOSITE type=kotlin.Int origin=DEFAULT_VALUE
+                      CONST Int type=kotlin.Int value=0
+                    onTextLayout: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    style: COMPOSITE type=kotlin.Nothing? origin=DEFAULT_VALUE
+                      CONST Null type=kotlin.Nothing? value=null
+                    $composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                    $changed: CONST Int type=kotlin.Int value=6
+                    $changed1: CONST Int type=kotlin.Int value=0
+                    $default: CONST Int type=kotlin.Int value=131070
+                  CALL 'public final fun ExitAppButton (activity: android.app.Activity, $composer: androidx.compose.runtime.Composer?, $changed: kotlin.Int): kotlin.Unit declared in com.steampigeon.flightmanager.ui.MainScreenKt' type=kotlin.Unit origin=null
+                    activity: BLOCK type=android.app.Activity origin=null
+                      VAR IR_TEMPORARY_VARIABLE name:tmp1 type:kotlin.Any? [val]
+                        CALL 'public final fun <get-current> ($composer: androidx.compose.runtime.Composer?, $changed: kotlin.Int): T of androidx.compose.runtime.CompositionLocal [inline] declared in androidx.compose.runtime.CompositionLocal' type=android.content.Context origin=GET_PROPERTY
+                          $this: TYPE_OP type=androidx.compose.runtime.CompositionLocal<T of androidx.compose.runtime.CompositionLocal> origin=IMPLICIT_CAST typeOperand=androidx.compose.runtime.CompositionLocal<T of androidx.compose.runtime.CompositionLocal>
+                            CALL 'public final fun <get-LocalContext> (): androidx.compose.runtime.ProvidableCompositionLocal<android.content.Context> declared in androidx.compose.ui.platform.AndroidCompositionLocals_androidKt' type=androidx.compose.runtime.ProvidableCompositionLocal<android.content.Context> origin=GET_PROPERTY
+                          $composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                          $changed: CONST Int type=kotlin.Int value=0
+                      CALL 'public final fun checkNotNull (object: kotlin.Any?, message: kotlin.String): kotlin.Unit declared in kotlin.jvm.internal.Intrinsics' type=kotlin.Unit origin=null
+                        object: GET_VAR 'val tmp1: kotlin.Any? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Any? origin=null
+                        message: CONST String type=kotlin.String value="null cannot be cast to non-null type android.app.Activity"
+                      TYPE_OP type=android.app.Activity? origin=CAST typeOperand=android.app.Activity?
+                        GET_VAR 'val tmp1: kotlin.Any? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Any? origin=null
+                    $composer: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+                    $changed: CONST Int type=kotlin.Int value=8
+              BRANCH
+                if: CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+                  $this: CALL 'public open fun isEnabled (): kotlin.Boolean [fake_override] declared in kotlin.Nothing' type=kotlin.Boolean origin=GET_PROPERTY
+                    $this: BLOCK type=kotlin.Nothing origin=null
+                      CALL 'public final fun CHECK_NOT_NULL <T0> (arg0: T0 of kotlin.internal.ir.CHECK_NOT_NULL?): {T0 of kotlin.internal.ir.CHECK_NOT_NULL & Any} declared in kotlin.internal.ir' type=kotlin.Nothing origin=EXCLEXCL
+                        <T0>: kotlin.Nothing
+                        arg0: GET_VAR 'val bluetoothAdapter: @[FlexibleNullability] android.bluetooth.BluetoothAdapter? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=@[FlexibleNullability] android.bluetooth.BluetoothAdapter? origin=null
+                      CALL 'public final fun throwKotlinNothingValueException (): kotlin.Nothing declared in kotlin.jvm.internal.Intrinsics' type=kotlin.Nothing origin=null
+                then: BLOCK type=kotlin.Unit origin=null
+                  VAR name:enableBluetoothIntent type:android.content.Intent [val]
+                    CONSTRUCTOR_CALL 'public constructor <init> (p0: @[FlexibleNullability] kotlin.String?) declared in android.content.Intent' type=android.content.Intent origin=null
+                      p0: CONST String type=kotlin.String value="android.bluetooth.adapter.action.REQUEST_ENABLE"
+                  CALL 'public abstract fun startActivity (p0: @[FlexibleNullability] android.content.Intent?): kotlin.Unit declared in android.content.Context' type=kotlin.Unit origin=null
+                    $this: GET_VAR 'val context: android.content.Context [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=android.content.Context origin=null
+                    p0: GET_VAR 'val enableBluetoothIntent: android.content.Intent [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=android.content.Intent origin=null
+            COMPOSITE type=kotlin.Unit origin=null
+      BRANCH
+        if: CONST Boolean type=kotlin.Boolean value=true
+        then: CALL 'public abstract fun skipToGroupEnd (): kotlin.Unit declared in androidx.compose.runtime.Composer' type=kotlin.Unit origin=null
+          $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+    BLOCK type=kotlin.Unit origin=null
+      BLOCK type=kotlin.Unit origin=FOLDED_SAFE_CALL
+        WHEN type=kotlin.Unit origin=FOLDED_SAFE_CALL
+          BRANCH
+            if: COMPOSITE type=kotlin.Boolean origin=null
+              VAR IR_TEMPORARY_VARIABLE name:tmp1_safe_receiver type:androidx.compose.runtime.ScopeUpdateScope? [val]
+                CALL 'public abstract fun endRestartGroup (): androidx.compose.runtime.ScopeUpdateScope? declared in androidx.compose.runtime.Composer' type=androidx.compose.runtime.ScopeUpdateScope? origin=null
+                  $this: GET_VAR '$composer: androidx.compose.runtime.Composer? [assignable] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.Composer? origin=null
+              CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+                $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+                  arg0: GET_VAR 'val tmp1_safe_receiver: androidx.compose.runtime.ScopeUpdateScope? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.ScopeUpdateScope? origin=null
+                  arg1: CONST Null type=kotlin.Nothing? value=null
+            then: CALL 'public abstract fun updateScope (block: kotlin.Function2<androidx.compose.runtime.Composer, kotlin.Int, kotlin.Unit>): kotlin.Unit declared in androidx.compose.runtime.ScopeUpdateScope' type=kotlin.Unit origin=null
+              $this: GET_VAR 'val tmp1_safe_receiver: androidx.compose.runtime.ScopeUpdateScope? [val] declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=androidx.compose.runtime.ScopeUpdateScope? origin=null
+              block: BLOCK type=kotlin.Function2<androidx.compose.runtime.Composer?, kotlin.Int, kotlin.Unit> origin=LAMBDA
+                COMPOSITE type=kotlin.Unit origin=null
+                CALL 'public final fun <jvm-indy> <T> (dynamicCall: T of kotlin.jvm.internal.<jvm-indy>, bootstrapMethodHandle: kotlin.Any, vararg bootstrapMethodArguments: kotlin.Any): T of kotlin.jvm.internal.<jvm-indy> declared in kotlin.jvm.internal' type=kotlin.Function2<androidx.compose.runtime.Composer?, kotlin.Int, kotlin.Unit> origin=null
+                  <T>: kotlin.Function2<androidx.compose.runtime.Composer?, kotlin.Int, kotlin.Unit>
+                  dynamicCall: CALL 'public final fun invoke (p0: kotlin.Int): kotlin.Function2<androidx.compose.runtime.Composer?, kotlin.Int, kotlin.Unit> declared in kotlin.jvm.internal.invokeDynamic' type=kotlin.Function2<androidx.compose.runtime.Composer?, kotlin.Int, kotlin.Unit> origin=null
+                    p0: GET_VAR '$changed: kotlin.Int declared in com.steampigeon.flightmanager.ui.MainScreenKt.EnableBluetooth' type=kotlin.Int origin=null
+                  bootstrapMethodHandle: CALL 'public final fun <jvm-method-handle> (tag: kotlin.Int, owner: kotlin.String, name: kotlin.String, descriptor: kotlin.String, isInterface: kotlin.Boolean): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                    tag: CONST Int type=kotlin.Int value=6
+                    owner: CONST String type=kotlin.String value="java/lang/invoke/LambdaMetafactory"
+                    name: CONST String type=kotlin.String value="metafactory"
+                    descriptor: CONST String type=kotlin.String value="(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"
+                    isInterface: CONST Boolean type=kotlin.Boolean value=false
+                  bootstrapMethodArguments: VARARG type=kotlin.Array<kotlin.Any> varargElementType=kotlin.Any
+                    CALL 'public final fun <jvm-original-method-type> (method: kotlin.Any): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                      method: RAW_FUNCTION_REFERENCE 'public abstract fun invoke (p1: P1 of kotlin.Function2, p2: P2 of kotlin.Function2): R of kotlin.Function2 [operator] declared in kotlin.Function2' type=kotlin.Any
+                    RAW_FUNCTION_REFERENCE 'private final fun EnableBluetooth$lambda$15 ($$changed: kotlin.Int, $composer: androidx.compose.runtime.Composer?, $force: kotlin.Int): kotlin.Unit? declared in com.steampigeon.flightmanager.ui.MainScreenKt' type=kotlin.Any
+                    CALL 'public final fun <jvm-original-method-type> (method: kotlin.Any): kotlin.Any declared in kotlin.jvm.internal' type=kotlin.Any origin=null
+                      method: RAW_FUNCTION_REFERENCE 'public abstract fun invoke (p1: androidx.compose.runtime.Composer?, p2: kotlin.Int?): kotlin.Unit? [fake_override,operator] declared in kotlin.jvm.internal.invokeDynamic.<fake>' type=kotlin.Any
+          BRANCH
+            if: CONST Boolean type=kotlin.Boolean value=true
+            then: CONST Null type=kotlin.Any? value=null
+
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:50)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate$default(FunctionCodegen.kt:42)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethodNode(ClassCodegen.kt:385)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethod(ClassCodegen.kt:402)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generate(ClassCodegen.kt:169)
+	at org.jetbrains.kotlin.backend.jvm.FileCodegen.lower(JvmPhases.kt:41)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseBuildersKt.makeIrFilePhase$lambda$5(PhaseBuilders.kt:114)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseBuildersKt$createSimpleNamedCompilerPhase$1.phaseBody(PhaseBuilders.kt:71)
+	at org.jetbrains.kotlin.backend.common.phaser.SimpleNamedCompilerPhase.phaseBody(CompilerPhase.kt:226)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invokeSequential(performByIrFile.kt:62)
+	... 44 more
+Caused by: java.lang.IllegalStateException: Fake override should have at least one overridden descriptor: FUN FAKE_OVERRIDE name:isEnabled visibility:public modality:OPEN <> ($this:kotlin.Nothing) returnType:kotlin.Boolean [fake_override]
+	at org.jetbrains.kotlin.backend.jvm.ir.JvmIrUtilsKt.findSuperDeclaration(JvmIrUtils.kt:413)
+	at org.jetbrains.kotlin.backend.jvm.mapping.MethodSignatureMapper.findSuperDeclaration(MethodSignatureMapper.kt:440)
+	at org.jetbrains.kotlin.backend.jvm.mapping.MethodSignatureMapper.mapToCallableMethod(MethodSignatureMapper.kt:409)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:599)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrCall.accept(IrCall.kt:24)
+	at org.jetbrains.kotlin.backend.jvm.intrinsics.Not.invoke(Not.kt:46)
+	at org.jetbrains.kotlin.backend.jvm.intrinsics.Not.invoke(Not.kt:27)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:594)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrCall.accept(IrCall.kt:24)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitWhen(ExpressionCodegen.kt:1092)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitWhen(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrWhen.accept(IrWhen.kt:24)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitStatementContainer(ExpressionCodegen.kt:573)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitContainerExpression(ExpressionCodegen.kt:587)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitContainerExpression(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.visitors.IrElementVisitor$DefaultImpls.visitBlock(IrElementVisitor.kt:122)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlock(ExpressionCodegen.kt:407)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlock(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrBlock.accept(IrBlock.kt:18)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitStatementContainer(ExpressionCodegen.kt:573)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitContainerExpression(ExpressionCodegen.kt:587)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitContainerExpression(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.visitors.IrElementVisitor$DefaultImpls.visitBlock(IrElementVisitor.kt:122)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlock(ExpressionCodegen.kt:407)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlock(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrBlock.accept(IrBlock.kt:18)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitWhen(ExpressionCodegen.kt:1095)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitWhen(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrWhen.accept(IrWhen.kt:24)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitStatementContainer(ExpressionCodegen.kt:573)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlockBody(ExpressionCodegen.kt:578)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlockBody(ExpressionCodegen.kt:137)
+	at org.jetbrains.kotlin.ir.expressions.IrBlockBody.accept(IrBlockBody.kt:20)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.generate(ExpressionCodegen.kt:239)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.doGenerate(FunctionCodegen.kt:121)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:46)
+	... 54 more
+
+
