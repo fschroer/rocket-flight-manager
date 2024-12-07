@@ -106,7 +106,6 @@ fun RocketApp(
             )
         }
     ) { innerPadding ->
-        val uiState by viewModel.uiState.collectAsState()
         NavHost(
             navController = navController,
             startDestination = RocketScreen.Start.name,
@@ -117,7 +116,7 @@ fun RocketApp(
                     navController,
                     viewModel,
                     modifier = Modifier
-                        .fillMaxSize()
+                        //.fillMaxSize()
                         .padding(dimensionResource(R.dimen.padding_medium))
                 )
             }

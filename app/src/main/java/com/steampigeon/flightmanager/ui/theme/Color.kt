@@ -2,7 +2,7 @@ package com.steampigeon.flightmanager.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val primaryLight = Color(0xFF49453A)
+val primaryLight = Color(0x8049453A)
 val onPrimaryLight = Color(0xFFFFFFFF)
 val primaryContainerLight = Color(0xFF6D695D)
 val onPrimaryContainerLight = Color(0xFFFFFFFF)
@@ -110,7 +110,7 @@ val surfaceContainerLightHighContrast = Color(0xFFF1EDEB)
 val surfaceContainerHighLightHighContrast = Color(0xFFECE7E5)
 val surfaceContainerHighestLightHighContrast = Color(0xFFE6E2DF)
 
-val primaryDark = Color(0xFFCCC6B7)
+val primaryDark = Color(0x80CCC6B7)
 val onPrimaryDark = Color(0xFF333026)
 val primaryContainerDark = Color(0xFF545044)
 val onPrimaryContainerDark = Color(0xFFF7F0E0)

@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="Rocket Flight Manager">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2024-11-23T02:09:04.644592300Z">
+        <DropdownSelection timestamp="2024-12-06T18:56:46.705209400Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\kyled\.android\avd\Medium_Phone.avd" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=49261FDAS0029F" />
             </handle>
           </Target>
         </DropdownSelection>
