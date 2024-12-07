@@ -10,12 +10,18 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.os.IBinder
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
@@ -27,6 +33,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MaterialTheme.typography
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -47,12 +54,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -84,6 +95,8 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.log2
+import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -112,13 +125,34 @@ fun HomeScreen(
         if (!allPermissionsGranted)
             permissionsState.launchMultiplePermissionRequest()
     }
+    // Initialize Bluetooth Companion Device Manager. Needs time to set up or app crashes.
     bluetoothConnectionManager.InitializeCompanionDeviceManager()
+    LaunchedEffect (Unit) {
+        // Register broadcast receiver for bluetooth status events
+        if (!bluetoothConnectionManager.receiverRegistered) {
+            bluetoothConnectionManager.RegisterReceiver(context)
+            bluetoothConnectionManager.sendBroadcast(context)
+        }
+        //Start Bluetooth data handler service
+        //if (bluetoothConnectionManager.locatorDevice != null)
+            context.startService(
+                Intent(
+                    context,
+                    BluetoothService::class.java
+                ).putExtra("device", bluetoothConnectionManager.locatorDevice)
+            )
+    }
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
     var trackerLocation by remember { mutableStateOf<Location?>(null) }
     var isMapLoaded by remember { mutableStateOf(false) }
-    val uiSettings = remember { MapUiSettings(myLocationButtonEnabled = false, compassEnabled = false, zoomControlsEnabled = false) }
+    val uiSettings = remember { MapUiSettings(compassEnabled = false,
+        indoorLevelPickerEnabled = false,
+        mapToolbarEnabled = false,
+        myLocationButtonEnabled = false,
+        tiltGesturesEnabled = false,
+        zoomControlsEnabled = false) }
     val properties by remember {
         mutableStateOf(MapProperties(isMyLocationEnabled = true,
             mapType = MapType.SATELLITE))
@@ -206,7 +240,8 @@ fun HomeScreen(
                         )
                             },
                     selected = false,
-                    onClick = { /*TODO*/ }
+                    onClick = { scope.launch { drawerState.apply { close() }}
+                        navController.navigate(RocketScreen.LocatorSettings.name) }
                 )
                 NavigationDrawerItem(
                     label = {
@@ -310,10 +345,10 @@ fun HomeScreen(
                     val cameraPositionState = rememberCameraPositionState() {
                         position = CameraPosition.Builder().target(trackerLatLng).zoom(cameraPositionStateZoom).bearing(azimuth).build()
                     }
-                    var compassUpdateCount by remember { mutableIntStateOf(0) }
                     val rocketData = RocketData(context, viewModel)
                     val locatorLatLng = LatLng(rocketData.latitude, rocketData.longitude)
                     val state = rememberUpdatedMarkerState(LatLng(rocketData.latitude, rocketData.longitude))
+                    var showControls by remember { mutableStateOf(false) }
                     distanceToLocator = computeDistanceBetween(trackerLatLng, locatorLatLng)
                     GoogleMap(
                         modifier = Modifier.fillMaxSize(),
@@ -321,13 +356,9 @@ fun HomeScreen(
                         cameraPositionState = cameraPositionState,
                         properties = properties,
                         uiSettings = uiSettings,
-                        onMapClick = { compassUpdateCount = 0 }
+                        onMapClick = { showControls = !showControls }
                     ) {
                         bluetoothConnectionManager.maintainLocatorDevicePairing(context)
-                        LaunchedEffect(bluetoothConnectionManager.bluetoothConnectionState) {
-                            if (bluetoothConnectionManager.bluetoothConnectionState == BluetoothConnectionState.Paired)
-                                initLocatorDeviceComms(context)
-                        }
                         Marker(
                             state = state,
                             title = rocketData.deviceName,
@@ -335,9 +366,10 @@ fun HomeScreen(
                         )
                         Circle(
                             center = locatorLatLng,
-                            fillColor = Color(0x22ff0000),
+                            fillColor = Color(0x30ff0000),
                             radius = (4 * rocketData.hdop).toDouble(),
-                            strokeColor = Color.Transparent,
+                            strokeColor = Color(0x80ff0000),
+                            strokeWidth = 2f,
                         )
                     }
                     if (isMapLoaded) {
@@ -345,7 +377,6 @@ fun HomeScreen(
                         val coroutineScope = rememberCoroutineScope()
                         var lastAverageAzimuth by remember { mutableFloatStateOf(0f) }
                         LaunchedEffect(averageAzimuth) {
-                            compassUpdateCount++
                             if (abs(averageAzimuth - lastAverageAzimuth) > 2 && !cameraPositionState.isMoving) {
                                 // Animate map to rotate to new bearing, with smooth transition between 359 and 0 degrees
                                 coroutineScope.launch {
@@ -406,62 +437,97 @@ fun HomeScreen(
                                         durationMs = 500
                                     )*/
                                 }
-                                compassUpdateCount = 0
                                 lastAverageAzimuth = azimuthHistory.average().toFloat()
                             }
                         }
-                        Column(
+                        Column (
                             modifier = modifier,
-                            //.statusBarsPadding()
-                            //.verticalScroll(rememberScrollState())
-                            //.safeDrawingPadding()
-                            //.padding(contentPadding),
-                            verticalArrangement = Arrangement.Bottom,
-                            horizontalAlignment = Alignment.End
+                            verticalArrangement = Arrangement.SpaceAround
                         ) {
-                            if (bluetoothConnectionManager.bluetoothConnectionState ==
-                                BluetoothConnectionState.Paired) {
-                                    LocatorStats(viewModel)
+                            Row(
+                                modifier = modifier,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Spacer(modifier = modifier.weight(1f))
+                                Column(
+                                    modifier = modifier,
+                                    verticalArrangement = Arrangement.Bottom,
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    if (showControls) {
+                                        Button(
+                                            onClick = { autoTargetMode = !autoTargetMode }) {
+                                            Text(
+                                                "Center: " + when (autoTargetMode) {
+                                                    true -> "Auto"
+                                                    false -> "Man"
+                                                }
+                                            )
+                                        }
+                                        Button(onClick = {
+                                            autoZoomMode = !autoZoomMode
+                                        }) {
+                                            Text(
+                                                "Zoom: " + when (autoZoomMode) {
+                                                    true -> "Auto"
+                                                    false -> "Man"
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Row(
+                                modifier = modifier,
+                                horizontalArrangement = Arrangement.SpaceAround,
+                            ) {
+                                Spacer(modifier = modifier)
+                                Text(
+                                    textAlign = TextAlign.Center,
+                                    text =
+                                        when (bluetoothConnectionManager.bluetoothConnectionState) {
+                                            BluetoothConnectionState.NotStarted,
+                                            BluetoothConnectionState.Enabling -> "Enabling bluetooth"
+                                            BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
+                                            BluetoothConnectionState.NotSupported -> "Device doesn't support Bluetooth"
+                                            BluetoothConnectionState.Enabled,
+                                            BluetoothConnectionState.SelectingDevices -> "Receiver not connected"
+                                            BluetoothConnectionState.NoDevicesAvailable -> "No devices available"
+                                            BluetoothConnectionState.Pairing -> "Pairing with receiver"
+                                            BluetoothConnectionState.PairingFailed -> "Pairing Failed"
+                                            BluetoothConnectionState.Paired, BluetoothConnectionState.Connected -> {
+                                                if (viewModel.locatorDetected) ""
+                                                else "Locator not detected"
+                                            }
+                                            BluetoothConnectionState.Disconnected -> "Receiver disconnected"
+                                            else -> "Undefined state"
+                                        },
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = modifier)
+                            }
+                            Spacer(modifier = modifier)
+                            Row(
+                                modifier = modifier,
+                                horizontalArrangement = Arrangement.SpaceAround
+                            ) {
+                                Spacer (modifier = modifier)
+                                Spacer (modifier = modifier)
+                                Column(
+                                    modifier = modifier,
+                                    verticalArrangement = Arrangement.Bottom,
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    if (bluetoothConnectionManager.bluetoothConnectionState ==
+                                        BluetoothConnectionState.Paired
+                                    ) {
+                                        LocatorStats(viewModel, modifier)
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-            Column(
-                modifier = modifier,
-                verticalArrangement = Arrangement.Top,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                when (bluetoothConnectionManager.bluetoothConnectionState) {
-                    BluetoothConnectionState.NotStarted, BluetoothConnectionState.Enabled -> {
-                        Text(
-                            textAlign = TextAlign.Center,
-                            text = "Receiver not connected",
-                            color = Color.Red
-                        )
-                    }
-                    BluetoothConnectionState.Enabling -> {
-                        Text(
-                            textAlign = TextAlign.Center,
-                            text = "Enabling bluetooth",
-                            color = Color.Red
-                        )
-                    }
-                    BluetoothConnectionState.NotEnabled -> {
-                        Text(
-                            textAlign = TextAlign.Center,
-                            text = "Bluetooth not enabled",
-                            color = Color.Red
-                        )
-                    }
-                    BluetoothConnectionState.NotSupported -> {
-                        Text(
-                            textAlign = TextAlign.Center,
-                            text = "Device doesn't support Bluetooth",
-                            color = Color.Red
-                        )
-                    }
-                    else -> {}
                 }
             }
         }
@@ -469,77 +535,74 @@ fun HomeScreen(
 }
 
 @Composable
-fun LocatorStats(viewModel: RocketViewModel) {
+fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
     if (viewModel.locatorDetected) {
-        Text(
-            text = "AGL: ${viewModel.uiState.value.altitudeAboveGroundLevel}",
-            color = if (viewModel.uiState.value.altimeterStatus) Color.Green else Color.Red,
-            //textAlign = TextAlign.Left
-        )
-        val accelerometerTextColor =
-            if (viewModel.uiState.value.accelerometerStatus) Color.Green else Color.Red
-        Text(
-            text = "AccX: ${viewModel.uiState.value.accelerometer.x}",
-            color = accelerometerTextColor,
-            //textAlign = TextAlign.Left
-        )
-        Text(
-            text = "AccY: ${viewModel.uiState.value.accelerometer.y}",
-            color = accelerometerTextColor,
-            //textAlign = TextAlign.Left
-        )
-        Text(
-            text = "AccZ: ${viewModel.uiState.value.accelerometer.z}",
-            color = accelerometerTextColor,
-            //textAlign = TextAlign.Left
-        )
-        //Spacer(modifier = Modifier.weight(1f))
-        Text(
-            text = when (viewModel.uiState.value.deployMode) {
-                DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
-                    "Drogue Primary: " +
-                            viewModel.uiState.value.droguePrimaryDeployDelay.toString() + "s"
+        var offsetX by remember { mutableStateOf(0f) }
+        var offsetY by remember { mutableStateOf(0f) }
+        Column (
+            modifier = modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        offsetX += dragAmount.x
+                        offsetY += dragAmount.y
+                    }
                 }
-
-                DeployMode.kMainPrimaryMainBackup -> {
-                    "Main Primary: " +
-                            viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
-                }
-
-                DeployMode.kDrogueBackupMainBackup -> {
-                    "Drogue Backup: " +
-                            viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
-                }
-            },
-            color = if (viewModel.uiState.value.deployChannel1Armed) Color.Green else Color.Red,
-            //textAlign = TextAlign.Left
-        )
-        Text(
-            text = when (viewModel.uiState.value.deployMode) {
-                DeployMode.kDroguePrimaryDrogueBackup -> {
-                    "Drogue Backup: " +
-                            viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
-                }
-
-                DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
-                    "Main Backup: " +
-                            viewModel.uiState.value.mainBackupDeployAltitude.toString() + "m"
-                }
-
-                DeployMode.kDroguePrimaryMainPrimary -> {
-                    "Main Primary: " +
-                            viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
-                }
-            },
-            color = if (viewModel.uiState.value.deployChannel2Armed) Color.Green else Color.Red,
-            //textAlign = TextAlign.Left
-        )
-    } else {
-        Text(
-            text = "Locator not detected",
-            textAlign = TextAlign.Center,
-            color = Color.Red
-        )
+                //.size(200.dp, 100.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0x805D6F96))
+                .padding(8.dp)
+            ,
+            //verticalArrangement = Arrangement.Top,
+            //horizontalAlignment = Alignment.Start
+        ) {
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = "AGL: ${viewModel.uiState.value.altitudeAboveGroundLevel}m",
+                style = typography.bodyLarge,
+                color = if (viewModel.uiState.value.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = "Acc: ${round(viewModel.gForce * 100) / 100} ${viewModel.locatorOrientation}",
+                style = typography.bodyLarge,
+                color = if (viewModel.uiState.value.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+            //Spacer(modifier = Modifier.weight(1f))
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = when (viewModel.uiState.value.deployMode) {
+                    DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
+                        "Drogue Primary: " + viewModel.uiState.value.droguePrimaryDeployDelay.toString() + "s"
+                    }
+                    DeployMode.kMainPrimaryMainBackup -> {
+                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                    }
+                    DeployMode.kDrogueBackupMainBackup -> {
+                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                    }
+                },
+                style = typography.bodyLarge,
+                color = if (viewModel.uiState.value.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = when (viewModel.uiState.value.deployMode) {
+                    DeployMode.kDroguePrimaryDrogueBackup -> {
+                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                    }
+                    DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
+                        "Main Backup: " + viewModel.uiState.value.mainBackupDeployAltitude.toString() + "m"
+                    }
+                    DeployMode.kDroguePrimaryMainPrimary -> {
+                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                    }
+                },
+                style = typography.bodyLarge,
+                color = if (viewModel.uiState.value.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }
 
@@ -564,22 +627,6 @@ fun TopAppBar(modifier: Modifier = Modifier) {
         },
         modifier = modifier
     )
-}
-
-fun initLocatorDeviceComms(context: Context) {
-    // Register broadcast receiver for bluetooth status events
-    /*if (!bluetoothConnectionManager.receiverRegistered) {
-        bluetoothConnectionManager.RegisterReceiver(context)
-        bluetoothConnectionManager.sendBroadcast(context)
-    }*/
-    //Start Bluetooth data handler service
-    if (bluetoothConnectionManager.locatorDevice != null)
-        context.startService(
-            Intent(
-                context,
-                BluetoothService::class.java
-            ).putExtra("device", bluetoothConnectionManager.locatorDevice)
-        )
 }
 
 fun computeDistanceBetween(latLng1: LatLng, latLng2: LatLng): Int {

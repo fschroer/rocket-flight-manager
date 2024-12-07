@@ -1,13 +1,7 @@
 package com.steampigeon.flightmanager.ui
 
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
-import android.content.Context
-import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.steampigeon.flightmanager.BluetoothConnectionManager
-import com.steampigeon.flightmanager.BluetoothConnectionState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketUiState
@@ -19,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import kotlin.experimental.and
+import kotlin.math.sqrt
 
 /**
  * [RocketViewModel] holds rocket locator status
@@ -26,7 +21,8 @@ import kotlin.experimental.and
 
 class RocketViewModel() : ViewModel() {
     companion object {
-        val ALTIMETER_SCALE = 10
+        const val ALTIMETER_SCALE = 10
+        const val ACCELEROMETER_SCALE = 2048
     }
     /**
      * Display state
@@ -39,6 +35,9 @@ class RocketViewModel() : ViewModel() {
 
     private var lastExecutionTime = System.currentTimeMillis()
     var locatorDetected = false
+
+    var gForce = 0f
+    var locatorOrientation = ""
 
     fun collectLocatorData(service: BluetoothService) {
         var elapsedSeconds = 0.0
@@ -80,6 +79,15 @@ class RocketViewModel() : ViewModel() {
                     deviceName = String(_locatorMessage.value.copyOfRange(59, 71), Charsets.UTF_8),
                     batteryVoltage = byteArrayToUShort(_locatorMessage.value, 71),
                 )
+            }
+            gForce = sqrt((_uiState.value.accelerometer.x * _uiState.value.accelerometer.x + _uiState.value.accelerometer.y * _uiState.value.accelerometer.y + _uiState.value.accelerometer.z * _uiState.value.accelerometer.z).toFloat()) / ACCELEROMETER_SCALE
+            locatorOrientation =
+            when {
+                _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce < -0.5 ->
+                    "up"
+                _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce > 0.5 ->
+                    "down"
+                else -> "side"
             }
         }
     }

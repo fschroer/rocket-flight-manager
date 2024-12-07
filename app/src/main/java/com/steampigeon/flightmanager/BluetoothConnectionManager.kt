@@ -14,13 +14,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.IntentSender
+import android.os.Bundle
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.Composable
+import com.steampigeon.flightmanager.ui.bluetoothConnectionManager
 import java.util.regex.Pattern
 
 private const val REQUEST_CODE_ASSOCIATION = 0
@@ -138,19 +141,23 @@ class BluetoothConnectionManager() {
                             IntentSenderRequest.Builder(chooserLauncher).build()
                         )
                         //bluetoothConnectionState = BluetoothConnectionState.Pairing
+                        Log.d(TAG, "onDeviceFound: ${chooserLauncher.toString()}")
                     }
 
                     override fun onAssociationPending(intentSender: IntentSender) {
                         super.onAssociationPending(intentSender)
+                        Log.d(TAG, "onAssociationPending: ${intentSender.toString()}")
                     }
 
                     override fun onAssociationCreated(associationInfo: AssociationInfo) {
                         super.onAssociationCreated(associationInfo)
+                        Log.d(TAG, "onAssociationCreated: ${associationInfo.toString()}")
                     }
 
                     override fun onFailure(error: CharSequence?) {
-                        // Handle "don't allow" user selection
+                        // Handle no devices found or "don't allow" user selection
                         bluetoothConnectionState = BluetoothConnectionState.PairingFailed
+                        Log.d(TAG, "onFailure: $error")
                     }
                 }, null)
                 bluetoothConnectionState = BluetoothConnectionState.SelectingDevices
@@ -200,6 +207,9 @@ class BluetoothConnectionManager() {
                 else {
                     bluetoothConnectionState = BluetoothConnectionState.NotStarted
                 }
+            }
+            BluetoothConnectionState.PairingFailed -> {
+                bluetoothConnectionState = BluetoothConnectionState.Enabled
             }
             else -> {}
             //}
@@ -276,6 +286,53 @@ class BluetoothConnectionManager() {
                     }
                 }
             }
+        }
+    }
+}
+
+class EnablingActivity : AppCompatActivity() {
+
+    private val requestBluetooth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            bluetoothConnectionManager.bluetoothConnectionState = BluetoothConnectionState.Enabled
+        } else {
+            bluetoothConnectionManager.bluetoothConnectionState = BluetoothConnectionState.NotEnabled
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Initiate enabling process
+        val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE).apply {
+            putExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_TURNING_ON)
+        }
+        requestBluetooth.launch(intent)
+    }
+}
+
+class PairingActivity : AppCompatActivity() {
+
+    private val requestBluetooth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            locatorDevice = result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE)
+            locatorDevice?.createBond()
+            bluetoothConnectionState = BluetoothConnectionState.Paired
+        } else {
+            // Pairing failed
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val device: BluetoothDevice? = intent.getParcelableExtra("device")
+        device?.let {
+            // Initiate pairing process with the device
+            val intent = Intent(BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
+                putExtra(BluetoothDevice.EXTRA_DEVICE, device)
+            }
+            requestBluetooth.launch(intent)
         }
     }
 }
