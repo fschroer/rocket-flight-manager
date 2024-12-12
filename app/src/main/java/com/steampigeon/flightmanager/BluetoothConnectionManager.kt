@@ -23,9 +23,9 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.Composable
-import com.steampigeon.flightmanager.ui.bluetoothConnectionManager
+import kotlinx.coroutines.delay
 import java.util.regex.Pattern
-
+/*
 private const val REQUEST_CODE_ASSOCIATION = 0
 private const val TAG = "BluetoothConnectionManager"
 
@@ -174,7 +174,7 @@ class BluetoothConnectionManager() {
     }
 
     @SuppressLint("MissingPermission")
-    fun maintainLocatorDevicePairing(context: Context) {
+    suspend fun maintainLocatorDevicePairing(context: Context) {
         //if (bluetoothConnectionManager.receiverRegistered) {
         when (bluetoothConnectionState) {
             BluetoothConnectionState.NotStarted ->
@@ -195,8 +195,9 @@ class BluetoothConnectionManager() {
                 bluetoothConnectionState = BluetoothConnectionState.Enabled
             }
             BluetoothConnectionState.SelectingDevices -> {
+                delay(5000)
                 if (bluetoothAdapter?.isDiscovering == false)
-                    bluetoothConnectionState = BluetoothConnectionState.Enabled
+                    bluetoothConnectionState = BluetoothConnectionState.PairingFailed
             }
             BluetoothConnectionState.Paired -> {
                 if (bluetoothAdapter?.isEnabled == true) {
@@ -209,6 +210,9 @@ class BluetoothConnectionManager() {
                 }
             }
             BluetoothConnectionState.PairingFailed -> {
+                if (bluetoothAdapter?.isDiscovering == true)
+                    bluetoothAdapter!!.cancelDiscovery()
+                delay(5000)
                 bluetoothConnectionState = BluetoothConnectionState.Enabled
             }
             else -> {}
@@ -315,9 +319,9 @@ class PairingActivity : AppCompatActivity() {
 
     private val requestBluetooth = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            locatorDevice = result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE)
-            locatorDevice?.createBond()
-            bluetoothConnectionState = BluetoothConnectionState.Paired
+            //locatorDevice = result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE)
+            //locatorDevice?.createBond()
+            bluetoothConnectionManager.bluetoothConnectionState = BluetoothConnectionState.Paired
         } else {
             // Pairing failed
         }
@@ -336,3 +340,5 @@ class PairingActivity : AppCompatActivity() {
         }
     }
 }
+
+ */

@@ -1,35 +1,23 @@
 package com.steampigeon.flightmanager
 
 import androidx.annotation.StringRes
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MaterialTheme.typography
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -41,13 +29,7 @@ import com.steampigeon.flightmanager.ui.ExportFlightPathScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
-import android.app.Activity
-import android.bluetooth.BluetoothDevice
-import android.content.Context
-import android.content.Intent
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.LaunchedEffect
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 
 enum class RocketScreen(@StringRes val title: Int) {
     Start(title = R.string.app_name),
@@ -89,10 +71,9 @@ fun RocketAppBar(
 
 @Composable
 fun RocketApp(
-    viewModel: RocketViewModel = viewModel(),
     navController: NavHostController = rememberNavController()
 ) {
-    val context = LocalContext.current
+    val viewModel = RocketViewModel()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name

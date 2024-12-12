@@ -3,6 +3,7 @@ package com.steampigeon.flightmanager.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.steampigeon.flightmanager.BluetoothService
+import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketUiState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +15,30 @@ import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import kotlin.experimental.and
 import kotlin.math.sqrt
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.companion.AssociationInfo
+import android.companion.AssociationRequest
+import android.companion.BluetoothDeviceFilter
+import android.companion.CompanionDeviceManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.IntentSender
+import android.util.Log
+import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import kotlinx.coroutines.delay
+import java.util.regex.Pattern
 
 /**
  * [RocketViewModel] holds rocket locator status
@@ -21,8 +46,8 @@ import kotlin.math.sqrt
 
 class RocketViewModel() : ViewModel() {
     companion object {
-        const val ALTIMETER_SCALE = 10
-        const val ACCELEROMETER_SCALE = 2048
+        private const val ALTIMETER_SCALE = 10
+        private const val ACCELEROMETER_SCALE = 2048
     }
     /**
      * Display state
@@ -112,4 +137,5 @@ class RocketViewModel() : ViewModel() {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
     }
+
 }
