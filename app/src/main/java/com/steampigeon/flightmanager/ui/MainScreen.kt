@@ -1,19 +1,33 @@
 package com.steampigeon.flightmanager.ui
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.companion.AssociationInfo
+import android.companion.AssociationRequest
+import android.companion.BluetoothDeviceFilter
+import android.companion.CompanionDeviceManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentSender
 import android.content.ServiceConnection
 import android.hardware.SensorManager
 import android.location.Location
 import android.os.IBinder
+import android.util.Log
+import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -82,15 +96,16 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.mutualmobile.composesensors.SensorDelay
 import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
-import com.steampigeon.flightmanager.BluetoothConnectionManager
-import com.steampigeon.flightmanager.BluetoothConnectionState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.RocketScreen
+import com.steampigeon.flightmanager.data.BluetoothConnectionState
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketUiState
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
+import java.util.regex.Pattern
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -100,7 +115,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-val bluetoothConnectionManager = BluetoothConnectionManager()
+//val bluetoothConnectionManager = BluetoothConnectionManager()
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -126,22 +141,7 @@ fun HomeScreen(
             permissionsState.launchMultiplePermissionRequest()
     }
     // Initialize Bluetooth Companion Device Manager. Needs time to set up or app crashes.
-    bluetoothConnectionManager.InitializeCompanionDeviceManager()
-    LaunchedEffect (Unit) {
-        // Register broadcast receiver for bluetooth status events
-        if (!bluetoothConnectionManager.receiverRegistered) {
-            bluetoothConnectionManager.RegisterReceiver(context)
-            bluetoothConnectionManager.sendBroadcast(context)
-        }
-        //Start Bluetooth data handler service
-        //if (bluetoothConnectionManager.locatorDevice != null)
-            context.startService(
-                Intent(
-                    context,
-                    BluetoothService::class.java
-                ).putExtra("device", bluetoothConnectionManager.locatorDevice)
-            )
-    }
+    InitializeCompanionDeviceManager()
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
@@ -177,7 +177,7 @@ fun HomeScreen(
                     },
                     selected = false,
                     onClick = { scope.launch { drawerState.apply { close() }}
-                        bluetoothConnectionManager.unpairBluetoothDevice() }
+                        unpairBluetoothDevice() }
                 )
                 HorizontalDivider()
                 Text(
@@ -257,14 +257,6 @@ fun HomeScreen(
             }
         }
     ) {
-        LaunchedEffect(locationPermissionGranted) {
-            if (locationPermissionGranted) {
-                fusedLocationClient.lastLocation
-                    .addOnSuccessListener { locationResult: Location? ->
-                        trackerLocation = locationResult
-                    }
-            }
-        }
         Scaffold(
             //topBar = {TopAppBar()},
             floatingActionButton = {
@@ -283,6 +275,53 @@ fun HomeScreen(
             },
             floatingActionButtonPosition = FabPosition.Start
         ) { contentPadding ->
+            LaunchedEffect(locationPermissionGranted) {
+                if (locationPermissionGranted) {
+                    fusedLocationClient.lastLocation
+                        .addOnSuccessListener { locationResult: Location? ->
+                            trackerLocation = locationResult
+                        }
+                }
+            }
+            //Log.d("MainScreen", "Check Bluetooth state change: $viewModel.uiState.value.bluetoothConnectionState")
+            LaunchedEffect (BluetoothManagerRepository.bluetoothConnectionState.value) {
+                Log.d("MainScreen", "Bluetooth state change: " + BluetoothManagerRepository.bluetoothConnectionState.toString())
+                //Start Bluetooth data handler service
+                if (BluetoothManagerRepository.locatorDevice.value != null)
+                    context.startService(
+                        Intent(
+                            context,
+                            BluetoothService()::class.java
+                        )
+                    )
+            }
+            val tag = "MainScreen"
+            when (BluetoothManagerRepository.bluetoothConnectionState.value) {
+                BluetoothConnectionState.NotStarted -> {
+                    Log.d(tag, "Calling enableBluetooth")
+                    enableBluetooth(context)
+                }
+                BluetoothConnectionState.Enabled -> {
+                    if (BluetoothManagerRepository.locatorDevice.value == null) {
+                        Log.d(tag, "Calling selectBluetoothDevice")
+                        selectBluetoothDevice(context)
+                    } else {
+                        if (BluetoothManagerRepository.locatorDevice.value?.bondState != BluetoothDevice.BOND_BONDED) {
+                            BluetoothManagerRepository.locatorDevice.value?.createBond()
+                            Log.d(tag, "Changing state from Enabled to Pairing")
+                            BluetoothManagerRepository.updateBluetoothConnectionState(
+                                BluetoothConnectionState.Pairing
+                            )
+                        } else {
+                            Log.d(tag, "Changing state from Enabled to Paired")
+                            BluetoothManagerRepository.updateBluetoothConnectionState(
+                                BluetoothConnectionState.Paired
+                            )
+                        }
+                    }
+                }
+                else -> {}
+            }
             if (trackerLocation != null && trackerLocation!!.longitude != 0.0) {
                 var trackerLatLng = LatLng(trackerLocation!!.latitude, trackerLocation!!.longitude)
                 val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
@@ -358,7 +397,6 @@ fun HomeScreen(
                         uiSettings = uiSettings,
                         onMapClick = { showControls = !showControls }
                     ) {
-                        bluetoothConnectionManager.maintainLocatorDevicePairing(context)
                         Marker(
                             state = state,
                             title = rocketData.deviceName,
@@ -485,23 +523,23 @@ fun HomeScreen(
                                 Text(
                                     textAlign = TextAlign.Center,
                                     text =
-                                        when (bluetoothConnectionManager.bluetoothConnectionState) {
-                                            BluetoothConnectionState.NotStarted,
-                                            BluetoothConnectionState.Enabling -> "Enabling bluetooth"
-                                            BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
-                                            BluetoothConnectionState.NotSupported -> "Device doesn't support Bluetooth"
-                                            BluetoothConnectionState.Enabled,
-                                            BluetoothConnectionState.SelectingDevices -> "Receiver not connected"
-                                            BluetoothConnectionState.NoDevicesAvailable -> "No devices available"
-                                            BluetoothConnectionState.Pairing -> "Pairing with receiver"
-                                            BluetoothConnectionState.PairingFailed -> "Pairing Failed"
-                                            BluetoothConnectionState.Paired, BluetoothConnectionState.Connected -> {
-                                                if (viewModel.locatorDetected) ""
-                                                else "Locator not detected"
-                                            }
-                                            BluetoothConnectionState.Disconnected -> "Receiver disconnected"
-                                            else -> "Undefined state"
-                                        },
+                                    when (BluetoothManagerRepository.bluetoothConnectionState.value) {
+                                        BluetoothConnectionState.NotStarted,
+                                        BluetoothConnectionState.Enabling -> "Enabling bluetooth"
+                                        BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
+                                        BluetoothConnectionState.NotSupported -> "Device doesn't support Bluetooth"
+                                        BluetoothConnectionState.Enabled,
+                                        BluetoothConnectionState.SelectingDevices -> "Looking for receivers"
+                                        BluetoothConnectionState.NoDevicesAvailable -> "No devices available"
+                                        BluetoothConnectionState.Pairing -> "Pairing with receiver"
+                                        BluetoothConnectionState.PairingFailed -> "Pairing Failed"
+                                        BluetoothConnectionState.Paired, BluetoothConnectionState.Connected -> {
+                                            if (viewModel.locatorDetected) ""
+                                            else "Locator not detected"
+                                        }
+                                        BluetoothConnectionState.Disconnected -> "Receiver disconnected"
+                                        else -> "Undefined state"
+                                    },
                                     style = MaterialTheme.typography.headlineMedium,
                                     color = MaterialTheme.colorScheme.error
                                 )
@@ -519,7 +557,7 @@ fun HomeScreen(
                                     verticalArrangement = Arrangement.Bottom,
                                     horizontalAlignment = Alignment.Start
                                 ) {
-                                    if (bluetoothConnectionManager.bluetoothConnectionState ==
+                                    if (BluetoothManagerRepository.bluetoothConnectionState.value ==
                                         BluetoothConnectionState.Paired
                                     ) {
                                         LocatorStats(viewModel, modifier)
@@ -532,6 +570,109 @@ fun HomeScreen(
             }
         }
     }
+}
+
+private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
+
+@SuppressLint("MissingPermission")
+@Composable
+fun InitializeCompanionDeviceManager() {
+    launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // Handle successful pairing
+            BluetoothManagerRepository.updateLocatorDevice(result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE))
+            BluetoothManagerRepository.locatorDevice.value!!.createBond()
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
+        } else {
+            // Handle pairing failure
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+        }
+    }
+}
+
+@SuppressLint("MissingPermission")
+fun enableBluetooth(context: Context) : Boolean? {
+    val tag = "enableBlueTooth"
+    val bluetoothManager= context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    val bluetoothAdapter = bluetoothManager.adapter
+
+    when (bluetoothAdapter?.isEnabled) {
+        true -> {
+            Log.d(tag, "Changing state to Enabled")
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
+        }
+        false -> {
+            val enableBluetoothIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            context.startActivity(enableBluetoothIntent)
+            Log.d(tag, "Changing state to Enabling")
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabling)
+        }
+        null -> {
+            Log.d(tag, "Changing state to NotSupported")
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotSupported)
+        }
+    }
+    return bluetoothAdapter?.isEnabled
+}
+
+fun selectBluetoothDevice(context: Context) {
+    val tag = "selectBluetoothDevice"
+    val deviceManager = context.getSystemService(Context.COMPANION_DEVICE_SERVICE) as CompanionDeviceManager
+
+    // Create an association request
+    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Enabled) {
+        val deviceFilter: BluetoothDeviceFilter = BluetoothDeviceFilter.Builder()
+            .setNamePattern(Pattern.compile("RocketReceiver"))
+            .build()
+        val pairingRequest = AssociationRequest.Builder()
+            .addDeviceFilter(deviceFilter)
+            .setSingleDevice(false)
+            .build()
+
+        // Start pairing
+        Log.d(tag, "Launch association")
+        deviceManager.associate(pairingRequest, object : CompanionDeviceManager.Callback() {
+            override fun onDeviceFound(chooserLauncher: IntentSender) {
+                launcher.launch(
+                    IntentSenderRequest.Builder(chooserLauncher).build()
+                )
+                //bluetoothConnectionState = BluetoothConnectionState.Pairing
+                Log.d(tag, "onDeviceFound: ${chooserLauncher.toString()}")
+            }
+
+            override fun onAssociationPending(intentSender: IntentSender) {
+                super.onAssociationPending(intentSender)
+                Log.d(tag, "onAssociationPending: ${intentSender.toString()}")
+            }
+
+            override fun onAssociationCreated(associationInfo: AssociationInfo) {
+                super.onAssociationCreated(associationInfo)
+                Log.d(tag, "onAssociationCreated: ${associationInfo.toString()}")
+            }
+
+            override fun onFailure(error: CharSequence?) {
+                // Handle no devices found or "don't allow" user selection
+                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+                Log.d(tag, "onFailure: $error")
+            }
+        }, null)
+        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.SelectingDevices)
+    }
+}
+
+fun unpairBluetoothDevice() {
+    if (BluetoothManagerRepository.locatorDevice.value != null) {
+        try {
+            val removeBondMethod = BluetoothManagerRepository.locatorDevice.value!!.javaClass.getMethod("removeBond")
+            removeBondMethod.invoke(BluetoothManagerRepository.locatorDevice.value)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Handle the exception, maybe log it or show a message to the user
+        }
+    }
+    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotStarted)
 }
 
 @Composable
