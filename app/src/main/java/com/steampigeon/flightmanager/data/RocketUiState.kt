@@ -1,13 +1,9 @@
 package com.steampigeon.flightmanager.data
 
-import android.app.Application
 import android.bluetooth.BluetoothDevice
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.Serializable
 
 /**
  * Data class that represents the current rocket locator state]
@@ -57,16 +53,43 @@ enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
     NotEnabled(2u),
     NotSupported(3u),
     Enabled(4u),
-    SelectingDevices(5u),
-    NoDevicesAvailable(6u),
-    Pairing(7u),
-    PairingFailed(8u),
-    Paired(9u),
-    Connected(10u),
-    Disconnected(11u);
+    AssociateStart(5u),
+    AssociateWait(6u),
+    NoDevicesAvailable(7u),
+    Pairing(8u),
+    PairingFailed(9u),
+    Paired(10u),
+    Connected(11u),
+    Disconnected(12u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.bluetoothConnectionState == value } ?: throw IllegalArgumentException("Invalid type: $value")
+    }
+
+}
+
+enum class LocatorArmedMessageState (val locatorArmedMessageState: UByte) {
+    Idle(0u),
+    SendRequested(1u),
+    Sent(2u),
+    AckUpdated(3u),
+    SendFailure(4u);
+
+    companion object {
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorArmedMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
+    }
+
+}
+
+enum class LocatorConfigMessageState (val locatorConfigMessageState: UByte) {
+    Idle(0u),
+    SendRequested(1u),
+    Sent(2u),
+    AckUpdated(3u),
+    SendFailure(4u);
+
+    companion object {
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorConfigMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
     }
 
 }
@@ -78,11 +101,32 @@ object BluetoothManagerRepository {
     private val _locatorDevice = MutableStateFlow<BluetoothDevice?>(null)
     val locatorDevice: StateFlow<BluetoothDevice?> = _locatorDevice.asStateFlow()
 
+    private val _armedState = MutableStateFlow<Boolean>(false)
+    val armedState: StateFlow<Boolean> = _armedState.asStateFlow()
+
+    private val _locatorArmedMessageState = MutableStateFlow<LocatorArmedMessageState>(LocatorArmedMessageState.Idle)
+    val locatorArmedMessageState: StateFlow<LocatorArmedMessageState> = _locatorArmedMessageState.asStateFlow()
+
+    private val _locatorConfigMessageState = MutableStateFlow<LocatorConfigMessageState>(LocatorConfigMessageState.Idle)
+    val locatorConfigMessageState: StateFlow<LocatorConfigMessageState> = _locatorConfigMessageState.asStateFlow()
+
     fun updateBluetoothConnectionState(newBluetoothConnectionState: BluetoothConnectionState) {
         _bluetoothConnectionState.value = newBluetoothConnectionState
     }
 
     fun updateLocatorDevice(newLocatorDevice: BluetoothDevice?) {
         _locatorDevice.value = newLocatorDevice
+    }
+
+    fun updateArmedState(newArmedState: Boolean) {
+        _armedState.value = newArmedState
+    }
+
+    fun updateLocatorArmedState(newArmedState: LocatorArmedMessageState) {
+        _locatorArmedMessageState.value = newArmedState
+    }
+
+    fun updateLocatorConfigState(newConfigState: LocatorConfigMessageState) {
+        _locatorConfigMessageState.value = newConfigState
     }
 }

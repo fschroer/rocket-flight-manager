@@ -29,6 +29,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.LocalMinimumInteractiveComponentEnforcement
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
@@ -56,6 +59,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -102,6 +106,7 @@ import com.steampigeon.flightmanager.RocketScreen
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.RocketUiState
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
@@ -115,9 +120,9 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-//val bluetoothConnectionManager = BluetoothConnectionManager()
+private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 
-@OptIn(ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
 @Composable
 fun HomeScreen(
     navController: NavHostController,
@@ -137,11 +142,23 @@ fun HomeScreen(
     val locationPermissionGranted = permissionsState.permissions[1].hasPermission
 // Request permissions
     LaunchedEffect(allPermissionsGranted) {
-        if (!allPermissionsGranted)
+        if (!allPermissionsGranted) 
             permissionsState.launchMultiplePermissionRequest()
     }
     // Initialize Bluetooth Companion Device Manager. Needs time to set up or app crashes.
-    InitializeCompanionDeviceManager()
+    launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            // Handle successful pairing
+            BluetoothManagerRepository.updateLocatorDevice(result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE))
+            BluetoothManagerRepository.locatorDevice.value!!.createBond()
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
+        } else {
+            // Handle pairing failure
+            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+        }
+    }
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
@@ -156,6 +173,16 @@ fun HomeScreen(
     val properties by remember {
         mutableStateOf(MapProperties(isMyLocationEnabled = true,
             mapType = MapType.SATELLITE))
+    }
+    //Start Bluetooth data handler service
+    //if (BluetoothManagerRepository.locatorDevice.value != null)
+    LaunchedEffect(Unit) {
+        context.startService(
+            Intent(
+                context,
+                BluetoothService()::class.java
+            )
+        )
     }
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -283,19 +310,10 @@ fun HomeScreen(
                         }
                 }
             }
-            //Log.d("MainScreen", "Check Bluetooth state change: $viewModel.uiState.value.bluetoothConnectionState")
-            LaunchedEffect (BluetoothManagerRepository.bluetoothConnectionState.value) {
-                Log.d("MainScreen", "Bluetooth state change: " + BluetoothManagerRepository.bluetoothConnectionState.toString())
-                //Start Bluetooth data handler service
-                if (BluetoothManagerRepository.locatorDevice.value != null)
-                    context.startService(
-                        Intent(
-                            context,
-                            BluetoothService()::class.java
-                        )
-                    )
-            }
             val tag = "MainScreen"
+            LaunchedEffect (BluetoothManagerRepository.bluetoothConnectionState.value) {
+                Log.d(tag, "Bluetooth state change: " + BluetoothManagerRepository.bluetoothConnectionState.value.toString())
+            }
             when (BluetoothManagerRepository.bluetoothConnectionState.value) {
                 BluetoothConnectionState.NotStarted -> {
                     Log.d(tag, "Calling enableBluetooth")
@@ -379,6 +397,7 @@ fun HomeScreen(
                     averageAzimuth = azimuthHistory.average().toFloat()
                     var autoTargetMode by remember { mutableStateOf(true)}
                     var autoZoomMode by remember { mutableStateOf(true)}
+                    var armedState by remember { mutableStateOf(false)}
                     var cameraPositionStateTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
                     var cameraPositionStateZoom by remember { mutableFloatStateOf(12f)}
                     val cameraPositionState = rememberCameraPositionState() {
@@ -407,7 +426,7 @@ fun HomeScreen(
                             fillColor = Color(0x30ff0000),
                             radius = (4 * rocketData.hdop).toDouble(),
                             strokeColor = Color(0x80ff0000),
-                            strokeWidth = 2f,
+                            strokeWidth = 1f,
                         )
                     }
                     if (isMapLoaded) {
@@ -488,27 +507,59 @@ fun HomeScreen(
                             ) {
                                 Spacer(modifier = modifier.weight(1f))
                                 Column(
-                                    modifier = modifier,
-                                    verticalArrangement = Arrangement.Bottom,
+                                    modifier = Modifier.padding(0.dp),
+                                    verticalArrangement = Arrangement.SpaceEvenly,
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     if (showControls) {
                                         Button(
-                                            onClick = { autoTargetMode = !autoTargetMode }) {
+                                            onClick = {
+                                                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                    || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated)
+                                                    armedState = !armedState
+                                                BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendRequested)
+                                            },
+                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
+                                            contentPadding = PaddingValues(0.dp)
+                                        ) {
                                             Text(
-                                                "Center: " + when (autoTargetMode) {
-                                                    true -> "Auto"
-                                                    false -> "Man"
+                                                when {
+                                                    armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
+                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle) -> "Armed"
+                                                    armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Arming Failed"
+                                                    armedState -> "Arming"
+                                                    !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
+                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle) -> "Disarmed"
+                                                    !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disarming Failed"
+                                                    !armedState -> "Disarming"
+                                                    else -> "Unknown"
+                                                }
+                                            )
+                                        }
+                                        Button(
+                                            onClick = {
+                                                autoTargetMode = !autoTargetMode
+                                            },
+                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
+                                            contentPadding = PaddingValues(0.dp)
+                                        ) {
+                                            Text(
+                                                when (autoTargetMode) {
+                                                    true -> "Auto center"
+                                                    false -> "Manual center"
                                                 }
                                             )
                                         }
                                         Button(onClick = {
                                             autoZoomMode = !autoZoomMode
-                                        }) {
+                                        },
+                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
+                                            contentPadding = PaddingValues(0.dp)
+                                        ) {
                                             Text(
-                                                "Zoom: " + when (autoZoomMode) {
-                                                    true -> "Auto"
-                                                    false -> "Man"
+                                                when (autoZoomMode) {
+                                                    true -> "Auto zoom"
+                                                    false -> "Manual zoom"
                                                 }
                                             )
                                         }
@@ -527,16 +578,15 @@ fun HomeScreen(
                                         BluetoothConnectionState.NotStarted,
                                         BluetoothConnectionState.Enabling -> "Enabling bluetooth"
                                         BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
-                                        BluetoothConnectionState.NotSupported -> "Device doesn't support Bluetooth"
+                                        BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
                                         BluetoothConnectionState.Enabled,
-                                        BluetoothConnectionState.SelectingDevices -> "Looking for receivers"
-                                        BluetoothConnectionState.NoDevicesAvailable -> "No devices available"
+                                        BluetoothConnectionState.AssociateStart,
+                                        BluetoothConnectionState.AssociateWait,
+                                        BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
                                         BluetoothConnectionState.Pairing -> "Pairing with receiver"
-                                        BluetoothConnectionState.PairingFailed -> "Pairing Failed"
-                                        BluetoothConnectionState.Paired, BluetoothConnectionState.Connected -> {
-                                            if (viewModel.locatorDetected) ""
-                                            else "Locator not detected"
-                                        }
+                                        BluetoothConnectionState.Paired,
+                                        BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
+                                        BluetoothConnectionState.Connected -> ""
                                         BluetoothConnectionState.Disconnected -> "Receiver disconnected"
                                         else -> "Undefined state"
                                     },
@@ -557,37 +607,17 @@ fun HomeScreen(
                                     verticalArrangement = Arrangement.Bottom,
                                     horizontalAlignment = Alignment.Start
                                 ) {
-                                    if (BluetoothManagerRepository.bluetoothConnectionState.value ==
-                                        BluetoothConnectionState.Paired
-                                    ) {
-                                        LocatorStats(viewModel, modifier)
-                                    }
                                 }
                             }
                         }
                     }
                 }
+                if (BluetoothManagerRepository.bluetoothConnectionState.value ==
+                    BluetoothConnectionState.Connected
+                ) {
+                    LocatorStats(viewModel, modifier)
+                }
             }
-        }
-    }
-}
-
-private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
-
-@SuppressLint("MissingPermission")
-@Composable
-fun InitializeCompanionDeviceManager() {
-    launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            // Handle successful pairing
-            BluetoothManagerRepository.updateLocatorDevice(result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE))
-            BluetoothManagerRepository.locatorDevice.value!!.createBond()
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
-        } else {
-            // Handle pairing failure
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
         }
     }
 }
@@ -658,7 +688,7 @@ fun selectBluetoothDevice(context: Context) {
                 Log.d(tag, "onFailure: $error")
             }
         }, null)
-        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.SelectingDevices)
+        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.AssociateStart)
     }
 }
 
@@ -677,73 +707,71 @@ fun unpairBluetoothDevice() {
 
 @Composable
 fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
-    if (viewModel.locatorDetected) {
-        var offsetX by remember { mutableStateOf(0f) }
-        var offsetY by remember { mutableStateOf(0f) }
-        Column (
-            modifier = modifier
-                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                    }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    Column (
+        modifier = modifier
+            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    offsetX += dragAmount.x
+                    offsetY += dragAmount.y
                 }
-                //.size(200.dp, 100.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0x805D6F96))
-                .padding(8.dp)
-            ,
-            //verticalArrangement = Arrangement.Top,
-            //horizontalAlignment = Alignment.Start
-        ) {
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${viewModel.uiState.value.altitudeAboveGroundLevel}m",
-                style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = "Acc: ${round(viewModel.gForce * 100) / 100} ${viewModel.locatorOrientation}",
-                style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
-            //Spacer(modifier = Modifier.weight(1f))
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.uiState.value.deployMode) {
-                    DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Drogue Primary: " + viewModel.uiState.value.droguePrimaryDeployDelay.toString() + "s"
-                    }
-                    DeployMode.kMainPrimaryMainBackup -> {
-                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
-                    }
-                    DeployMode.kDrogueBackupMainBackup -> {
-                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
-                    }
-                },
-                style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.uiState.value.deployMode) {
-                    DeployMode.kDroguePrimaryDrogueBackup -> {
-                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
-                    }
-                    DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
-                        "Main Backup: " + viewModel.uiState.value.mainBackupDeployAltitude.toString() + "m"
-                    }
-                    DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
-                    }
-                },
-                style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
-        }
+            }
+            //.size(200.dp, 100.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x805D6F96))
+            .padding(8.dp)
+        ,
+        //verticalArrangement = Arrangement.Top,
+        //horizontalAlignment = Alignment.Start
+    ) {
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = "AGL: ${viewModel.uiState.value.altitudeAboveGroundLevel}m",
+            style = typography.bodyLarge,
+            color = if (viewModel.uiState.value.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = "Acc: ${round(viewModel.gForce * 100) / 100} ${viewModel.locatorOrientation}",
+            style = typography.bodyLarge,
+            color = if (viewModel.uiState.value.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        //Spacer(modifier = Modifier.weight(1f))
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = when (viewModel.uiState.value.deployMode) {
+                DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
+                    "Drogue Primary: " + viewModel.uiState.value.droguePrimaryDeployDelay.toString() + "s"
+                }
+                DeployMode.kMainPrimaryMainBackup -> {
+                    "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                }
+                DeployMode.kDrogueBackupMainBackup -> {
+                    "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                }
+            },
+            style = typography.bodyLarge,
+            color = if (viewModel.uiState.value.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = when (viewModel.uiState.value.deployMode) {
+                DeployMode.kDroguePrimaryDrogueBackup -> {
+                    "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                }
+                DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
+                    "Main Backup: " + viewModel.uiState.value.mainBackupDeployAltitude.toString() + "m"
+                }
+                DeployMode.kDroguePrimaryMainPrimary -> {
+                    "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                }
+            },
+            style = typography.bodyLarge,
+            color = if (viewModel.uiState.value.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
     }
 }
 
