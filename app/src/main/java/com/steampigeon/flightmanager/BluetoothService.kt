@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.util.Log
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +47,7 @@ class BluetoothService() : Service() {
         val prelaunchMessageHeader: ByteArray = byteArrayOf(0x50, 0x52, 0x45) // PRE
         val telemetryMessageHeader: ByteArray = byteArrayOf(0x54, 0x4C, 0x4D) // TLM
     }
-    private var bluetoothAdapter: BluetoothAdapter? = null
+    private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val bondStateReceiver = BondStateReceiver()
     var receiverRegistered = false
     //private val application: BluetoothManagerRepository = applicationContext as BluetoothManagerRepository
@@ -73,12 +74,13 @@ class BluetoothService() : Service() {
         if (!receiverRegistered) {
             registerReceiver()
             val intent = Intent("CONFIRM_RECEIVER_REGISTERED")
-            //intent.putExtra("message", "Hello from Broadcast!")
             sendBroadcast(intent)
         }
         serviceScope.launch {
             // Keep listening to the InputStream until an exception occurs.
+            var loopCount = 0
             while (true) {
+                Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
                 maintainLocatorDevicePairing()
                 if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected) {
                     // Read from the InputStream.
@@ -150,12 +152,15 @@ class BluetoothService() : Service() {
                         }
                     }
                     //viewModel.updateData(mmBuffer)
+                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
+                        updateArmedState(!BluetoothManagerRepository.armedState.value)
                 } else {
                     numBytes = 0
                     if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
                         connectLocator()
                 }
                 delay(100)
+                loopCount++
             }
         }
         return START_STICKY
@@ -168,21 +173,22 @@ class BluetoothService() : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun maintainLocatorDevicePairing() {
+    fun maintainLocatorDevicePairing() {
         //if (bluetoothConnectionManager.receiverRegistered) {
         when (BluetoothManagerRepository.bluetoothConnectionState.value) {
             BluetoothConnectionState.Pairing -> {
                 Log.d(TAG, "Changing state from Pairing to Enabled")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
             }
-            BluetoothConnectionState.SelectingDevices -> {
-                Log.d(TAG, "SelectingDevices delay start")
-                while (bluetoothAdapter?.isDiscovering != false) { delay(100) }
+            BluetoothConnectionState.AssociateStart -> {
+                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.AssociateWait)
+                Log.d(TAG, "SelectingDevices delay start. Discovering: " + bluetoothAdapter.isDiscovering)
+                while (bluetoothAdapter.isDiscovering != false) { Thread.sleep(100) }
                 Log.d(TAG, "Changing state from SelectingDevices to PairingFailed")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
             }
             BluetoothConnectionState.Paired -> {
-                if (bluetoothAdapter?.isEnabled == true) {
+                if (bluetoothAdapter.isEnabled == true) {
                     if (BluetoothManagerRepository.locatorDevice.value!!.bondState != BluetoothDevice.BOND_BONDED) {
                         Log.d(TAG, "Changing state from Paired to Enabled")
                         BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
@@ -194,17 +200,17 @@ class BluetoothService() : Service() {
                 }
             }
             BluetoothConnectionState.PairingFailed -> {
-                if (bluetoothAdapter?.isDiscovering == true)
-                    bluetoothAdapter!!.cancelDiscovery()
-                Log.d(TAG, "SelectingDevices delay start")
-                delay(5000)
-                Log.d(TAG, "SelectingDevices delay end")
+                if (bluetoothAdapter.isDiscovering == true)
+                    bluetoothAdapter.cancelDiscovery()
+                Log.d(TAG, "PairingFailed delay start")
+                Thread.sleep(500)
+                Log.d(TAG, "PairingFailed delay end")
                 Log.d(TAG, "Changing state from PairingFailed to Enabled")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
             }
             BluetoothConnectionState.Disconnected -> {
                 Log.d(TAG, "Disconnected delay start")
-                delay(5000)
+                Thread.sleep(500)
                 Log.d(TAG, "Disconnected delay end")
                 Log.d(TAG, "Changing state from Disconnected to Paired")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
@@ -224,10 +230,9 @@ class BluetoothService() : Service() {
                 BluetoothManagerRepository.locatorDevice.value!!.createRfcommSocketToServiceRecord(BluetoothManagerRepository.locatorDevice.value!!.uuids[0].uuid)
             }
             locatorInputStream = locatorSocket!!.inputStream
-            //locatorOutputStream = locatorSocket!!.outputStream
-            val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
+            locatorOutputStream = locatorSocket!!.outputStream
             // Cancel device discovery since locator has been selected.
-            if (bluetoothAdapter?.isDiscovering == true)
+            if (bluetoothAdapter.isDiscovering == true)
                 bluetoothAdapter.cancelDiscovery()
             // Attempt to connect to locator
             try {
@@ -262,37 +267,29 @@ class BluetoothService() : Service() {
         return message
     }
 
-    // Call this from the main activity to send data to the remote device.
-    /*        fun write(bytes: ByteArray) {
-            try {
-                mmOutStream.write(bytes)
-            } catch (e: IOException) {
-                Log.e(TAG, "Error occurred when sending data", e)
-
-                // Send a failure message back to the activity.
-                val writeErrorMsg = handler.obtainMessage(MESSAGE_TOAST)
-                val bundle = Bundle().apply {
-                    putString("toast", "Couldn't send data to the other device")
-                }
-                writeErrorMsg.data = bundle
-                handler.sendMessage(writeErrorMsg)
-                return
-            }
-
-            // Share the sent message with the UI activity.
-            val writtenMsg = handler.obtainMessage(
-                MESSAGE_WRITE, -1, -1, mmBuffer)
-            writtenMsg.sendToTarget()
+    fun updateArmedState(armedState: Boolean) {
+        try {
+            locatorOutputStream.write(when (armedState) {
+                true -> "Run".toByteArray()
+                false -> "Stop".toByteArray()
+            } )
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendFailure)
+            return
         }
+        BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.Sent)
+    }
 
-        // Call this method from the main activity to shut down the connection.
-        fun cancel() {
-            try {
-                mmSocket.close()
-            } catch (e: IOException) {
-                Log.e(TAG, "Could not close the connect socket", e)
-            }
-        }*/
+    // Call this method from the main activity to shut down the connection.
+    fun cancel(locatorSocket: BluetoothSocket) {
+        try {
+            locatorSocket.close()
+        } catch (e: IOException) {
+            Log.e(TAG, "Could not close the connect socket", e)
+        }
+    }
+
     inner class LocalBinder : Binder() {
         // Return this instance of LocalService so clients can call public methods.
         fun getService(): BluetoothService = this@BluetoothService

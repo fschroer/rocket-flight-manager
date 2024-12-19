@@ -58,25 +58,15 @@ class RocketViewModel() : ViewModel() {
     private val _locatorMessage = MutableStateFlow<ByteArray>(ByteArray(256))
     val data: StateFlow<ByteArray> = _locatorMessage.asStateFlow()
 
-    private var lastExecutionTime = System.currentTimeMillis()
-    var locatorDetected = false
-
     var gForce = 0f
     var locatorOrientation = ""
 
     fun collectLocatorData(service: BluetoothService) {
-        var elapsedSeconds = 0.0
-        elapsedSeconds = (System.currentTimeMillis() - lastExecutionTime) / 1000.0
-        locatorDetected = (elapsedSeconds < 5)
         viewModelScope.launch {
             service.data.onStart {
             }.collect { data ->
                 _locatorMessage.value = data
-                lastExecutionTime = System.currentTimeMillis()
             }
-        }
-        if (!locatorDetected) {
-            val test = true
         }
         if (_locatorMessage.value.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader)) {
             _uiState.update { currentState ->
