@@ -28,6 +28,7 @@ data class RocketUiState(
     val deviceName: String = "",
     val batteryVoltage: UShort = 0u,
     //val locatorDetected: Boolean = false,
+    val flightState: UByte = 0u,
     ) {
         data class Accelerometer(
             val x: Short = 0,

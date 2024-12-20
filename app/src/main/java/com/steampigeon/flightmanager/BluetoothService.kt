@@ -30,7 +30,7 @@ import java.io.OutputStream
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 256
 private const val prelaunchMessageSize = 74
-private const val telemetryMessageSize = 84
+private const val telemetryMessageSize = 90
 
 enum class MessageType (val messageType: UByte) {
     none(0u),
@@ -93,12 +93,25 @@ class BluetoothService() : Service() {
                         }
                         when {
                             locatorInputBuffer.copyOfRange(0, 3)
-                                .contentEquals(prelaunchMessageHeader) ->
+                                .contentEquals(prelaunchMessageHeader) -> {
                                 messageType = MessageType.prelaunch
-
+                                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) {
+                                    BluetoothManagerRepository.updateLocatorArmedState(
+                                        LocatorArmedMessageState.Idle
+                                    )
+                                    BluetoothManagerRepository.updateArmedState(false)
+                                }
+                            }
                             locatorInputBuffer.copyOfRange(0, 3)
-                                .contentEquals(telemetryMessageHeader) ->
+                                .contentEquals(telemetryMessageHeader) -> {
                                 messageType = MessageType.telemetry
+                                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) {
+                                    BluetoothManagerRepository.updateLocatorArmedState(
+                                        LocatorArmedMessageState.Idle
+                                    )
+                                    BluetoothManagerRepository.updateArmedState(true)
+                                }
+                            }
                         }
                         if (messageType != MessageType.none) {
                             headerReceived = true
@@ -153,7 +166,7 @@ class BluetoothService() : Service() {
                     }
                     //viewModel.updateData(mmBuffer)
                     if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
-                        updateArmedState(!BluetoothManagerRepository.armedState.value)
+                        changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
                 } else {
                     numBytes = 0
                     if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
@@ -267,7 +280,7 @@ class BluetoothService() : Service() {
         return message
     }
 
-    fun updateArmedState(armedState: Boolean) {
+    fun changeLocatorArmedState(armedState: Boolean) {
         try {
             locatorOutputStream.write(when (armedState) {
                 true -> "Run".toByteArray()
@@ -279,6 +292,7 @@ class BluetoothService() : Service() {
             return
         }
         BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.Sent)
+        Thread.sleep(2000)
     }
 
     // Call this method from the main activity to shut down the connection.
