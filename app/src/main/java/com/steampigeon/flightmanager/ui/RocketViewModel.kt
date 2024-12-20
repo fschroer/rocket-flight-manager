@@ -97,13 +97,32 @@ class RocketViewModel() : ViewModel() {
             }
             gForce = sqrt((_uiState.value.accelerometer.x * _uiState.value.accelerometer.x + _uiState.value.accelerometer.y * _uiState.value.accelerometer.y + _uiState.value.accelerometer.z * _uiState.value.accelerometer.z).toFloat()) / ACCELEROMETER_SCALE
             locatorOrientation =
-            when {
-                _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce < -0.5 ->
-                    "up"
-                _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce > 0.5 ->
-                    "down"
-                else -> "side"
+                when {
+                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce < -0.5 ->
+                        "up"
+                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce > 0.5 ->
+                        "down"
+                    else -> "side"
+                }
+        }
+        else if (_locatorMessage.value.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader)) {
+            _uiState.update { currentState ->
+                currentState.copy(
+                    latitude = gpsCoord(_locatorMessage.value, 11),
+                    longitude = gpsCoord(_locatorMessage.value, 19),
+                    hdop = byteArrayToFloat(_locatorMessage.value, 29),
+                    flightState = _locatorMessage.value[40] as UByte
+                )
             }
+            gForce = sqrt((_uiState.value.accelerometer.x * _uiState.value.accelerometer.x + _uiState.value.accelerometer.y * _uiState.value.accelerometer.y + _uiState.value.accelerometer.z * _uiState.value.accelerometer.z).toFloat()) / ACCELEROMETER_SCALE
+            locatorOrientation =
+                when {
+                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce < -0.5 ->
+                        "up"
+                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce > 0.5 ->
+                        "down"
+                    else -> "side"
+                }
         }
     }
 

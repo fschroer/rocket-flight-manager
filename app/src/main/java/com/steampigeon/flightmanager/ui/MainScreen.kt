@@ -512,26 +512,26 @@ fun HomeScreen(
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     if (showControls) {
+                                        val armedState = BluetoothManagerRepository.armedState.collectAsState().value
                                         Button(
                                             onClick = {
                                                 if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                     || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated)
-                                                    armedState = !armedState
-                                                BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendRequested)
+                                                    BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendRequested)
                                             },
                                             modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                             contentPadding = PaddingValues(0.dp)
                                         ) {
                                             Text(
                                                 when {
-                                                    armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
-                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle) -> "Armed"
+                                                    armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Armed"
                                                     armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Arming Failed"
-                                                    armedState -> "Arming"
-                                                    !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
-                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle) -> "Disarmed"
+                                                    armedState -> "Disarming"
+                                                    !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Disarmed"
                                                     !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disarming Failed"
-                                                    !armedState -> "Disarming"
+                                                    !armedState -> "Arming"
                                                     else -> "Unknown"
                                                 }
                                             )
