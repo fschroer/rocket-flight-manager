@@ -6,45 +6,41 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MaterialTheme.typography
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.ui.theme.FlightManagerTheme
+import com.steampigeon.flightmanager.data.DeployMode
+
+private var configChanged = false
+private val locatorData = LocatorData()
 
 /**
  * Composable that displays map download options,
@@ -54,18 +50,38 @@ import com.steampigeon.flightmanager.ui.theme.FlightManagerTheme
  */
 @Composable
 fun LocatorSettingsScreen(
+    viewModel: RocketViewModel,
     onSelectionChanged: (String) -> Unit = {},
     onCancelButtonClicked: () -> Unit = {},
     onNextButtonClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var selectedValue by rememberSaveable { mutableStateOf("") }
+
+    val rocketData = locatorData.getLocatorData(LocalContext.current, viewModel)
+    var deployMode by remember {mutableStateOf(DeployMode.kDroguePrimaryDrogueBackup)}
+    var launchDetectAltitude by remember { mutableIntStateOf(0) }
+    var droguePrimaryDeployDelay by remember { mutableIntStateOf(0) }
+    var drogueBackupDeployDelay by remember { mutableIntStateOf(0) }
+    var mainPrimaryDeployAltitude by remember { mutableIntStateOf(0) }
+    var mainBackupDeployAltitude by remember { mutableIntStateOf(0) }
+    var deploySignalDuration by remember { mutableIntStateOf(0) }
+    var deviceName by remember { mutableStateOf("") }
 
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        NumericEntryWithButtons()
+        LaunchedEffect(rocketData) {
+            deployMode = rocketData.deployMode
+            launchDetectAltitude = rocketData.launchDetectAltitude.toInt()
+            droguePrimaryDeployDelay = rocketData.droguePrimaryDeployDelay.toInt()
+            drogueBackupDeployDelay = rocketData.drogueBackupDeployDelay.toInt()
+            mainPrimaryDeployAltitude = rocketData.mainPrimaryDeployAltitude.toInt()
+            mainBackupDeployAltitude = rocketData.mainBackupDeployAltitude.toInt()
+            deploySignalDuration = rocketData.deploySignalDuration.toInt()
+            deviceName = rocketData.deviceName
+        }
+        numericEntryWithButtons(launchDetectAltitude, "Launch Detect AGL", 0, 100)
         var number by remember { mutableStateOf(0) }
         Row(
             modifier = Modifier
@@ -83,10 +99,10 @@ fun LocatorSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = selectedValue.isNotEmpty(),
+                enabled = configChanged,
                 onClick = onNextButtonClicked
             ) {
-                Text(stringResource(R.string.next))
+                Text(stringResource(R.string.update))
             }
         }
     }
@@ -108,7 +124,9 @@ fun NumberInputWithUpDown(
                 onLongClick = {
                     onValueChange(value - 5)
                 },
-                onClick = { onValueChange(value - 1) },
+                onClick = {
+                    onValueChange(value - 1)
+                },
             ),
             enabled = value > minValue
         ) {
@@ -135,8 +153,9 @@ fun NumberInputWithUpDown(
 }
 
 @Composable
-fun NumericEntryWithButtons() {
-    var value by remember { mutableStateOf("0") }
+fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 0, maxValue: Int = Int.MAX_VALUE): Int {
+    var value by remember { mutableStateOf(startValue.toString()) }
+    val numericValue = value.toIntOrNull() ?: 0
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -146,36 +165,35 @@ fun NumericEntryWithButtons() {
         OutlinedTextField(
             value = value,
             onValueChange = { newValue ->
+                val newNumericValue = newValue.filter { it.isDigit() }.toIntOrNull() ?: 0
                 value = if (newValue.isEmpty()) {
-                    "0"
+                    ""
                 } else {
-                    newValue.filter { it.isDigit() }
+                    newNumericValue.coerceIn(minValue, maxValue).toString()
                 }
+                configChanged = true
             },
-            label = { Text("Launch Detect AGL") },
+            label = { Text(labelText) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f)
+            //modifier = Modifier.weight(1f)
         )
         //Spacer(modifier = Modifier.width(8.dp))
         Column(
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            TextButton(onClick = { value = (value.toIntOrNull() ?: 0 + 1).toString() }) {
+            TextButton(
+                onClick = {value = (numericValue + 1).toString()},
+                enabled = numericValue < maxValue
+            ) {
                 Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment")
             }
-            TextButton(onClick = { value = (value.toIntOrNull() ?: 0 - 1).toString() }) {
+            TextButton(
+                onClick = {value = (numericValue - 1).toString()},
+                enabled = numericValue > minValue
+            ) {
                 Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement")
             }
         }
     }
-}
-
-@Preview
-@Composable
-fun LocatorSettingsScreenPreview() {
-    FlightManagerTheme {
-        LocatorSettingsScreen(
-            modifier = Modifier.fillMaxHeight()
-        )
-    }
+    return value.filter { it.isDigit() }.toIntOrNull() ?: 0
 }

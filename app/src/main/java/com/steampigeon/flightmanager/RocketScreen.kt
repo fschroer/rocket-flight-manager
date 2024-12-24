@@ -24,19 +24,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.steampigeon.flightmanager.ui.RocketViewModel
-import com.steampigeon.flightmanager.ui.DownloadMapScreen
 import com.steampigeon.flightmanager.ui.ExportFlightPathScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 
 enum class RocketScreen(@StringRes val title: Int) {
     Start(title = R.string.app_name),
-    Download(title = R.string.download_map),
-    Export(title = R.string.export),
     LocatorSettings(title = R.string.locator_settings),
     ReceiverSettings(title = R.string.receiver_settings),
+    Export(title = R.string.export),
 }
 
 /**
@@ -98,31 +95,12 @@ fun RocketApp(
                     viewModel,
                     modifier = Modifier
                         //.fillMaxSize()
-                        .padding(dimensionResource(R.dimen.padding_medium))
-                )
-            }
-            composable(route = RocketScreen.Download.name) {
-                DownloadMapScreen(
-                    onNextButtonClicked = { /* To do */ },
-                    onCancelButtonClicked = {
-                        navigateToStart(viewModel, navController)
-                    },
-                    //onSelectionChanged = { viewModel.setFlavor(it) },
-                    modifier = Modifier.fillMaxHeight()
-                )
-            }
-            composable(route = RocketScreen.Export.name) {
-                ExportFlightPathScreen(
-                    onNextButtonClicked = { /* To do */ },
-                    onCancelButtonClicked = {
-                        navigateToStart(viewModel, navController)
-                    },
-                    //onSelectionChanged = { viewModel.setDate(it) },
-                    modifier = Modifier.fillMaxHeight()
+                        //.padding(dimensionResource(R.dimen.padding_medium))
                 )
             }
             composable(route = RocketScreen.LocatorSettings.name) {
                 LocatorSettingsScreen(
+                    viewModel,
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
                         navigateToStart(viewModel, navController)
@@ -133,6 +111,16 @@ fun RocketApp(
             }
             composable(route = RocketScreen.ReceiverSettings.name) {
                 ReceiverSettingsScreen(
+                    onNextButtonClicked = { /* To do */ },
+                    onCancelButtonClicked = {
+                        navigateToStart(viewModel, navController)
+                    },
+                    //onSelectionChanged = { viewModel.setDate(it) },
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+            composable(route = RocketScreen.Export.name) {
+                ExportFlightPathScreen(
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
                         navigateToStart(viewModel, navController)

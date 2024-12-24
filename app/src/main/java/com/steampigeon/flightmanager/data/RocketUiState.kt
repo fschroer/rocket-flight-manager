@@ -1,6 +1,7 @@
 package com.steampigeon.flightmanager.data
 
 import android.bluetooth.BluetoothDevice
+import com.steampigeon.flightmanager.ui.RocketViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +29,8 @@ data class RocketUiState(
     val deviceName: String = "",
     val batteryVoltage: UShort = 0u,
     //val locatorDetected: Boolean = false,
-    val flightState: UByte = 0u,
+    val flightState: FlightStates = FlightStates.kWaitingLaunch,
+    val agl: FloatArray = FloatArray(RocketViewModel.SAMPLES_PER_SECOND) { 0f },
     ) {
         data class Accelerometer(
             val x: Short = 0,
@@ -45,6 +47,23 @@ enum class DeployMode (val deployMode: UByte) {
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.deployMode == value } ?: throw IllegalArgumentException("Invalid type: $value")
+    }
+}
+
+enum class FlightStates (val flightStates: UByte) {
+    kWaitingLaunch(0u),
+    kLaunched(1u),
+    kBurnout(2u),
+    kNoseover(3u),
+    kDroguePrimaryDeployed(4u),
+    kDrogueBackupDeployed(5u),
+    kMainPrimaryDeployed(6u),
+    kMainBackupDeployed(7u),
+    kLanded(8u),
+    kNoSignal(9u);
+
+    companion object {
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.flightStates == value } ?: throw IllegalArgumentException("Invalid type: $value")
     }
 }
 

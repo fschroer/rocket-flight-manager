@@ -10,15 +10,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        //Start Bluetooth data handler service
         setContent {
             FlightManagerTheme {
-                //Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    RocketApp(
-                        //modifier = Modifier.padding(innerPadding)
-                    )
-                //}
+                RocketApp()
             }
         }
+        startForegroundService(Intent(this, BluetoothService()::class.java))
+        //Thread.sleep(1000)
+    }
+
+    override fun onStart() {
+        super.onStart()
+    }
+
+    override fun onResume() {
+        super.onResume()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
     }
 
     override fun onDestroy() {
