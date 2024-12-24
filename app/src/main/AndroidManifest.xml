@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
     <uses-permission android:name="android.permission.BLUETOOTH"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <uses-feature android:name="android.software.companion_device_setup"/>
     <uses-feature android:name="android.hardware.bluetooth" android:required="true"/>
@@ -40,7 +42,10 @@
         <meta-data
             android:name="com.google.android.gms.version"
             android:value="@integer/google_play_services_version" />
-        <service android:name="com.steampigeon.flightmanager.BluetoothService"/>
+        <service
+            android:name="com.steampigeon.flightmanager.BluetoothService"
+            android:foregroundServiceType="connectedDevice">
+        </service>
     </application>
 
 </manifest>
