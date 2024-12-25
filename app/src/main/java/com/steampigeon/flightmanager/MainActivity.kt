@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopService(Intent(this, BluetoothService::class.java))
+        if (!isChangingConfigurations)
+            stopService(Intent(this, BluetoothService::class.java))
     }
 }
