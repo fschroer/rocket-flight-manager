@@ -1,5 +1,6 @@
 package com.steampigeon.flightmanager.ui
 
+import android.util.Log
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -24,6 +25,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,9 +40,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.LocatorArmedMessageState
+import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.LocatorConfigMessageState
 
-private var configChanged = false
+private const val TAG = "LocatorSettings"
 private val locatorData = LocatorData()
 
 /**
@@ -56,32 +62,40 @@ fun LocatorSettingsScreen(
     onNextButtonClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-
-    val rocketData = locatorData.getLocatorData(LocalContext.current, viewModel)
-    var deployMode by remember {mutableStateOf(DeployMode.kDroguePrimaryDrogueBackup)}
-    var launchDetectAltitude by remember { mutableIntStateOf(0) }
-    var droguePrimaryDeployDelay by remember { mutableIntStateOf(0) }
-    var drogueBackupDeployDelay by remember { mutableIntStateOf(0) }
-    var mainPrimaryDeployAltitude by remember { mutableIntStateOf(0) }
-    var mainBackupDeployAltitude by remember { mutableIntStateOf(0) }
-    var deploySignalDuration by remember { mutableIntStateOf(0) }
-    var deviceName by remember { mutableStateOf("") }
+    var configChanged = remember {mutableStateOf(false)}
+    var initialConfigCaptured by remember {mutableStateOf(false)}
+    var updateableLocatorConfig by remember {mutableStateOf(LocatorConfig())}
+    var updatedLocatorConfig by remember {mutableStateOf(LocatorConfig())}
+    var configChangeAcknowldedgeWaitCount by remember { mutableIntStateOf(0) }
 
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        LaunchedEffect(rocketData) {
-            deployMode = rocketData.deployMode
-            launchDetectAltitude = rocketData.launchDetectAltitude.toInt()
-            droguePrimaryDeployDelay = rocketData.droguePrimaryDeployDelay.toInt()
-            drogueBackupDeployDelay = rocketData.drogueBackupDeployDelay.toInt()
-            mainPrimaryDeployAltitude = rocketData.mainPrimaryDeployAltitude.toInt()
-            mainBackupDeployAltitude = rocketData.mainBackupDeployAltitude.toInt()
-            deploySignalDuration = rocketData.deploySignalDuration.toInt()
-            deviceName = rocketData.deviceName
+        // Capture initial and updated locator configuration data.
+        // Used for configuration screen and confirming locator update acknowledgement.
+        val rocketData = locatorData.getLocatorData(LocalContext.current, viewModel)
+        LaunchedEffect(viewModel.locatorConfig.collectAsState()) {
+            Log.d(TAG, "Current time: ${System.currentTimeMillis()}")
+            Log.d(TAG, "Last message: ${rocketData.lastMessageTime}")
+            Log.d(TAG, "Difference: ${System.currentTimeMillis() - rocketData.lastMessageTime}")
+            if (System.currentTimeMillis() - rocketData.lastMessageTime < 2000) {
+                if (!initialConfigCaptured) {
+                    updateableLocatorConfig = viewModel.locatorConfig.value
+                    initialConfigCaptured = true
+                }
+                updatedLocatorConfig = viewModel.locatorConfig.value
+            }
         }
-        numericEntryWithButtons(launchDetectAltitude, "Launch Detect AGL", 0, 100)
+        if (initialConfigCaptured) {
+            numericEntryWithButtons(
+                updateableLocatorConfig.launchDetectAltitude.toInt(),
+                "Launch Detect AGL",
+                0,
+                100,
+                configChanged
+            )
+        }
         var number by remember { mutableStateOf(0) }
         Row(
             modifier = Modifier
@@ -96,13 +110,47 @@ fun LocatorSettingsScreen(
             ) {
                 Text(stringResource(R.string.cancel))
             }
+            val locatorConfigMessageState = BluetoothManagerRepository.locatorConfigMessageState.collectAsState().value
+            when (locatorConfigMessageState) {
+                LocatorConfigMessageState.Sent -> {
+                    if (updateableLocatorConfig == updatedLocatorConfig)
+                        BluetoothManagerRepository.updateLocatorConfigMessageState(
+                            LocatorConfigMessageState.AckUpdated
+                        )
+                    else {
+                        configChangeAcknowldedgeWaitCount++
+                        if (configChangeAcknowldedgeWaitCount >= 5) {
+                            BluetoothManagerRepository.updateLocatorConfigMessageState(
+                                LocatorConfigMessageState.NotAcknowledged
+                            )
+                        }
+                    }
+                }
+                else -> {}
+            }
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = configChanged,
-                onClick = onNextButtonClicked
+                enabled = configChanged.value,
+                onClick = {
+                    if (BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.Idle
+                        || BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.AckUpdated
+                        || BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.SendFailure
+                        || BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.NotAcknowledged
+                        ) {
+                        BluetoothManagerRepository.updateLocatorConfigMessageState(LocatorConfigMessageState.SendRequested)
+                        BluetoothManagerRepository.updateLocatorConfig(updateableLocatorConfig)
+                    }
+                }
             ) {
-                Text(stringResource(R.string.update))
+                Text( when (locatorConfigMessageState) {
+                    LocatorConfigMessageState.Idle -> stringResource(R.string.update)
+                    LocatorConfigMessageState.SendRequested -> stringResource(R.string.updating)
+                    LocatorConfigMessageState.AckUpdated -> stringResource(R.string.updated)
+                    LocatorConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
+                    LocatorConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
+                    else -> {""}
+                } )
             }
         }
     }
@@ -153,7 +201,7 @@ fun NumberInputWithUpDown(
 }
 
 @Composable
-fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 0, maxValue: Int = Int.MAX_VALUE): Int {
+fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 0, maxValue: Int = Int.MAX_VALUE, configChanged: MutableState<Boolean>): Int {
     var value by remember { mutableStateOf(startValue.toString()) }
     val numericValue = value.toIntOrNull() ?: 0
 
@@ -171,7 +219,7 @@ fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 
                 } else {
                     newNumericValue.coerceIn(minValue, maxValue).toString()
                 }
-                configChanged = true
+                configChanged.value = true
             },
             label = { Text(labelText) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -182,13 +230,17 @@ fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
             TextButton(
-                onClick = {value = (numericValue + 1).toString()},
+                onClick = { value = (numericValue + 1).toString()
+                    configChanged.value = true
+                },
                 enabled = numericValue < maxValue
             ) {
                 Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment")
             }
             TextButton(
-                onClick = {value = (numericValue - 1).toString()},
+                onClick = { value = (numericValue - 1).toString()
+                    configChanged.value = true
+                },
                 enabled = numericValue > minValue
             ) {
                 Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement")

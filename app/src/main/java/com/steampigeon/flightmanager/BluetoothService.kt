@@ -20,9 +20,12 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
+import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.LocatorConfigMessageState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -53,6 +56,7 @@ class BluetoothService() : Service() {
         val prelaunchMessageHeader: ByteArray = byteArrayOf(0x50, 0x52, 0x45) // PRE
         val telemetryMessageHeader: ByteArray = byteArrayOf(0x54, 0x4C, 0x4D) // TLM
     }
+    private var serviceStarted = false
     private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val bondStateReceiver = BondStateReceiver()
     var receiverRegistered = false
@@ -63,6 +67,7 @@ class BluetoothService() : Service() {
     private val _data = MutableSharedFlow<ByteArray>()
     val data: SharedFlow<ByteArray> = _data.asSharedFlow()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var locatorSocket: BluetoothSocket? = null
     private lateinit var locatorInputStream: InputStream
     private lateinit var locatorOutputStream: OutputStream
     private var armedStateChangeWaitCount = 0
@@ -75,140 +80,149 @@ class BluetoothService() : Service() {
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val locatorInputBuffer: ByteArray = ByteArray(messageBufferSize) // buffer store for the stream
-        var numBytes = 0 // bytes returned from read()
-        var headerReceived = false
-        var currentMessageSize = 0
-        var messageType = MessageType.none
-        //bluetoothManagerRepository = intent?.getSerializableExtra("bluetoothManagerRepository") as BluetoothManagerRepository
-        //val device = intent?.getParcelableExtra<BluetoothDevice>("device")
+        if (!serviceStarted) {
+            serviceStarted = true
+            val locatorInputBuffer: ByteArray =
+                ByteArray(messageBufferSize) // buffer store for the stream
+            var numBytes = 0 // bytes returned from read()
+            var headerReceived = false
+            var currentMessageSize = 0
+            var messageType = MessageType.none
+            //bluetoothManagerRepository = intent?.getSerializableExtra("bluetoothManagerRepository") as BluetoothManagerRepository
+            //val device = intent?.getParcelableExtra<BluetoothDevice>("device")
 
-        // Register broadcast receiver for bluetooth status events
-        if (!receiverRegistered) {
-            registerReceiver()
-            val intent = Intent("CONFIRM_RECEIVER_REGISTERED")
-            sendBroadcast(intent)
-        }
-        serviceScope.launch {
-            // Keep listening to the InputStream until an exception occurs.
-            var loopCount = 0
-            while (true) {
-                Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
-                maintainLocatorDevicePairing()
-                if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected) {
-                    // Read from the InputStream.
-                    if (!headerReceived) {
-                        try {
-                            numBytes = locatorInputStream.read(locatorInputBuffer)
-                        } catch (e: IOException) {
-                            Log.d(TAG, "Input stream was disconnected", e)
-                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Disconnected)
+            // Register broadcast receiver for bluetooth status events
+            if (!receiverRegistered) {
+                registerReceiver()
+                val intent = Intent("CONFIRM_RECEIVER_REGISTERED")
+                sendBroadcast(intent)
+            }
+            serviceScope.launch {
+                // Keep listening to the InputStream until an exception occurs.
+                var loopCount = 0
+                while (true) {
+                    Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
+                    maintainLocatorDevicePairing()
+                    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected) {
+                        // Read from the InputStream.
+                        if (!headerReceived) {
+                            try {
+                                numBytes = locatorInputStream.read(locatorInputBuffer)
+                            } catch (e: IOException) {
+                                Log.d(TAG, "Input stream was disconnected", e)
+                                BluetoothManagerRepository.updateBluetoothConnectionState(
+                                    BluetoothConnectionState.Disconnected
+                                )
+                            }
+                            when {
+                                locatorInputBuffer.copyOfRange(0, 3)
+                                    .contentEquals(prelaunchMessageHeader) -> {
+                                    messageType = MessageType.prelaunch
+                                    if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
+                                        BluetoothManagerRepository.updateArmedState(false)
+                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                            LocatorArmedMessageState.Idle
+                                        )
+                                        armedStateChangeWaitCount = 0
+                                    } else {
+                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of arm request
+                                            armedStateChangeWaitCount++
+                                            if (armedStateChangeWaitCount >= 5) {
+                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                                    LocatorArmedMessageState.Idle
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                locatorInputBuffer.copyOfRange(0, 3)
+                                    .contentEquals(telemetryMessageHeader) -> {
+                                    messageType = MessageType.telemetry
+                                    if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
+                                        BluetoothManagerRepository.updateArmedState(true)
+                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                            LocatorArmedMessageState.Idle
+                                        )
+                                        armedStateChangeWaitCount = 0
+                                    } else {
+                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of disarm request
+                                            armedStateChangeWaitCount++
+                                            if (armedStateChangeWaitCount >= 5) {
+                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                                    LocatorArmedMessageState.Idle
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (messageType != MessageType.none) {
+                                headerReceived = true
+                                currentMessageSize = numBytes
+                            }
+                            //else
+                            //    locatorInputBuffer.fill(0)
+                        } else {
+                            try {
+                                numBytes = locatorInputStream.read(
+                                    locatorInputBuffer,
+                                    currentMessageSize,
+                                    messageBufferSize - currentMessageSize
+                                )
+                                currentMessageSize += numBytes
+                            } catch (e: IOException) {
+                                Log.d(TAG, "Input stream was disconnected", e)
+                                BluetoothManagerRepository.updateBluetoothConnectionState(
+                                    BluetoothConnectionState.Disconnected
+                                )
+                            }
+                        }
+                        if (numBytes != 0) {
+                            Log.d(TAG, logByteArrayAsChars(locatorInputBuffer, currentMessageSize))
+                            //Log.d(TAG, locatorInputBuffer.joinToString(", "))
                         }
                         when {
-                            locatorInputBuffer.copyOfRange(0, 3)
-                                .contentEquals(prelaunchMessageHeader) -> {
-                                messageType = MessageType.prelaunch
-                                if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
-                                    BluetoothManagerRepository.updateArmedState(false)
-                                    BluetoothManagerRepository.updateLocatorArmedState(
-                                        LocatorArmedMessageState.Idle
-                                    )
-                                    armedStateChangeWaitCount = 0
-                                }
-                                else {
-                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of arm request
-                                        armedStateChangeWaitCount++
-                                        if (armedStateChangeWaitCount >= 5) {
-                                            BluetoothManagerRepository.updateLocatorArmedState(
-                                                LocatorArmedMessageState.Idle
-                                            )
-                                        }
-                                    }
-                                }
+                            messageType == MessageType.prelaunch && currentMessageSize == prelaunchMessageSize -> {
+                                Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
+                                _data.emit(locatorInputBuffer.copyOfRange(0, prelaunchMessageSize))
+                                numBytes = 0
+                                currentMessageSize = 0
+                                headerReceived = false
+                                messageType = MessageType.none
                             }
-                            locatorInputBuffer.copyOfRange(0, 3)
-                                .contentEquals(telemetryMessageHeader) -> {
-                                messageType = MessageType.telemetry
-                                if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
-                                    BluetoothManagerRepository.updateArmedState(true)
-                                    BluetoothManagerRepository.updateLocatorArmedState(
-                                        LocatorArmedMessageState.Idle
-                                    )
-                                    armedStateChangeWaitCount = 0
-                                }
-                                else {
-                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of disarm request
-                                        armedStateChangeWaitCount++
-                                        if (armedStateChangeWaitCount >= 5) {
-                                            BluetoothManagerRepository.updateLocatorArmedState(
-                                                LocatorArmedMessageState.Idle
-                                            )
-                                        }
-                                    }
-                                }
+
+                            messageType == MessageType.telemetry && currentMessageSize == telemetryMessageSize -> {
+                                Log.d(TAG, "Telemetry message detected, $currentMessageSize")
+                                _data.emit(locatorInputBuffer.copyOfRange(0, telemetryMessageSize))
+                                numBytes = 0
+                                currentMessageSize = 0
+                                headerReceived = false
+                                messageType = MessageType.none
+                            }
+
+                            currentMessageSize > telemetryMessageSize -> {
+                                Log.d(TAG, "Overflow detected, $currentMessageSize")
+                                //locatorInputBuffer.fill(0)
+                                numBytes = 0
+                                currentMessageSize = 0
+                                headerReceived = false
+                                messageType = MessageType.none
                             }
                         }
-                        if (messageType != MessageType.none) {
-                            headerReceived = true
-                            currentMessageSize = numBytes
-                        }
-                        //else
-                        //    locatorInputBuffer.fill(0)
+                        //viewModel.updateData(mmBuffer)
+                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
+                            changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
+                        if (BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.SendRequested)
+                            changeLocatorConfig(BluetoothManagerRepository.locatorConfig.value)
                     } else {
-                        try {
-                            numBytes = locatorInputStream.read(
-                                locatorInputBuffer,
-                                currentMessageSize,
-                                messageBufferSize - currentMessageSize
-                            )
-                            currentMessageSize += numBytes
-                        } catch (e: IOException) {
-                            Log.d(TAG, "Input stream was disconnected", e)
-                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Disconnected)
-                        }
+                        numBytes = 0
+                        if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
+                            connectLocator()
                     }
-                    if (numBytes != 0) {
-                        Log.d(TAG, logByteArrayAsChars(locatorInputBuffer, currentMessageSize))
-                        //Log.d(TAG, locatorInputBuffer.joinToString(", "))
-                    }
-                    when {
-                        messageType == MessageType.prelaunch && currentMessageSize == prelaunchMessageSize -> {
-                            Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
-                            _data.emit(locatorInputBuffer.copyOfRange(0, prelaunchMessageSize))
-                            numBytes = 0
-                            currentMessageSize = 0
-                            headerReceived = false
-                            messageType = MessageType.none
-                        }
-
-                        messageType == MessageType.telemetry && currentMessageSize == telemetryMessageSize -> {
-                            Log.d(TAG, "Telemetry message detected, $currentMessageSize")
-                            _data.emit(locatorInputBuffer.copyOfRange(0, telemetryMessageSize))
-                            numBytes = 0
-                            currentMessageSize = 0
-                            headerReceived = false
-                            messageType = MessageType.none
-                        }
-
-                        currentMessageSize > telemetryMessageSize -> {
-                            Log.d(TAG, "Overflow detected, $currentMessageSize")
-                            //locatorInputBuffer.fill(0)
-                            numBytes = 0
-                            currentMessageSize = 0
-                            headerReceived = false
-                            messageType = MessageType.none
-                        }
-                    }
-                    //viewModel.updateData(mmBuffer)
-                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
-                        changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
-                } else {
-                    numBytes = 0
-                    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
-                        connectLocator()
+                    delay(100)
+                    loopCount++
                 }
-                delay(100)
-                loopCount++
             }
         }
         return START_STICKY
@@ -218,7 +232,7 @@ class BluetoothService() : Service() {
         // Create the NotificationChannel.
         val name = getString(R.string.channel_name)
         val descriptionText = getString(R.string.channel_description)
-        val importance = NotificationManager.IMPORTANCE_NONE
+        val importance = NotificationManager.IMPORTANCE_HIGH
         val mChannel = NotificationChannel(CHANNEL_ID, name, importance)
         mChannel.description = descriptionText
         // Register the channel with the system. You can't change the importance
@@ -229,8 +243,9 @@ class BluetoothService() : Service() {
 
     private fun getNotification(): Notification {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("")
-            .setContentText("")
+            .setContentTitle("Title")
+            .setContentText("Text")
+            .setSmallIcon(R.drawable.rocket)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
@@ -243,7 +258,8 @@ class BluetoothService() : Service() {
         unregisterReceiver()
         if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected)
             BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
-        //serviceScope.cancel()
+        cancelLocatorBluetoothSocket(locatorSocket)
+        serviceScope.cancel()
     }
 
     @SuppressLint("MissingPermission")
@@ -283,6 +299,7 @@ class BluetoothService() : Service() {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
             }
             BluetoothConnectionState.Disconnected -> {
+                cancelLocatorBluetoothSocket(locatorSocket)
                 Log.d(TAG, "Disconnected delay start")
                 Thread.sleep(500)
                 Log.d(TAG, "Disconnected delay end")
@@ -300,9 +317,7 @@ class BluetoothService() : Service() {
     @SuppressLint("MissingPermission")
     fun connectLocator() {
         if (BluetoothManagerRepository.locatorDevice.value != null && BluetoothManagerRepository.locatorDevice.value!!.uuids != null) {
-            val locatorSocket: BluetoothSocket? by lazy(LazyThreadSafetyMode.NONE) {
-                BluetoothManagerRepository.locatorDevice.value!!.createRfcommSocketToServiceRecord(BluetoothManagerRepository.locatorDevice.value!!.uuids[0].uuid)
-            }
+            locatorSocket = BluetoothManagerRepository.locatorDevice.value!!.createRfcommSocketToServiceRecord(BluetoothManagerRepository.locatorDevice.value!!.uuids[0].uuid)
             locatorInputStream = locatorSocket!!.inputStream
             locatorOutputStream = locatorSocket!!.outputStream
             // Cancel device discovery since locator has been selected.
@@ -312,7 +327,7 @@ class BluetoothService() : Service() {
             try {
                 locatorSocket?.connect()
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Connected)
-                BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.Idle)
+                BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Idle)
             } catch (e: IOException) {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Disconnected)
             }
@@ -352,19 +367,45 @@ class BluetoothService() : Service() {
             } )
         } catch (e: IOException) {
             Log.e(TAG, "Error occurred when sending data", e)
-            BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendFailure)
+            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendFailure)
             return
         }
-        BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.Sent)
+        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Sent)
+    }
+
+    fun changeLocatorConfig(locatorConfig: LocatorConfig) {
+        val configMessage = "Config\u0004".toByteArray() +
+            byteArrayOf(locatorConfig.deployMode.deployMode.toByte(),
+            locatorConfig.launchDetectAltitude.toByte(),
+            (locatorConfig.launchDetectAltitude / 256u).toByte(),
+            locatorConfig.droguePrimaryDeployDelay.toByte(),
+            locatorConfig.drogueBackupDeployDelay.toByte(),
+            locatorConfig.mainPrimaryDeployAltitude.toByte(),
+            (locatorConfig.mainPrimaryDeployAltitude / 256u).toByte(),
+            locatorConfig.mainBackupDeployAltitude.toByte(),
+            (locatorConfig.mainBackupDeployAltitude / 256u).toByte(),
+            locatorConfig.deploySignalDuration.toByte()
+        ) + locatorConfig.deviceName.toByteArray()
+
+        try {
+            locatorOutputStream.write(configMessage)
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            BluetoothManagerRepository.updateLocatorConfigMessageState(LocatorConfigMessageState.SendFailure)
+            return
+        }
+        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Sent)
     }
 
     // Call this method from the main activity to shut down the connection.
-    fun cancel(locatorSocket: BluetoothSocket) {
+    fun cancelLocatorBluetoothSocket(locatorSocket: BluetoothSocket?) {
+        if (locatorSocket != null) {
         try {
             locatorSocket.close()
         } catch (e: IOException) {
             Log.e(TAG, "Could not close the connect socket", e)
         }
+            }
     }
 
     inner class LocalBinder : Binder() {

@@ -9,7 +9,19 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Data class that represents the current rocket locator state]
  */
+data class LocatorConfig(
+    val deployMode: DeployMode = DeployMode.kDroguePrimaryDrogueBackup,
+    val launchDetectAltitude: UShort = 0u,
+    val droguePrimaryDeployDelay: UByte = 0u,
+    val drogueBackupDeployDelay: UByte = 0u,
+    val mainPrimaryDeployAltitude: UShort = 0u,
+    val mainBackupDeployAltitude: UShort = 0u,
+    val deploySignalDuration: UByte = 0u,
+    val deviceName: String = "",
+)
+
 data class RocketUiState(
+    val lastMessageTime: Long = 0,
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val hdop: Float = 0f,
@@ -19,14 +31,6 @@ data class RocketUiState(
     val deployChannel2Armed: Boolean = false,
     val altitudeAboveGroundLevel: Float = 0f,
     val accelerometer: Accelerometer = Accelerometer(0, 0, 0),
-    val deployMode: DeployMode = DeployMode.kDroguePrimaryDrogueBackup,
-    val launchDetectAltitude: UShort = 0u,
-    val droguePrimaryDeployDelay: UByte = 0u,
-    val drogueBackupDeployDelay: UByte = 0u,
-    val mainPrimaryDeployAltitude: UShort = 0u,
-    val mainBackupDeployAltitude: UShort = 0u,
-    val deploySignalDuration: Float = 0f,
-    val deviceName: String = "",
     val batteryVoltage: UShort = 0u,
     //val locatorDetected: Boolean = false,
     val flightState: FlightStates = FlightStates.kWaitingLaunch,
@@ -46,7 +50,7 @@ enum class DeployMode (val deployMode: UByte) {
     kDrogueBackupMainBackup(3u);
 
     companion object {
-        fun fromUByte(value: UByte) = entries.firstOrNull { it.deployMode == value } ?: throw IllegalArgumentException("Invalid type: $value")
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.deployMode == value }
     }
 }
 
@@ -63,7 +67,7 @@ enum class FlightStates (val flightStates: UByte) {
     kNoSignal(9u);
 
     companion object {
-        fun fromUByte(value: UByte) = entries.firstOrNull { it.flightStates == value } ?: throw IllegalArgumentException("Invalid type: $value")
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.flightStates == value }
     }
 }
 
@@ -106,7 +110,8 @@ enum class LocatorConfigMessageState (val locatorConfigMessageState: UByte) {
     SendRequested(1u),
     Sent(2u),
     AckUpdated(3u),
-    SendFailure(4u);
+    SendFailure(4u),
+    NotAcknowledged(5u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorConfigMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -123,6 +128,9 @@ object BluetoothManagerRepository {
 
     private val _armedState = MutableStateFlow<Boolean>(false)
     val armedState: StateFlow<Boolean> = _armedState.asStateFlow()
+
+    private val _locatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
+    val locatorConfig: StateFlow<LocatorConfig> = _locatorConfig.asStateFlow()
 
     private val _locatorArmedMessageState = MutableStateFlow<LocatorArmedMessageState>(LocatorArmedMessageState.Idle)
     val locatorArmedMessageState: StateFlow<LocatorArmedMessageState> = _locatorArmedMessageState.asStateFlow()
@@ -142,11 +150,15 @@ object BluetoothManagerRepository {
         _armedState.value = newArmedState
     }
 
-    fun updateLocatorArmedState(newArmedState: LocatorArmedMessageState) {
-        _locatorArmedMessageState.value = newArmedState
+    fun updateLocatorConfig(newLocatorConfig: LocatorConfig) {
+        _locatorConfig.value = newLocatorConfig
     }
 
-    fun updateLocatorConfigState(newConfigState: LocatorConfigMessageState) {
-        _locatorConfigMessageState.value = newConfigState
+    fun updateLocatorArmedMessageState(newArmedMessageState: LocatorArmedMessageState) {
+        _locatorArmedMessageState.value = newArmedMessageState
+    }
+
+    fun updateLocatorConfigMessageState(newConfigMessageState: LocatorConfigMessageState) {
+        _locatorConfigMessageState.value = newConfigMessageState
     }
 }

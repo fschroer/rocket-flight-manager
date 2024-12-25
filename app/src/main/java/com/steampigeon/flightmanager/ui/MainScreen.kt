@@ -87,6 +87,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.Circle
@@ -350,6 +351,7 @@ fun HomeScreen(
                         position = CameraPosition.Builder().target(trackerLatLng).zoom(cameraPositionStateZoom).bearing(azimuth).build()
                     }
                     val rocketData = locatorData.getLocatorData(context, viewModel)
+                    val locatorConfig = viewModel.locatorConfig.collectAsState()
                     val locatorLatLng = LatLng(rocketData.latitude, rocketData.longitude)
                     val state = rememberUpdatedMarkerState(LatLng(rocketData.latitude, rocketData.longitude))
                     var showControls by remember { mutableStateOf(false) }
@@ -364,8 +366,14 @@ fun HomeScreen(
                     ) {
                         Marker(
                             state = state,
-                            title = rocketData.deviceName,
+                            title = locatorConfig.value.deviceName,
                             snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
+                            icon = BitmapDescriptorFactory.defaultMarker(
+                                if (System.currentTimeMillis() - viewModel.uiState.value.lastMessageTime < 2000)
+                                    BitmapDescriptorFactory.HUE_GREEN
+                                else
+                                    BitmapDescriptorFactory.HUE_RED
+                            )
                         )
                         Circle(
                             center = locatorLatLng,
@@ -463,7 +471,7 @@ fun HomeScreen(
                                             onClick = {
                                                 if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                     || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated)
-                                                    BluetoothManagerRepository.updateLocatorArmedState(LocatorArmedMessageState.SendRequested)
+                                                    BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendRequested)
                                             },
                                             modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                             contentPadding = PaddingValues(0.dp)
@@ -728,17 +736,17 @@ fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
             //Spacer(modifier = Modifier.weight(1f))
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.uiState.value.deployMode) {
+                text = when (viewModel.locatorConfig.value.deployMode) {
                     DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Drogue Primary: " + viewModel.uiState.value.droguePrimaryDeployDelay.toString() + "s"
+                        "Drogue Primary: " + viewModel.locatorConfig.value.droguePrimaryDeployDelay.toString() + "s"
                     }
 
                     DeployMode.kMainPrimaryMainBackup -> {
-                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary: " + viewModel.locatorConfig.value.mainPrimaryDeployAltitude.toString() + "m"
                     }
 
                     DeployMode.kDrogueBackupMainBackup -> {
-                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                        "Drogue Backup: " + viewModel.locatorConfig.value.drogueBackupDeployDelay.toString() + "s"
                     }
                 },
                 style = typography.bodyLarge,
@@ -746,17 +754,17 @@ fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.uiState.value.deployMode) {
+                text = when (viewModel.locatorConfig.value.deployMode) {
                     DeployMode.kDroguePrimaryDrogueBackup -> {
-                        "Drogue Backup: " + viewModel.uiState.value.drogueBackupDeployDelay.toString() + "s"
+                        "Drogue Backup: " + viewModel.locatorConfig.value.drogueBackupDeployDelay.toString() + "s"
                     }
 
                     DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
-                        "Main Backup: " + viewModel.uiState.value.mainBackupDeployAltitude.toString() + "m"
+                        "Main Backup: " + viewModel.locatorConfig.value.mainBackupDeployAltitude.toString() + "m"
                     }
 
                     DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Main Primary: " + viewModel.uiState.value.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary: " + viewModel.locatorConfig.value.mainPrimaryDeployAltitude.toString() + "m"
                     }
                 },
                 style = typography.bodyLarge,

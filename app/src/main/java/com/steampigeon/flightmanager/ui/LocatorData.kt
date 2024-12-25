@@ -18,7 +18,6 @@ import com.steampigeon.flightmanager.data.RocketUiState
 class LocatorData {
     @Composable
     fun getLocatorData(context: Context, viewModel: RocketViewModel): RocketUiState {
-        val serviceData by viewModel.uiState.collectAsState()
         var service: BluetoothService? by remember { mutableStateOf(null) }
         val connection = remember {
             object : ServiceConnection {
@@ -43,6 +42,7 @@ class LocatorData {
         if (service != null) {
             viewModel.collectLocatorData(service!!)
         }
+        val serviceData by viewModel.uiState.collectAsState()
         return serviceData
     }
 }
