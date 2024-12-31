@@ -82,6 +82,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -103,11 +104,14 @@ import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.RocketScreen
+import com.steampigeon.flightmanager.StartLocatorDataCollection
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
+import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import java.util.regex.Pattern
@@ -121,16 +125,18 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
-private val locatorData = LocatorData()
+//private val locatorData = LocatorData()
+private const val messageTimeout = 2000
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
 @Composable
 fun HomeScreen(
     navController: NavHostController,
-    viewModel: RocketViewModel,
     modifier: Modifier
 ) {
     val context = LocalContext.current
+    val viewModel: RocketViewModel = viewModel()
+    StartLocatorDataCollection(LocalContext.current, viewModel)
     val permissionsState = rememberMultiplePermissionsState(
         permissions = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -289,27 +295,26 @@ fun HomeScreen(
                 else -> {}
             }
             if (trackerLocation != null && trackerLocation!!.longitude != 0.0) {
-                var trackerLatLng = LatLng(trackerLocation!!.latitude, trackerLocation!!.longitude)
                 val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
                 val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
-                var lastAccelerometer = FloatArray(3)
-                var lastMagnetometer = FloatArray(3)
-                var rotationMatrix = FloatArray(9)
-                var orientation = FloatArray(3)
-                val azimuthHistorySize = 10
-                val compassUpdateCountCheck = 10
-                var azimuthHistory = remember { FloatArray(azimuthHistorySize) { 0f } }
-                var azimuth by remember { mutableFloatStateOf(0f) }
-                var averageAzimuth by remember { mutableFloatStateOf(0f) }
-                var distanceToLocator by remember { mutableIntStateOf(0) }
-                var previousDistanceToLocator by remember { mutableIntStateOf(0) }
                 if (accelerometerState.isAvailable && magneticFieldState.isAvailable) {
+                    var trackerLatLng = LatLng(trackerLocation!!.latitude, trackerLocation!!.longitude)
+                    var lastAccelerometer = FloatArray(3)
                     lastAccelerometer[0] = accelerometerState.xForce
                     lastAccelerometer[1] = accelerometerState.yForce
                     lastAccelerometer[2] = accelerometerState.zForce
+                    var lastMagnetometer = FloatArray(3)
                     lastMagnetometer[0] = magneticFieldState.xStrength
                     lastMagnetometer[1] = magneticFieldState.yStrength
                     lastMagnetometer[2] = magneticFieldState.zStrength
+                    var rotationMatrix = FloatArray(9)
+                    var orientation = FloatArray(3)
+                    val azimuthHistorySize = 10
+                    var azimuthHistory = remember { FloatArray(azimuthHistorySize) { 0f } }
+                    var azimuth by remember { mutableFloatStateOf(0f) }
+                    var averageAzimuth by remember { mutableFloatStateOf(0f) }
+                    var distanceToLocator by remember { mutableIntStateOf(0) }
+                    var previousDistanceToLocator by remember { mutableIntStateOf(0) }
                     SensorManager.getRotationMatrix(
                         rotationMatrix,
                         null,
@@ -350,10 +355,11 @@ fun HomeScreen(
                     val cameraPositionState = rememberCameraPositionState() {
                         position = CameraPosition.Builder().target(trackerLatLng).zoom(cameraPositionStateZoom).bearing(azimuth).build()
                     }
-                    val rocketData = locatorData.getLocatorData(context, viewModel)
-                    val locatorConfig = viewModel.locatorConfig.collectAsState()
-                    val locatorLatLng = LatLng(rocketData.latitude, rocketData.longitude)
-                    val state = rememberUpdatedMarkerState(LatLng(rocketData.latitude, rocketData.longitude))
+                    val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
+                    val rocketState by viewModel.rocketState.collectAsState()
+                    viewModel.checkData()
+                    val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+                    val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
                     var showControls by remember { mutableStateOf(false) }
                     distanceToLocator = computeDistanceBetween(trackerLatLng, locatorLatLng)
                     GoogleMap(
@@ -364,12 +370,13 @@ fun HomeScreen(
                         uiSettings = uiSettings,
                         onMapClick = { showControls = !showControls }
                     ) {
+                        val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
                         Marker(
                             state = state,
-                            title = locatorConfig.value.deviceName,
+                            title = locatorConfig.deviceName,
                             snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
                             icon = BitmapDescriptorFactory.defaultMarker(
-                                if (System.currentTimeMillis() - viewModel.uiState.value.lastMessageTime < 2000)
+                                if (lastMessageAge < messageTimeout)
                                     BitmapDescriptorFactory.HUE_GREEN
                                 else
                                     BitmapDescriptorFactory.HUE_RED
@@ -377,9 +384,9 @@ fun HomeScreen(
                         )
                         Circle(
                             center = locatorLatLng,
-                            fillColor = Color(0x30ff0000),
-                            radius = (4 * rocketData.hdop).toDouble(),
-                            strokeColor = Color(0x80ff0000),
+                            fillColor = Color(if (lastMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
+                            radius = (4 * rocketState.hdop).toDouble(),
+                            strokeColor = Color(if (lastMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
                             strokeWidth = 1f,
                         )
                     }
@@ -413,7 +420,7 @@ fun HomeScreen(
                                         }
                                     }
                                     if (autoZoomMode) {
-                                        if (rocketData.latitude.toInt() != 0 || rocketData.longitude.toInt() != 0) {
+                                        if (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0) {
                                             if (abs((distanceToLocator - previousDistanceToLocator).toFloat() / (previousDistanceToLocator + 1)) > 0.1) {
                                                 cameraPositionStateZoom =
                                                     23 - log2(distanceToLocator.toFloat())
@@ -565,11 +572,11 @@ fun HomeScreen(
                             }
                         }
                     }
-                }
-                if (BluetoothManagerRepository.bluetoothConnectionState.value ==
-                    BluetoothConnectionState.Connected
-                ) {
-                    LocatorStats(viewModel, modifier)
+                    if (BluetoothManagerRepository.bluetoothConnectionState.value ==
+                        BluetoothConnectionState.Connected
+                    ) {
+                        LocatorStats(rocketState, locatorConfig, modifier)
+                    }
                 }
             }
         }
@@ -660,7 +667,7 @@ fun unpairBluetoothDevice() {
 }
 
 @Composable
-fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
+fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifier: Modifier) {
     var userMoved by remember { mutableStateOf(false) }
     var columnWidth by remember { mutableStateOf(0) }
     var columnHeight by remember { mutableStateOf(0) }
@@ -700,75 +707,77 @@ fun LocatorStats(viewModel: RocketViewModel, modifier: Modifier) {
         if (BluetoothManagerRepository.armedState.value) {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.uiState.value.flightState) {
-                    FlightStates.kWaitingLaunch -> "On the pad"
-                    FlightStates.kLaunched -> "Launched"
-                    FlightStates.kBurnout -> "Burnout"
-                    FlightStates.kNoseover -> "Noseover"
-                    FlightStates.kDroguePrimaryDeployed -> "Drogue Primary Deployed"
-                    FlightStates.kDrogueBackupDeployed -> "Drogue Backup Deployed"
-                    FlightStates.kMainPrimaryDeployed -> "Main Primary Deployed"
-                    FlightStates.kMainBackupDeployed -> "Main Backup Deployed"
-                    FlightStates.kLanded -> "Landed"
+                text = when (rocketState.flightState) {
+                    FlightStates.WaitingLaunch -> "On the pad"
+                    FlightStates.Launched -> "Launched"
+                    FlightStates.Burnout -> "Burnout"
+                    FlightStates.Noseover -> "Noseover"
+                    FlightStates.DroguePrimaryDeployed -> "Drogue Primary Deployed"
+                    FlightStates.DrogueBackupDeployed -> "Drogue Backup Deployed"
+                    FlightStates.MainPrimaryDeployed -> "Main Primary Deployed"
+                    FlightStates.MainBackupDeployed -> "Main Backup Deployed"
+                    FlightStates.Landed -> "Landed"
                     else -> ""
                 },
                 style = typography.bodyLarge,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${round(viewModel.uiState.value.agl[0] * 10) / 10}m",
+                text = "AGL: ${round(rocketState.agl[0] * 10) / 10}m",
                 style = typography.bodyLarge,
             )
         }
         else {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${viewModel.uiState.value.altitudeAboveGroundLevel}m",
+                text = "AGL: ${rocketState.altitudeAboveGroundLevel}m",
                 style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+                color = if (rocketState.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = "Acc: ${DecimalFormat("#0.00").format(round(viewModel.gForce * 100) / 100)} ${viewModel.locatorOrientation}",
+                text = "Acc: ${DecimalFormat("#0.00").format(round(rocketState.gForce * 100) / 100)} ${rocketState.orientation}",
                 style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
+                color = if (rocketState.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
             //Spacer(modifier = Modifier.weight(1f))
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.locatorConfig.value.deployMode) {
-                    DeployMode.kDroguePrimaryDrogueBackup, DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Drogue Primary: " + viewModel.locatorConfig.value.droguePrimaryDeployDelay.toString() + "s"
+                text = when (locatorConfig.deployMode) {
+                    DeployMode.DroguePrimaryDrogueBackup, DeployMode.DroguePrimaryMainPrimary -> {
+                        "Drogue Primary: " + locatorConfig.droguePrimaryDeployDelay.toString() + "s"
                     }
 
-                    DeployMode.kMainPrimaryMainBackup -> {
-                        "Main Primary: " + viewModel.locatorConfig.value.mainPrimaryDeployAltitude.toString() + "m"
+                    DeployMode.MainPrimaryMainBackup -> {
+                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
                     }
 
-                    DeployMode.kDrogueBackupMainBackup -> {
-                        "Drogue Backup: " + viewModel.locatorConfig.value.drogueBackupDeployDelay.toString() + "s"
+                    DeployMode.DrogueBackupMainBackup -> {
+                        "Drogue Backup: " + locatorConfig.drogueBackupDeployDelay.toString() + "s"
                     }
+                    else -> ""
                 },
                 style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                color = if (rocketState.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (viewModel.locatorConfig.value.deployMode) {
-                    DeployMode.kDroguePrimaryDrogueBackup -> {
-                        "Drogue Backup: " + viewModel.locatorConfig.value.drogueBackupDeployDelay.toString() + "s"
+                text = when (locatorConfig.deployMode) {
+                    DeployMode.DroguePrimaryDrogueBackup -> {
+                        "Drogue Backup: " + locatorConfig.drogueBackupDeployDelay.toString() + "s"
                     }
 
-                    DeployMode.kMainPrimaryMainBackup, DeployMode.kDrogueBackupMainBackup -> {
-                        "Main Backup: " + viewModel.locatorConfig.value.mainBackupDeployAltitude.toString() + "m"
+                    DeployMode.MainPrimaryMainBackup, DeployMode.DrogueBackupMainBackup -> {
+                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
                     }
 
-                    DeployMode.kDroguePrimaryMainPrimary -> {
-                        "Main Primary: " + viewModel.locatorConfig.value.mainPrimaryDeployAltitude.toString() + "m"
+                    DeployMode.DroguePrimaryMainPrimary -> {
+                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
                     }
+                    else -> ""
                 },
                 style = typography.bodyLarge,
-                color = if (viewModel.uiState.value.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                color = if (rocketState.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
         }
     }

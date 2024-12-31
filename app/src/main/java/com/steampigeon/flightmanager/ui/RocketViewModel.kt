@@ -1,10 +1,12 @@
 package com.steampigeon.flightmanager.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.steampigeon.flightmanager.BluetoothService
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.RocketUiState
+import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,86 +32,143 @@ class RocketViewModel() : ViewModel() {
     /**
      * Display state
      */
-    private val _uiState = MutableStateFlow(RocketUiState())
-    val uiState: StateFlow<RocketUiState> = _uiState.asStateFlow()
+    private val _rocketState = MutableStateFlow(RocketState())
+    val rocketState: StateFlow<RocketState> = _rocketState.asStateFlow()
 
-    private val _locatorConfig = MutableStateFlow(LocatorConfig())
-    val locatorConfig: StateFlow<LocatorConfig> = _locatorConfig.asStateFlow()
+    private val _remoteLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
+    val remoteLocatorConfig: StateFlow<LocatorConfig> = _remoteLocatorConfig.asStateFlow()
 
-    private val _locatorMessage = MutableStateFlow<ByteArray>(ByteArray(256))
-    val data: StateFlow<ByteArray> = _locatorMessage.asStateFlow()
+    private val _stagedLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
+    val stagedLocatorConfig: StateFlow<LocatorConfig> = _stagedLocatorConfig.asStateFlow()
 
-    var gForce = 0f
-    var locatorOrientation = ""
+    fun updateRemoteLocatorConfig(newDeployMode: DeployMode? = null,
+                                  newLaunchDetectAltitude: Int? = null,
+                                  newDroguePrimaryDeployDelay: Int? = null,
+                                  newDrogueBackupDeployDelay: Int? = null,
+                                  newMainPrimaryDeployAltitude: Int? = null,
+                                  newMainBackupDeployAltitude: Int? = null,
+                                  newDeploySignalDuration: Int? = null,
+                                  newDeviceName: String? = null) {
+        _remoteLocatorConfig.update { currentState ->
+            currentState.copy(
+                deployMode = newDeployMode ?: currentState.deployMode,
+                launchDetectAltitude = newLaunchDetectAltitude ?: currentState.launchDetectAltitude,
+                droguePrimaryDeployDelay = newDroguePrimaryDeployDelay ?: currentState.droguePrimaryDeployDelay,
+                drogueBackupDeployDelay = newDrogueBackupDeployDelay ?: currentState.drogueBackupDeployDelay,
+                mainPrimaryDeployAltitude = newMainPrimaryDeployAltitude ?: currentState.mainPrimaryDeployAltitude,
+                mainBackupDeployAltitude = newMainBackupDeployAltitude ?: currentState.mainBackupDeployAltitude,
+                deploySignalDuration = newDeploySignalDuration ?: currentState.deploySignalDuration,
+                deviceName = newDeviceName ?: currentState.deviceName,
+            )
+        }
+    }
+
+    fun updateStagedLocatorConfig(newDeployMode: DeployMode? = null,
+                                  newLaunchDetectAltitude: Int? = null,
+                                  newDroguePrimaryDeployDelay: Int? = null,
+                                  newDrogueBackupDeployDelay: Int? = null,
+                                  newMainPrimaryDeployAltitude: Int? = null,
+                                  newMainBackupDeployAltitude: Int? = null,
+                                  newDeploySignalDuration: Int? = null,
+                                  newDeviceName: String? = null) {
+        _stagedLocatorConfig.update { currentState ->
+            currentState.copy(
+                deployMode = newDeployMode ?: currentState.deployMode,
+                launchDetectAltitude = newLaunchDetectAltitude ?: currentState.launchDetectAltitude,
+                droguePrimaryDeployDelay = newDroguePrimaryDeployDelay ?: currentState.droguePrimaryDeployDelay,
+                drogueBackupDeployDelay = newDrogueBackupDeployDelay ?: currentState.drogueBackupDeployDelay,
+                mainPrimaryDeployAltitude = newMainPrimaryDeployAltitude ?: currentState.mainPrimaryDeployAltitude,
+                mainBackupDeployAltitude = newMainBackupDeployAltitude ?: currentState.mainBackupDeployAltitude,
+                deploySignalDuration = newDeploySignalDuration ?: currentState.deploySignalDuration,
+                deviceName = newDeviceName ?: currentState.deviceName,
+            )
+        }
+    }
+
+    fun checkData() {
+        Log.d("Test", "Latitude: ${_rocketState.value.latitude}")
+    }
 
     fun collectLocatorData(service: BluetoothService) {
         viewModelScope.launch {
-            service.data.onStart {
-            }.collect { data ->
-                _locatorMessage.value = data
-                _uiState.update { currentState -> currentState.copy(lastMessageTime = System.currentTimeMillis()) }
-            }
-        }
-        if (_locatorMessage.value.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader)) {
-            _uiState.update { currentState ->
-                currentState.copy(
-                    latitude = gpsCoord(_locatorMessage.value, 11),
-                    longitude = gpsCoord(_locatorMessage.value, 19),
-                    hdop = byteArrayToFloat(_locatorMessage.value, 29),
-                    altimeterStatus = (_locatorMessage.value[40].and(8).toInt() ushr 3) == 1,
-                    accelerometerStatus = (_locatorMessage.value[40].and(4).toInt() ushr 2) == 1,
-                    deployChannel1Armed = (_locatorMessage.value[40].and(2).toInt() ushr 1) == 1,
-                    deployChannel2Armed = (_locatorMessage.value[40].and(1).toInt()) == 1,
-                    altitudeAboveGroundLevel = byteArrayToUShort(
-                        _locatorMessage.value,
-                        41
-                    ).toFloat() / ALTIMETER_SCALE,
-                    accelerometer = RocketUiState.Accelerometer(
-                        byteArrayToShort(_locatorMessage.value, 43),
-                        byteArrayToShort(_locatorMessage.value, 45),
-                        byteArrayToShort(_locatorMessage.value, 47)
-                    ),
-                    batteryVoltage = byteArrayToUShort(_locatorMessage.value, 71),
-                )
-            }
-            gForce =
-                sqrt((_uiState.value.accelerometer.x * _uiState.value.accelerometer.x + _uiState.value.accelerometer.y * _uiState.value.accelerometer.y + _uiState.value.accelerometer.z * _uiState.value.accelerometer.z).toFloat()) / ACCELEROMETER_SCALE
-            locatorOrientation =
-                when {
-                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce < -0.5 ->
-                        "up"
-
-                    _uiState.value.accelerometer.x.toFloat() / ACCELEROMETER_SCALE / gForce > 0.5 ->
-                        "down"
-
-                    else -> "side"
+            service.data.collect { locatorMessage ->
+                val currentTime = System.currentTimeMillis()
+                _rocketState.update { currentState -> currentState.copy(lastMessageTime = currentTime) }
+                _remoteLocatorConfig.update { currentState -> currentState.copy(lastMessageTime = currentTime) }
+                if (locatorMessage.copyOfRange(0, 3)
+                        .contentEquals(BluetoothService.prelaunchMessageHeader)
+                ) {
+                    val rawGForce = sqrt(
+                        (_rocketState.value.accelerometer.x * _rocketState.value.accelerometer.x
+                                + _rocketState.value.accelerometer.y * _rocketState.value.accelerometer.y
+                                + _rocketState.value.accelerometer.z * _rocketState.value.accelerometer.z).toFloat()
+                    )
+                    _rocketState.update { currentState ->
+                        currentState.copy(
+                            latitude = gpsCoord(locatorMessage, 11),
+                            longitude = gpsCoord(locatorMessage, 19),
+                            hdop = byteArrayToFloat(locatorMessage, 29),
+                            altimeterStatus = (locatorMessage[40].and(8)
+                                .toInt() ushr 3) == 1,
+                            accelerometerStatus = (locatorMessage[40].and(4)
+                                .toInt() ushr 2) == 1,
+                            deployChannel1Armed = (locatorMessage[40].and(2)
+                                .toInt() ushr 1) == 1,
+                            deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
+                            altitudeAboveGroundLevel = byteArrayToUShort(
+                                locatorMessage,
+                                41
+                            ).toFloat() / ALTIMETER_SCALE,
+                            accelerometer = RocketState.Accelerometer(
+                                byteArrayToShort(locatorMessage, 43),
+                                byteArrayToShort(locatorMessage, 45),
+                                byteArrayToShort(locatorMessage, 47)
+                            ),
+                            gForce = rawGForce / ACCELEROMETER_SCALE,
+                            orientation =
+                            when {
+                                _rocketState.value.accelerometer.x.toFloat() / rawGForce / ACCELEROMETER_SCALE < -0.5 -> "up"
+                                _rocketState.value.accelerometer.x.toFloat() / rawGForce / ACCELEROMETER_SCALE > 0.5 -> "down"
+                                else -> "side"
+                            },
+                            batteryVoltage = byteArrayToUShort(locatorMessage, 71),
+                        )
+                    }
+                    _remoteLocatorConfig.update { currentState ->
+                        currentState.copy(
+                            deployMode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
+                            launchDetectAltitude = byteArrayToInt(locatorMessage, 50),
+                            droguePrimaryDeployDelay = locatorMessage[52].toInt(),
+                            drogueBackupDeployDelay = locatorMessage[53].toInt(),
+                            mainPrimaryDeployAltitude = byteArrayToInt(locatorMessage, 54),
+                            mainBackupDeployAltitude = byteArrayToInt(locatorMessage, 56),
+                            deploySignalDuration = locatorMessage[58].toInt(),
+                            deviceName = String(
+                                locatorMessage.copyOfRange(59, 71),
+                                Charsets.UTF_8
+                            ),
+                        )
+                    }
+                } else if (locatorMessage.copyOfRange(0, 3)
+                        .contentEquals(BluetoothService.telemetryMessageHeader)
+                ) {
+                    _rocketState.update { currentState ->
+                        currentState.copy(
+                            latitude = gpsCoord(locatorMessage, 11),
+                            longitude = gpsCoord(locatorMessage, 19),
+                            hdop = byteArrayToFloat(locatorMessage, 29),
+                            flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
+                                ?: currentState.flightState,
+                        )
+                    }
+                    val inFlight = (_rocketState.value.flightState
+                        ?: FlightStates.WaitingLaunch) > FlightStates.Launched && (_rocketState.value.flightState
+                        ?: FlightStates.WaitingLaunch) < FlightStates.Landed
+                    for (i in 0..(if (inFlight) SAMPLES_PER_SECOND else 1) - 1) {
+                        _rocketState.value.agl[i] =
+                            byteArrayToFloat(locatorMessage, 40 + i * 4) / ALTIMETER_SCALE
+                    }
                 }
-            _locatorConfig.update { currentState ->
-                currentState.copy(
-                    deployMode = DeployMode.fromUByte(_locatorMessage.value[49].toUByte())
-                        ?: currentState.deployMode,
-                    launchDetectAltitude = byteArrayToUShort(_locatorMessage.value, 50),
-                    droguePrimaryDeployDelay = _locatorMessage.value[52].toUByte(),
-                    drogueBackupDeployDelay = _locatorMessage.value[53].toUByte(),
-                    mainPrimaryDeployAltitude = byteArrayToUShort(_locatorMessage.value, 54),
-                    mainBackupDeployAltitude = byteArrayToUShort(_locatorMessage.value, 56),
-                    deploySignalDuration = _locatorMessage.value[58].toUByte(),
-                    deviceName = String(_locatorMessage.value.copyOfRange(59, 71), Charsets.UTF_8),
-                )
-            }
-        }
-        else if (_locatorMessage.value.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader)) {
-            _uiState.update { currentState ->
-                currentState.copy(
-                    latitude = gpsCoord(_locatorMessage.value, 11),
-                    longitude = gpsCoord(_locatorMessage.value, 19),
-                    hdop = byteArrayToFloat(_locatorMessage.value, 29),
-                    flightState = FlightStates.fromUByte(_locatorMessage.value[40].toUByte()) ?: currentState.flightState,
-                )
-            }
-            val inFlight = _uiState.value.flightState > FlightStates.kLaunched && _uiState.value.flightState < FlightStates.kLanded
-            for (i in 0..(if(inFlight) SAMPLES_PER_SECOND else 1) - 1) {
-                _uiState.value.agl[i] = byteArrayToFloat(_locatorMessage.value, 40 + i * 4) / ALTIMETER_SCALE
             }
         }
     }
@@ -133,6 +192,10 @@ class RocketViewModel() : ViewModel() {
     fun byteArrayToShort(byteArray: ByteArray, offset: Int): Short {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
+    }
+    fun byteArrayToInt(byteArray: ByteArray, offset: Int): Int {
+        require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
+        return (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 256)
     }
 
 }
