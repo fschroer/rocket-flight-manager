@@ -19,6 +19,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorConfigMessageState
@@ -213,8 +214,6 @@ class BluetoothService() : Service() {
                         //viewModel.updateData(mmBuffer)
                         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
                             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
-                        if (BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.SendRequested)
-                            changeLocatorConfig(BluetoothManagerRepository.locatorConfig.value)
                     } else {
                         numBytes = 0
                         if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
@@ -243,8 +242,8 @@ class BluetoothService() : Service() {
 
     private fun getNotification(): Notification {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Title")
-            .setContentText("Text")
+            .setContentTitle("Rocket Location Service")
+            .setContentText("Capturing rocket location data")
             .setSmallIcon(R.drawable.rocket)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
@@ -375,15 +374,15 @@ class BluetoothService() : Service() {
 
     fun changeLocatorConfig(locatorConfig: LocatorConfig) {
         val configMessage = "Config\u0004".toByteArray() +
-            byteArrayOf(locatorConfig.deployMode.deployMode.toByte(),
+            byteArrayOf((locatorConfig.deployMode ?: DeployMode.DroguePrimaryMainPrimary).deployMode.toByte(),
             locatorConfig.launchDetectAltitude.toByte(),
-            (locatorConfig.launchDetectAltitude / 256u).toByte(),
+            (locatorConfig.launchDetectAltitude / 256).toByte(),
             locatorConfig.droguePrimaryDeployDelay.toByte(),
             locatorConfig.drogueBackupDeployDelay.toByte(),
             locatorConfig.mainPrimaryDeployAltitude.toByte(),
-            (locatorConfig.mainPrimaryDeployAltitude / 256u).toByte(),
+            (locatorConfig.mainPrimaryDeployAltitude / 256).toByte(),
             locatorConfig.mainBackupDeployAltitude.toByte(),
-            (locatorConfig.mainBackupDeployAltitude / 256u).toByte(),
+            (locatorConfig.mainBackupDeployAltitude / 256).toByte(),
             locatorConfig.deploySignalDuration.toByte()
         ) + locatorConfig.deviceName.toByteArray()
 

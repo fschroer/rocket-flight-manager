@@ -1,6 +1,5 @@
 package com.steampigeon.flightmanager.ui
 
-import android.util.Log
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,14 +38,14 @@ import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
-import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorConfigMessageState
 
 private const val TAG = "LocatorSettings"
-private val locatorData = LocatorData()
+//private val locatorData = LocatorData()
 
 /**
  * Composable that displays map download options,
@@ -57,15 +56,14 @@ private val locatorData = LocatorData()
 @Composable
 fun LocatorSettingsScreen(
     viewModel: RocketViewModel,
+    service: BluetoothService?,
     onSelectionChanged: (String) -> Unit = {},
     onCancelButtonClicked: () -> Unit = {},
     onNextButtonClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var configChanged = remember {mutableStateOf(false)}
-    var initialConfigCaptured by remember {mutableStateOf(false)}
-    var updateableLocatorConfig by remember {mutableStateOf(LocatorConfig())}
-    var updatedLocatorConfig by remember {mutableStateOf(LocatorConfig())}
+    var stagedLocatorConfig by remember {mutableStateOf(viewModel.remoteLocatorConfig.value)}
     var configChangeAcknowldedgeWaitCount by remember { mutableIntStateOf(0) }
 
     Column(
@@ -74,29 +72,16 @@ fun LocatorSettingsScreen(
     ) {
         // Capture initial and updated locator configuration data.
         // Used for configuration screen and confirming locator update acknowledgement.
-        val rocketData = locatorData.getLocatorData(LocalContext.current, viewModel)
-        LaunchedEffect(viewModel.locatorConfig.collectAsState()) {
-            Log.d(TAG, "Current time: ${System.currentTimeMillis()}")
-            Log.d(TAG, "Last message: ${rocketData.lastMessageTime}")
-            Log.d(TAG, "Difference: ${System.currentTimeMillis() - rocketData.lastMessageTime}")
-            if (System.currentTimeMillis() - rocketData.lastMessageTime < 2000) {
-                if (!initialConfigCaptured) {
-                    updateableLocatorConfig = viewModel.locatorConfig.value
-                    initialConfigCaptured = true
-                }
-                updatedLocatorConfig = viewModel.locatorConfig.value
-            }
-        }
-        if (initialConfigCaptured) {
-            numericEntryWithButtons(
-                updateableLocatorConfig.launchDetectAltitude.toInt(),
-                "Launch Detect AGL",
-                0,
-                100,
-                configChanged
-            )
-        }
-        var number by remember { mutableStateOf(0) }
+        //locatorData.getLocatorData(LocalContext.current, viewModel)
+        val remoteLocatorConfig = viewModel.remoteLocatorConfig.collectAsState()
+        LaunchDetectAltitude(stagedLocatorConfig, 0, 100, configChanged) { newConfig -> stagedLocatorConfig = newConfig}
+        numericEntryWithButtons(
+            stagedLocatorConfig.launchDetectAltitude.toInt(),
+            "Launch Detect AGL",
+            0,
+            100,
+            configChanged
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -113,7 +98,7 @@ fun LocatorSettingsScreen(
             val locatorConfigMessageState = BluetoothManagerRepository.locatorConfigMessageState.collectAsState().value
             when (locatorConfigMessageState) {
                 LocatorConfigMessageState.Sent -> {
-                    if (updateableLocatorConfig == updatedLocatorConfig)
+                    if (remoteLocatorConfig.value == stagedLocatorConfig)
                         BluetoothManagerRepository.updateLocatorConfigMessageState(
                             LocatorConfigMessageState.AckUpdated
                         )
@@ -139,8 +124,9 @@ fun LocatorSettingsScreen(
                         || BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.NotAcknowledged
                         ) {
                         BluetoothManagerRepository.updateLocatorConfigMessageState(LocatorConfigMessageState.SendRequested)
-                        BluetoothManagerRepository.updateLocatorConfig(updateableLocatorConfig)
+                        service?.changeLocatorConfig(stagedLocatorConfig)
                     }
+                    
                 }
             ) {
                 Text( when (locatorConfigMessageState) {
@@ -196,6 +182,52 @@ fun NumberInputWithUpDown(
 
         Button(onClick = { onValueChange(value + 1) }, enabled = value < maxValue) {
             Text("+")
+        }
+    }
+}
+
+@Composable
+fun LaunchDetectAltitude(locatorConfig: LocatorConfig, minValue: Int = 0, maxValue: Int = Int.MAX_VALUE, configChanged: MutableState<Boolean>, onConfigUpdate: (LocatorConfig) -> Unit) {
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
+        OutlinedTextField(
+            value = if (locatorConfig.launchDetectAltitude == 0) {
+                ""
+                } else {
+                    locatorConfig.launchDetectAltitude.toString()
+            },
+            onValueChange = { newValue ->
+                onConfigUpdate(locatorConfig.copy(launchDetectAltitude = (newValue.filter { it.isDigit() }.toIntOrNull() ?: 0).coerceIn(minValue, maxValue)))
+                configChanged.value = true
+            },
+            label = { Text(stringResource(R.string.launch_detect_altitude)) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            //modifier = Modifier.weight(1f)
+        )
+        //Spacer(modifier = Modifier.width(8.dp))
+        Column(
+            verticalArrangement = Arrangement.SpaceEvenly
+        ) {
+            TextButton(
+                onClick = { locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude + 1)
+                    configChanged.value = true
+                },
+                enabled = locatorConfig.launchDetectAltitude < maxValue
+            ) {
+                Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment")
+            }
+            TextButton(
+                onClick = { locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude - 1)
+                    configChanged.value = true
+                },
+                enabled = locatorConfig.launchDetectAltitude > minValue
+            ) {
+                Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement")
+            }
         }
     }
 }

@@ -2,16 +2,17 @@
     <string name="app_name">Rocket Flight Manager</string>
     <string name="back_button">Back</string>
     <string name="cancel">Cancel</string>
+    <string name="channel_name">LocatorCommService</string>
+    <string name="channel_description">Rocket locator communicator</string>
     <string name="exit">Exit</string>
     <string name="export">Export flight path</string>
     <string name="locator_settings">Locator Settings</string>
     <string name="next">Next</string>
     <string name="receiver_settings">Receiver Settings</string>
     <string name="update">Update</string>
-    <string name="updating">Updating</string>
-    <string name="updated">Updated</string>
     <string name="update_failed">Send Failed</string>
     <string name="update_not_acknowledged">Not Received</string>
-    <string name="channel_name">LocatorCommService</string>
-    <string name="channel_description">Rocket locator communicator</string>
+    <string name="updated">Updated</string>
+    <string name="updating">Updating</string>
+    <string name="launch_detect_altitude">Launch Detect Altitude</string>
 </resources>

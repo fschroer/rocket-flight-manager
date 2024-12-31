@@ -1,5 +1,10 @@
 package com.steampigeon.flightmanager
 
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
@@ -14,10 +19,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -35,6 +46,8 @@ enum class RocketScreen(@StringRes val title: Int) {
     ReceiverSettings(title = R.string.receiver_settings),
     Export(title = R.string.export),
 }
+
+var service: BluetoothService? = null
 
 /**
  * Composable that displays the topBar and displays back button if back navigation is possible.
@@ -70,7 +83,6 @@ fun RocketAppBar(
 fun RocketApp(
     navController: NavHostController = rememberNavController()
 ) {
-    val viewModel = RocketViewModel()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name
@@ -92,18 +104,20 @@ fun RocketApp(
             composable(route = RocketScreen.Start.name) {
                 HomeScreen(
                     navController,
-                    viewModel,
                     modifier = Modifier
                         //.fillMaxSize()
                         //.padding(dimensionResource(R.dimen.padding_medium))
                 )
             }
             composable(route = RocketScreen.LocatorSettings.name) {
+                val mainBackStackEntry = remember { navController.getBackStackEntry(RocketScreen.Start.name) }
+                val mainViewModel: RocketViewModel = viewModel(mainBackStackEntry)
                 LocatorSettingsScreen(
-                    viewModel,
+                    mainViewModel,
+                    service,
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
-                        navigateToStart(viewModel, navController)
+                        navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
                     modifier = Modifier.fillMaxHeight()
@@ -113,7 +127,7 @@ fun RocketApp(
                 ReceiverSettingsScreen(
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
-                        navigateToStart(viewModel, navController)
+                        navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
                     modifier = Modifier.fillMaxHeight()
@@ -123,7 +137,7 @@ fun RocketApp(
                 ExportFlightPathScreen(
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
-                        navigateToStart(viewModel, navController)
+                        navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
                     modifier = Modifier.fillMaxHeight()
@@ -133,8 +147,31 @@ fun RocketApp(
     }
 }
 
+@Composable
+fun StartLocatorDataCollection(context: Context, viewModel: RocketViewModel) {
+    val connection = remember {
+        object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                service = (binder as BluetoothService.LocalBinder).getService()
+                viewModel.collectLocatorData(service!!)
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                service = null
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        val intent = Intent(context, BluetoothService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+
+        onDispose {
+            context.unbindService(connection)
+        }
+    }
+}
+
 private fun navigateToStart(
-    viewModel: RocketViewModel,
     navController: NavHostController
 ) {
     navController.popBackStack(RocketScreen.Start.name, inclusive = false)
