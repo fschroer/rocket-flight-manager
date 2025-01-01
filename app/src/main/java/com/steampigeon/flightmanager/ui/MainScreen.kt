@@ -132,11 +132,12 @@ private const val messageTimeout = 2000
 @Composable
 fun HomeScreen(
     navController: NavHostController,
+    viewModel: RocketViewModel = viewModel(),
     modifier: Modifier
 ) {
     val context = LocalContext.current
-    val viewModel: RocketViewModel = viewModel()
-    StartLocatorDataCollection(LocalContext.current, viewModel)
+    //val viewModel: RocketViewModel = viewModel()
+    //StartLocatorDataCollection(LocalContext.current, viewModel)
     val permissionsState = rememberMultiplePermissionsState(
         permissions = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -357,7 +358,6 @@ fun HomeScreen(
                     }
                     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
                     val rocketState by viewModel.rocketState.collectAsState()
-                    viewModel.checkData()
                     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
                     val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
                     var showControls by remember { mutableStateOf(false) }

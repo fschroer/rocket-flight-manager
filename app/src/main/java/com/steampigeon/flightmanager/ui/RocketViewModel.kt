@@ -85,10 +85,6 @@ class RocketViewModel() : ViewModel() {
         }
     }
 
-    fun checkData() {
-        Log.d("Test", "Latitude: ${_rocketState.value.latitude}")
-    }
-
     fun collectLocatorData(service: BluetoothService) {
         viewModelScope.launch {
             service.data.collect { locatorMessage ->
@@ -107,6 +103,8 @@ class RocketViewModel() : ViewModel() {
                         currentState.copy(
                             latitude = gpsCoord(locatorMessage, 11),
                             longitude = gpsCoord(locatorMessage, 19),
+                            qInd = (locatorMessage[27] - 48).toUByte(),
+                            satellites = locatorMessage[28].toUByte(),
                             hdop = byteArrayToFloat(locatorMessage, 29),
                             altimeterStatus = (locatorMessage[40].and(8)
                                 .toInt() ushr 3) == 1,
@@ -127,8 +125,8 @@ class RocketViewModel() : ViewModel() {
                             gForce = rawGForce / ACCELEROMETER_SCALE,
                             orientation =
                             when {
-                                _rocketState.value.accelerometer.x.toFloat() / rawGForce / ACCELEROMETER_SCALE < -0.5 -> "up"
-                                _rocketState.value.accelerometer.x.toFloat() / rawGForce / ACCELEROMETER_SCALE > 0.5 -> "down"
+                                _rocketState.value.accelerometer.x.toFloat() / rawGForce < -0.5 -> "up"
+                                _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                 else -> "side"
                             },
                             batteryVoltage = byteArrayToUShort(locatorMessage, 71),
@@ -137,11 +135,11 @@ class RocketViewModel() : ViewModel() {
                     _remoteLocatorConfig.update { currentState ->
                         currentState.copy(
                             deployMode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
-                            launchDetectAltitude = byteArrayToInt(locatorMessage, 50),
+                            launchDetectAltitude = byteArrayToUShort(locatorMessage, 50).toInt(),
                             droguePrimaryDeployDelay = locatorMessage[52].toInt(),
                             drogueBackupDeployDelay = locatorMessage[53].toInt(),
-                            mainPrimaryDeployAltitude = byteArrayToInt(locatorMessage, 54),
-                            mainBackupDeployAltitude = byteArrayToInt(locatorMessage, 56),
+                            mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 54).toInt(),
+                            mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 56).toInt(),
                             deploySignalDuration = locatorMessage[58].toInt(),
                             deviceName = String(
                                 locatorMessage.copyOfRange(59, 71),
@@ -156,6 +154,8 @@ class RocketViewModel() : ViewModel() {
                         currentState.copy(
                             latitude = gpsCoord(locatorMessage, 11),
                             longitude = gpsCoord(locatorMessage, 19),
+                            qInd = locatorMessage[27].toUByte(),
+                            satellites = locatorMessage[28].toUByte(),
                             hdop = byteArrayToFloat(locatorMessage, 29),
                             flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
                                 ?: currentState.flightState,
@@ -193,9 +193,4 @@ class RocketViewModel() : ViewModel() {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
     }
-    fun byteArrayToInt(byteArray: ByteArray, offset: Int): Int {
-        require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
-        return (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 256)
-    }
-
 }

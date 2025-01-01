@@ -1,11 +1,19 @@
 package com.steampigeon.flightmanager.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -30,19 +38,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorConfigMessageState
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 private const val TAG = "LocatorSettings"
 //private val locatorData = LocatorData()
@@ -55,7 +71,7 @@ private const val TAG = "LocatorSettings"
  */
 @Composable
 fun LocatorSettingsScreen(
-    viewModel: RocketViewModel,
+    viewModel: RocketViewModel = viewModel(),
     service: BluetoothService?,
     onSelectionChanged: (String) -> Unit = {},
     onCancelButtonClicked: () -> Unit = {},
@@ -74,14 +90,14 @@ fun LocatorSettingsScreen(
         // Used for configuration screen and confirming locator update acknowledgement.
         //locatorData.getLocatorData(LocalContext.current, viewModel)
         val remoteLocatorConfig = viewModel.remoteLocatorConfig.collectAsState()
-        LaunchDetectAltitude(stagedLocatorConfig, 0, 100, configChanged) { newConfig -> stagedLocatorConfig = newConfig}
-        numericEntryWithButtons(
-            stagedLocatorConfig.launchDetectAltitude.toInt(),
-            "Launch Detect AGL",
-            0,
-            100,
-            configChanged
+        LongPressCounter()
+        var counter by remember { mutableIntStateOf(0) }
+        RepeatingButton(onClick = { counter++ })
+        Text(
+            text = "Count: $counter"
         )
+        LaunchDetectAltitude(stagedLocatorConfig, 0, 100, configChanged) { newConfig -> stagedLocatorConfig = newConfig}
+        //numericEntryWithButtons(stagedLocatorConfig.launchDetectAltitude.toInt(), "Launch Detect AGL", 0, 100, configChanged)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -189,6 +205,35 @@ fun NumberInputWithUpDown(
 @Composable
 fun LaunchDetectAltitude(locatorConfig: LocatorConfig, minValue: Int = 0, maxValue: Int = Int.MAX_VALUE, configChanged: MutableState<Boolean>, onConfigUpdate: (LocatorConfig) -> Unit) {
 
+    val context = LocalContext.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val viewConfiguration = LocalViewConfiguration.current
+
+    LaunchedEffect(interactionSource) {
+        var isLongClick = false
+
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    if (isLongClick)
+                        onConfigUpdate(locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude + 1))
+                    isLongClick = false
+                    delay(viewConfiguration.longPressTimeoutMillis)
+                    isLongClick = true
+                    //Toast.makeText(context, "Long click", Toast.LENGTH_SHORT).show()
+                }
+
+                is PressInteraction.Release -> {
+                    if (isLongClick.not()) {
+                        Toast.makeText(context, "click", Toast.LENGTH_SHORT).show()
+                    }
+
+                }
+
+            }
+        }
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -213,17 +258,19 @@ fun LaunchDetectAltitude(locatorConfig: LocatorConfig, minValue: Int = 0, maxVal
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
             TextButton(
-                onClick = { locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude + 1)
+                onClick = { onConfigUpdate(locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude + 1))
                     configChanged.value = true
                 },
+                interactionSource = interactionSource,
                 enabled = locatorConfig.launchDetectAltitude < maxValue
             ) {
                 Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment")
             }
             TextButton(
-                onClick = { locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude - 1)
+                onClick = { onConfigUpdate(locatorConfig.copy(launchDetectAltitude = locatorConfig.launchDetectAltitude - 1))
                     configChanged.value = true
                 },
+                interactionSource = interactionSource,
                 enabled = locatorConfig.launchDetectAltitude > minValue
             ) {
                 Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement")
@@ -280,4 +327,85 @@ fun numericEntryWithButtons(startValue: Int, labelText: String, minValue: Int = 
         }
     }
     return value.filter { it.isDigit() }.toIntOrNull() ?: 0
+}
+
+@Composable
+fun RepeatingButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    maxDelayMillis: Long = 500,
+    minDelayMillis: Long = 100,
+    delayDecayFactor: Float = .25f,
+) {
+
+    val currentClickListener by rememberUpdatedState(onClick)
+    val scope = rememberCoroutineScope()
+
+    Button(
+        modifier = modifier.pointerInput(interactionSource, enabled) {
+            scope.launch {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+
+                    val heldButtonJob = launch {
+                        var currentDelayMillis = maxDelayMillis
+                        while (enabled && down.pressed) {
+                            currentClickListener()
+                            delay(currentDelayMillis)
+                            val nextDelayMillis =
+                                currentDelayMillis - (currentDelayMillis * delayDecayFactor)
+                            currentDelayMillis =
+                                nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+                        }
+                    }
+
+                    waitForUpOrCancellation()
+                    heldButtonJob.cancel()
+                }
+            }
+        },
+        onClick = {},
+        enabled = enabled,
+        interactionSource = interactionSource
+    ) {
+        Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment")
+    }
+}
+
+@Composable
+fun LongPressCounter(
+    maxDelayMillis: Long = 500,
+    minDelayMillis: Long = 100,
+    delayDecayFactor: Float = .25f,
+    ) {
+    var counter by remember { mutableStateOf(0) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        Button(
+            onClick = { },
+            interactionSource = interactionSource
+        ) {
+            Text("Hold to Increment")
+        }
+
+        Text(text = "Counter: $counter")
+
+        // Increment counter while button is pressed
+        LaunchedEffect(isPressed) {
+            var currentDelayMillis = maxDelayMillis
+            while (isPressed) {
+                counter++
+                delay(currentDelayMillis)
+                val nextDelayMillis =
+                    currentDelayMillis - (currentDelayMillis * delayDecayFactor)
+                currentDelayMillis =
+                    nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+            }
+        }
+    }
 }
