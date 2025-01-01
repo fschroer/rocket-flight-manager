@@ -83,6 +83,8 @@ fun RocketAppBar(
 fun RocketApp(
     navController: NavHostController = rememberNavController()
 ) {
+    val viewModel: RocketViewModel = viewModel()
+    StartLocatorDataCollection(LocalContext.current, viewModel)
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name
@@ -104,16 +106,17 @@ fun RocketApp(
             composable(route = RocketScreen.Start.name) {
                 HomeScreen(
                     navController,
+                    viewModel,
                     modifier = Modifier
                         //.fillMaxSize()
                         //.padding(dimensionResource(R.dimen.padding_medium))
                 )
             }
             composable(route = RocketScreen.LocatorSettings.name) {
-                val mainBackStackEntry = remember { navController.getBackStackEntry(RocketScreen.Start.name) }
-                val mainViewModel: RocketViewModel = viewModel(mainBackStackEntry)
+                //val mainBackStackEntry = remember { navController.getBackStackEntry(RocketScreen.Start.name) }
+                //val mainViewModel: RocketViewModel = viewModel(mainBackStackEntry)
                 LocatorSettingsScreen(
-                    mainViewModel,
+                    viewModel,
                     service,
                     onNextButtonClicked = { /* To do */ },
                     onCancelButtonClicked = {
