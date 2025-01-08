@@ -21,6 +21,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -82,6 +87,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -115,6 +123,8 @@ import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import java.util.regex.Pattern
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -144,7 +154,8 @@ fun HomeScreen(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.FOREGROUND_SERVICE,
-            Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE
+            Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
+            Manifest.permission.CAMERA
         )
     )
     val allPermissionsGranted = permissionsState.allPermissionsGranted
@@ -184,6 +195,9 @@ fun HomeScreen(
         mutableStateOf(MapProperties(isMyLocationEnabled = true,
             mapType = MapType.SATELLITE))
     }
+    val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
+    val rocketState by viewModel.rocketState.collectAsState()
+    val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = true,
@@ -198,24 +212,26 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier.padding(0.dp)
                 ) {
-                    NavigationDrawerItem(
-                        //colors = NavigationDrawerItemDefaults.colors(
-                        //    selectedContainerColor = Color.White,
-                        //    unselectedContainerColor = Color.White
-                        //),
-                        label = {
-                            Text(
-                                text = "Locator settings",
-                                style = typography.titleLarge,
-                                //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
-                            )
-                        },
-                        selected = false,
-                        onClick = {
-                            scope.launch { drawerState.apply { close() } }
-                            navController.navigate(RocketScreen.LocatorSettings.name)
-                        }
-                    )
+                    if (lastMessageAge < messageTimeout) {
+                        NavigationDrawerItem(
+                            //colors = NavigationDrawerItemDefaults.colors(
+                            //    selectedContainerColor = Color.White,
+                            //    unselectedContainerColor = Color.White
+                            //),
+                            label = {
+                                Text(
+                                    text = "Locator settings",
+                                    style = typography.titleLarge,
+                                    //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
+                                )
+                            },
+                            selected = false,
+                            onClick = {
+                                    scope.launch { drawerState.apply { close() } }
+                                    navController.navigate(RocketScreen.LocatorSettings.name)
+                            }
+                        )
+                    }
                     NavigationDrawerItem(
                         label = {
                             Text(
@@ -274,7 +290,7 @@ fun HomeScreen(
                     Log.d(tag, "Calling enableBluetooth")
                     enableBluetooth(context)
                 }
-                BluetoothConnectionState.Enabled -> {
+                BluetoothConnectionState.Enabled, BluetoothConnectionState.NoDevicesAvailable -> {
                     if (BluetoothManagerRepository.locatorDevice.value == null) {
                         Log.d(tag, "Calling selectBluetoothDevice")
                         selectBluetoothDevice(context)
@@ -356,8 +372,6 @@ fun HomeScreen(
                     val cameraPositionState = rememberCameraPositionState() {
                         position = CameraPosition.Builder().target(trackerLatLng).zoom(cameraPositionStateZoom).bearing(azimuth).build()
                     }
-                    val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
-                    val rocketState by viewModel.rocketState.collectAsState()
                     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
                     val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
                     var showControls by remember { mutableStateOf(false) }
@@ -370,7 +384,6 @@ fun HomeScreen(
                         uiSettings = uiSettings,
                         onMapClick = { showControls = !showControls }
                     ) {
-                        val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
                         Marker(
                             state = state,
                             title = locatorConfig.deviceName,
@@ -700,6 +713,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
                 columnWidth = size.width
                 columnHeight = size.height
             }
+            .defaultMinSize(minWidth = 160.dp)
         ,
         //verticalArrangement = Arrangement.Top,
         //horizontalAlignment = Alignment.Start
@@ -745,7 +759,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deployMode) {
                     DeployMode.DroguePrimaryDrogueBackup, DeployMode.DroguePrimaryMainPrimary -> {
-                        "Drogue Primary: " + locatorConfig.droguePrimaryDeployDelay.toString() + "s"
+                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
                     }
 
                     DeployMode.MainPrimaryMainBackup -> {
@@ -753,7 +767,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
                     }
 
                     DeployMode.DrogueBackupMainBackup -> {
-                        "Drogue Backup: " + locatorConfig.drogueBackupDeployDelay.toString() + "s"
+                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
                     }
                     else -> ""
                 },
@@ -764,7 +778,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deployMode) {
                     DeployMode.DroguePrimaryDrogueBackup -> {
-                        "Drogue Backup: " + locatorConfig.drogueBackupDeployDelay.toString() + "s"
+                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
                     }
 
                     DeployMode.MainPrimaryMainBackup, DeployMode.DrogueBackupMainBackup -> {
@@ -825,6 +839,34 @@ fun computeDistanceBetween(latLng1: LatLng, latLng2: LatLng): Int {
 fun rememberUpdatedMarkerState(newPosition: LatLng) =
     remember { MarkerState(position = newPosition) }
         .apply { position = newPosition }
+
+@Composable
+fun CameraPreviewScreen() {
+    val lensFacing = CameraSelector.LENS_FACING_BACK
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val preview = Preview.Builder().build()
+    val previewView = remember {
+        PreviewView(context)
+    }
+    val cameraxSelector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+    LaunchedEffect(lensFacing) {
+        val cameraProvider = context.getCameraProvider()
+        cameraProvider.unbindAll()
+        cameraProvider.bindToLifecycle(lifecycleOwner, cameraxSelector, preview)
+        preview.setSurfaceProvider(previewView.surfaceProvider)
+    }
+    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+}
+
+private suspend fun Context.getCameraProvider(): ProcessCameraProvider =
+    suspendCoroutine { continuation ->
+        ProcessCameraProvider.getInstance(this).also { cameraProvider ->
+            cameraProvider.addListener({
+                continuation.resume(cameraProvider.get())
+            }, ContextCompat.getMainExecutor(this))
+        }
+    }
 
 @Composable
 fun ExitAppButton(activity: Activity) {

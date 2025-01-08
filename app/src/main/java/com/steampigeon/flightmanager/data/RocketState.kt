@@ -38,7 +38,6 @@ data class RocketState(
 }
 
 data class LocatorConfig(
-    val lastMessageTime: Long = 0,
     val deployMode: DeployMode? = null,
     val launchDetectAltitude: Int = 0,
     val droguePrimaryDeployDelay: Int = 0,
@@ -141,6 +140,9 @@ object BluetoothManagerRepository {
     private val _locatorConfigMessageState = MutableStateFlow<LocatorConfigMessageState>(LocatorConfigMessageState.Idle)
     val locatorConfigMessageState: StateFlow<LocatorConfigMessageState> = _locatorConfigMessageState.asStateFlow()
 
+    private val _configChangeAcknowldedgeWaitCount = MutableStateFlow<Int>(0)
+    val configChangeAcknowldedgeWaitCount: StateFlow<Int> = _configChangeAcknowldedgeWaitCount.asStateFlow()
+
     fun updateBluetoothConnectionState(newBluetoothConnectionState: BluetoothConnectionState) {
         _bluetoothConnectionState.value = newBluetoothConnectionState
     }
@@ -159,5 +161,9 @@ object BluetoothManagerRepository {
 
     fun updateLocatorConfigMessageState(newConfigMessageState: LocatorConfigMessageState) {
         _locatorConfigMessageState.value = newConfigMessageState
+    }
+
+    fun updateConfigChangeAcknowldedgeWaitCount(newConfigChangeAcknowldedgeWaitCount: Int) {
+        _configChangeAcknowldedgeWaitCount.value = newConfigChangeAcknowldedgeWaitCount
     }
 }

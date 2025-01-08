@@ -6,8 +6,11 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import androidx.annotation.StringRes
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,9 +27,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -61,7 +66,18 @@ fun RocketAppBar(
     modifier: Modifier = Modifier
 ) {
     TopAppBar(
-        title = { Text(stringResource(id = currentScreen.title)) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    modifier = Modifier
+                        .size(dimensionResource(id = R.dimen.image_size))
+                        .padding(dimensionResource(id = R.dimen.padding_small)),
+                    painter = painterResource(R.drawable.rocket),
+                    contentDescription = null
+                )
+                Text(stringResource(id = currentScreen.title))
+            }
+        },
         colors = TopAppBarDefaults.mediumTopAppBarColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
@@ -81,7 +97,8 @@ fun RocketAppBar(
 
 @Composable
 fun RocketApp(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    modifier: Modifier = Modifier
 ) {
     val viewModel: RocketViewModel = viewModel()
     StartLocatorDataCollection(LocalContext.current, viewModel)
@@ -94,7 +111,8 @@ fun RocketApp(
             RocketAppBar(
                 currentScreen = currentScreen,
                 canNavigateBack = navController.previousBackStackEntry != null,
-                navigateUp = { navController.navigateUp() }
+                navigateUp = { navController.navigateUp() },
+                modifier = modifier
             )
         }
     ) { innerPadding ->
@@ -107,7 +125,7 @@ fun RocketApp(
                 HomeScreen(
                     navController,
                     viewModel,
-                    modifier = Modifier
+                    modifier = modifier
                         //.fillMaxSize()
                         //.padding(dimensionResource(R.dimen.padding_medium))
                 )
@@ -123,7 +141,7 @@ fun RocketApp(
                         navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
-                    modifier = Modifier.fillMaxHeight()
+                    modifier = modifier
                 )
             }
             composable(route = RocketScreen.ReceiverSettings.name) {
@@ -133,7 +151,7 @@ fun RocketApp(
                         navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
-                    modifier = Modifier.fillMaxHeight()
+                    modifier = modifier
                 )
             }
             composable(route = RocketScreen.Export.name) {
@@ -143,7 +161,7 @@ fun RocketApp(
                         navigateToStart(navController)
                     },
                     //onSelectionChanged = { viewModel.setDate(it) },
-                    modifier = Modifier.fillMaxHeight()
+                    modifier = modifier
                 )
             }
         }
