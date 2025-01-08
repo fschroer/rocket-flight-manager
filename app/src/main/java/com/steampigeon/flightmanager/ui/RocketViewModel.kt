@@ -90,7 +90,6 @@ class RocketViewModel() : ViewModel() {
             service.data.collect { locatorMessage ->
                 val currentTime = System.currentTimeMillis()
                 _rocketState.update { currentState -> currentState.copy(lastMessageTime = currentTime) }
-                _remoteLocatorConfig.update { currentState -> currentState.copy(lastMessageTime = currentTime) }
                 if (locatorMessage.copyOfRange(0, 3)
                         .contentEquals(BluetoothService.prelaunchMessageHeader)
                 ) {
@@ -144,7 +143,7 @@ class RocketViewModel() : ViewModel() {
                             deviceName = String(
                                 locatorMessage.copyOfRange(59, 71),
                                 Charsets.UTF_8
-                            ),
+                            ).trimEnd('\u0000'),
                         )
                     }
                 } else if (locatorMessage.copyOfRange(0, 3)
