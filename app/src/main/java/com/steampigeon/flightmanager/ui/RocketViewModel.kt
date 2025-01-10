@@ -1,16 +1,17 @@
 package com.steampigeon.flightmanager.ui
 
-import android.util.Log
+import android.hardware.SensorManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.maps.model.LatLng
+import com.mutualmobile.composesensors.AccelerometerSensorState
+import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
@@ -18,6 +19,9 @@ import kotlin.experimental.and
 import kotlin.math.sqrt
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * [RocketViewModel] holds rocket locator status
@@ -25,10 +29,20 @@ import com.steampigeon.flightmanager.data.LocatorConfig
 
 class RocketViewModel() : ViewModel() {
     companion object {
+        const val SAMPLES_PER_SECOND = 20
         private const val ALTIMETER_SCALE = 10
         private const val ACCELEROMETER_SCALE = 2048
-        const val SAMPLES_PER_SECOND = 20
     }
+
+    private val _azimuth = MutableStateFlow<Float>(0f)
+    val azimuth: StateFlow<Float> = _azimuth.asStateFlow()
+    private val _lastAzimuth = MutableStateFlow<Float>(0f)
+    val averageAzimuth: StateFlow<Float> = _lastAzimuth.asStateFlow()
+    private val _distanceToLocator = MutableStateFlow<Int>(0)
+    val distanceToLocator: StateFlow<Int> = _distanceToLocator.asStateFlow()
+    private val _azimuthToLocator = MutableStateFlow<Float>(0f)
+    val azimuthToLocator: StateFlow<Float> = _azimuthToLocator.asStateFlow()
+
     /**
      * Display state
      */
@@ -37,53 +51,6 @@ class RocketViewModel() : ViewModel() {
 
     private val _remoteLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
     val remoteLocatorConfig: StateFlow<LocatorConfig> = _remoteLocatorConfig.asStateFlow()
-
-    private val _stagedLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
-    val stagedLocatorConfig: StateFlow<LocatorConfig> = _stagedLocatorConfig.asStateFlow()
-
-    fun updateRemoteLocatorConfig(newDeployMode: DeployMode? = null,
-                                  newLaunchDetectAltitude: Int? = null,
-                                  newDroguePrimaryDeployDelay: Int? = null,
-                                  newDrogueBackupDeployDelay: Int? = null,
-                                  newMainPrimaryDeployAltitude: Int? = null,
-                                  newMainBackupDeployAltitude: Int? = null,
-                                  newDeploySignalDuration: Int? = null,
-                                  newDeviceName: String? = null) {
-        _remoteLocatorConfig.update { currentState ->
-            currentState.copy(
-                deployMode = newDeployMode ?: currentState.deployMode,
-                launchDetectAltitude = newLaunchDetectAltitude ?: currentState.launchDetectAltitude,
-                droguePrimaryDeployDelay = newDroguePrimaryDeployDelay ?: currentState.droguePrimaryDeployDelay,
-                drogueBackupDeployDelay = newDrogueBackupDeployDelay ?: currentState.drogueBackupDeployDelay,
-                mainPrimaryDeployAltitude = newMainPrimaryDeployAltitude ?: currentState.mainPrimaryDeployAltitude,
-                mainBackupDeployAltitude = newMainBackupDeployAltitude ?: currentState.mainBackupDeployAltitude,
-                deploySignalDuration = newDeploySignalDuration ?: currentState.deploySignalDuration,
-                deviceName = newDeviceName ?: currentState.deviceName,
-            )
-        }
-    }
-
-    fun updateStagedLocatorConfig(newDeployMode: DeployMode? = null,
-                                  newLaunchDetectAltitude: Int? = null,
-                                  newDroguePrimaryDeployDelay: Int? = null,
-                                  newDrogueBackupDeployDelay: Int? = null,
-                                  newMainPrimaryDeployAltitude: Int? = null,
-                                  newMainBackupDeployAltitude: Int? = null,
-                                  newDeploySignalDuration: Int? = null,
-                                  newDeviceName: String? = null) {
-        _stagedLocatorConfig.update { currentState ->
-            currentState.copy(
-                deployMode = newDeployMode ?: currentState.deployMode,
-                launchDetectAltitude = newLaunchDetectAltitude ?: currentState.launchDetectAltitude,
-                droguePrimaryDeployDelay = newDroguePrimaryDeployDelay ?: currentState.droguePrimaryDeployDelay,
-                drogueBackupDeployDelay = newDrogueBackupDeployDelay ?: currentState.drogueBackupDeployDelay,
-                mainPrimaryDeployAltitude = newMainPrimaryDeployAltitude ?: currentState.mainPrimaryDeployAltitude,
-                mainBackupDeployAltitude = newMainBackupDeployAltitude ?: currentState.mainBackupDeployAltitude,
-                deploySignalDuration = newDeploySignalDuration ?: currentState.deploySignalDuration,
-                deviceName = newDeviceName ?: currentState.deviceName,
-            )
-        }
-    }
 
     fun collectLocatorData(service: BluetoothService) {
         viewModelScope.launch {
@@ -192,4 +159,42 @@ class RocketViewModel() : ViewModel() {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
     }
+
+    fun handheldDeviceAzimuth(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState) {
+        val lastAccelerometer = FloatArray(3)
+        lastAccelerometer[0] = accelerometerState.xForce
+        lastAccelerometer[1] = accelerometerState.yForce
+        lastAccelerometer[2] = accelerometerState.zForce
+        val lastMagnetometer = FloatArray(3)
+        lastMagnetometer[0] = magneticFieldState.xStrength
+        lastMagnetometer[1] = magneticFieldState.yStrength
+        lastMagnetometer[2] = magneticFieldState.zStrength
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        SensorManager.getRotationMatrix(rotationMatrix, null, lastAccelerometer, lastMagnetometer)
+        val rotationMatrixB = FloatArray(9)
+        SensorManager.remapCoordinateSystem(rotationMatrix, SensorManager.AXIS_X, SensorManager.AXIS_Z, rotationMatrixB)
+        SensorManager.getOrientation(rotationMatrixB, orientation)
+        _lastAzimuth.value = _azimuth.value
+        _azimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
+    }
+
+    fun locatorVector(latLng1: LatLng, latLng2: LatLng) {
+        val earthRadius = 6371000 // in meters
+
+        val lat1Rad = Math.toRadians(latLng1.latitude)
+        val lat2Rad = Math.toRadians(latLng2.latitude)
+        val dLat = lat2Rad - lat1Rad
+        val dLon = Math.toRadians(latLng2.longitude - latLng1.longitude)
+
+        val a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2) * sin(dLon / 2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        _distanceToLocator.value = (earthRadius * c).toInt()
+
+        val y = sin(dLon) * cos(lat2Rad)
+        val x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLon)
+        val bearing = Math.toDegrees(atan2(y, x))
+        _azimuthToLocator.value = ((bearing + 360) % 360).toFloat()
+    }
+
 }

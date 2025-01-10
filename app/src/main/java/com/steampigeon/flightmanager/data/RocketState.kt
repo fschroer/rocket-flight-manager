@@ -6,7 +6,6 @@ import com.steampigeon.flightmanager.ui.RocketViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 
 /**
  * Data class that represents the current rocket locator state]
@@ -77,19 +76,20 @@ enum class FlightStates (val flightStates: UByte) {
 }
 
 enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
-    NotStarted(0u),
-    Enabling(1u),
-    NotEnabled(2u),
-    NotSupported(3u),
-    Enabled(4u),
-    AssociateStart(5u),
-    AssociateWait(6u),
-    NoDevicesAvailable(7u),
-    Pairing(8u),
-    PairingFailed(9u),
-    Paired(10u),
-    Connected(11u),
-    Disconnected(12u);
+    Idle(0u),
+    Starting(1u),
+    Enabling(2u),
+    NotEnabled(3u),
+    NotSupported(4u),
+    Enabled(5u),
+    AssociateStart(6u),
+    AssociateWait(7u),
+    NoDevicesAvailable(8u),
+    Pairing(9u),
+    PairingFailed(10u),
+    Paired(11u),
+    Connected(12u),
+    Disconnected(13u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.bluetoothConnectionState == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -125,7 +125,7 @@ enum class LocatorConfigMessageState (val locatorConfigMessageState: UByte) {
 }
 
 object BluetoothManagerRepository {
-    private val _bluetoothConnectionState = MutableStateFlow<BluetoothConnectionState>(BluetoothConnectionState.NotStarted)
+    private val _bluetoothConnectionState = MutableStateFlow<BluetoothConnectionState>(BluetoothConnectionState.Idle)
     val bluetoothConnectionState: StateFlow<BluetoothConnectionState> = _bluetoothConnectionState.asStateFlow()
 
     private val _locatorDevice = MutableStateFlow<BluetoothDevice?>(null)
