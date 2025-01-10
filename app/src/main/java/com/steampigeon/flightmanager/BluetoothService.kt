@@ -16,7 +16,6 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.compose.runtime.collectAsState
 import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
@@ -250,6 +249,9 @@ class BluetoothService() : Service() {
     fun maintainLocatorDevicePairing() {
         //if (bluetoothConnectionManager.receiverRegistered) {
         when (BluetoothManagerRepository.bluetoothConnectionState.value) {
+            BluetoothConnectionState.Idle -> {
+                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Starting)
+            }
             BluetoothConnectionState.Pairing -> {
                 Log.d(TAG, "Changing state from Pairing to Enabled")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
@@ -269,8 +271,8 @@ class BluetoothService() : Service() {
                     }
                 }
                 else {
-                    Log.d(TAG, "Changing state to NotStarted")
-                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotStarted)
+                    Log.d(TAG, "Changing state to Idle")
+                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Idle)
                 }
             }
             BluetoothConnectionState.PairingFailed -> {

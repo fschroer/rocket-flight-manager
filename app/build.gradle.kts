@@ -1,4 +1,4 @@
-import org.gradle.kotlin.dsl.kapt
+import org.gradle.kotlin.dsl.libs
 
 plugins {
     alias(libs.plugins.android.application)
@@ -6,18 +6,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("org.jetbrains.kotlin.plugin.noarg") version "1.8.22"
-    id("kotlin-kapt")
-    id("com.google.dagger.hilt.android")
 }
 
 android {
     namespace = "com.steampigeon.flightmanager"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.steampigeon.flightmanager"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -65,7 +63,7 @@ secrets {
 
 dependencies {
 
-    implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
+    implementation(libs.androidx.bluetooth)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -78,16 +76,15 @@ dependencies {
     implementation(libs.androidx.navigation.runtime.ktx)
     implementation(libs.androidx.navigation.compose)
     // Google Maps Compose library
-    val mapsComposeVersion = "4.4.1"
-    implementation("com.google.maps.android:maps-compose:$mapsComposeVersion")
+    implementation(libs.maps.compose)
     // Google Maps Compose utility library
-    implementation("com.google.maps.android:maps-compose-utils:$mapsComposeVersion")
+    implementation(libs.maps.compose.utils)
     // Google Maps Compose widgets library
-    implementation("com.google.maps.android:maps-compose-widgets:$mapsComposeVersion")
-    implementation("com.google.android.gms:play-services-maps:19.0.0")
+    implementation(libs.maps.compose.widgets)
+    implementation(libs.play.services.maps)
     //implementation ("com.google.android.libraries.places:places:4.1.0")
     //implementation ("com.google.maps.android:places-ktx:3.2.0")
-    implementation ("com.google.android.gms:play-services-location:21.3.0")
+    implementation (libs.play.services.location)
     implementation(libs.androidx.appcompat)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -96,28 +93,20 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    implementation("com.mutualmobile:composesensors:1.2.0")
-    implementation("com.google.accompanist:accompanist-permissions:0.21.1-beta")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("androidx.compose.ui:ui:1.3.0")
-    implementation("androidx.compose.material:material:1.3.0")
-    implementation("androidx.core:core-ktx:1.9.0")
-    implementation("com.google.android.gms:play-services-nearby:18.0.2")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.compose.runtime:runtime-livedata:1.7.5")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("com.google.dagger:hilt-android:2.51.1")
-    kapt("com.google.dagger:hilt-android-compiler:2.51.1")
-    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation ("androidx.camera:camera-core:1.4.1")
-    implementation ("androidx.camera:camera-camera2:1.4.1")
-    implementation ("androidx.camera:camera-lifecycle:1.4.1")
-    implementation ("androidx.camera:camera-view:1.4.1")
-}
-
-// Allow references to generated code
-kapt {
-    correctErrorTypes = true
+    implementation(libs.composesensors)
+    implementation(libs.accompanist.permissions)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.ui)
+    implementation(libs.androidx.material)
+    implementation(libs.androidx.core.ktx.v190)
+    implementation(libs.play.services.nearby)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.ktx.v287)
+    implementation(libs.androidx.runtime.livedata)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.activity.ktx)
+    implementation (libs.androidx.camera.core)
+    implementation (libs.androidx.camera.camera2)
+    implementation (libs.androidx.camera.lifecycle)
+    implementation (libs.androidx.camera.view)
 }

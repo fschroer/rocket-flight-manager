@@ -13,7 +13,7 @@ import android.companion.CompanionDeviceManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
-import android.hardware.SensorManager
+import android.content.res.Configuration
 import android.location.Location
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
@@ -21,13 +21,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -49,9 +51,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
@@ -76,14 +76,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.dimensionResource
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -110,9 +110,7 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.mutualmobile.composesensors.SensorDelay
 import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
-import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.RocketScreen
-import com.steampigeon.flightmanager.StartLocatorDataCollection
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
@@ -120,22 +118,17 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.RocketState
-import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import java.util.regex.Pattern
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.log2
+import kotlin.math.log
 import kotlin.math.round
 import kotlin.math.roundToInt
-import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlinx.coroutines.launch
 
 private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
-//private val locatorData = LocatorData()
 private const val messageTimeout = 2000
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
@@ -146,8 +139,6 @@ fun HomeScreen(
     modifier: Modifier
 ) {
     val context = LocalContext.current
-    //val viewModel: RocketViewModel = viewModel()
-    //StartLocatorDataCollection(LocalContext.current, viewModel)
     val permissionsState = rememberMultiplePermissionsState(
         permissions = listOf(
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -180,10 +171,12 @@ fun HomeScreen(
             BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
         }
     }
+    val bluetoothConnectionState = BluetoothManagerRepository.bluetoothConnectionState.collectAsState().value
+    LaunchedEffect(bluetoothConnectionState) {
+        manageBlueToothState(context, bluetoothConnectionState)
+    }
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-    var trackerLocation by remember { mutableStateOf<Location?>(null) }
     var isMapLoaded by remember { mutableStateOf(false) }
     val uiSettings = remember { MapUiSettings(compassEnabled = false,
         indoorLevelPickerEnabled = false,
@@ -198,268 +191,170 @@ fun HomeScreen(
     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
     val rocketState by viewModel.rocketState.collectAsState()
     val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = modifier.height(IntrinsicSize.Min)
-                    .width(IntrinsicSize.Min),
-                drawerContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                //drawerContentColor = MaterialTheme.colorScheme.secondary
-                drawerShape = RoundedCornerShape(bottomEnd = 16.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(0.dp)
-                ) {
-                    if (lastMessageAge < messageTimeout) {
-                        NavigationDrawerItem(
-                            //colors = NavigationDrawerItemDefaults.colors(
-                            //    selectedContainerColor = Color.White,
-                            //    unselectedContainerColor = Color.White
-                            //),
-                            label = {
-                                Text(
-                                    text = "Locator settings",
-                                    style = typography.titleLarge,
-                                    //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
-                                )
-                            },
-                            selected = false,
-                            onClick = {
-                                    scope.launch { drawerState.apply { close() } }
-                                    navController.navigate(RocketScreen.LocatorSettings.name)
-                            }
-                        )
-                    }
-                    NavigationDrawerItem(
-                        label = {
-                            Text(
-                                text = "Receiver settings",
-                                style = typography.titleLarge,
-                                //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
-                            )
-                        },
-                        selected = false,
-                        onClick = { /*TODO*/ }
-                    )
-                    NavigationDrawerItem(
-                        label = {
-                            Text(
-                                text = "Export flight path",
-                                style = typography.titleLarge,
-                                //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
-                            )
-                        },
-                        selected = false,
-                        onClick = { /*TODO*/ }
-                    )
-                }
-            }
+    val orientation = LocalConfiguration.current.orientation
+
+    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+    var trackerLocation by remember { mutableStateOf<Location?>(null) }
+    LaunchedEffect(locationPermissionGranted) {
+        if (locationPermissionGranted) {
+            fusedLocationClient.lastLocation
+                .addOnSuccessListener { trackerLocation = it }
         }
-    ) {
-        Scaffold(
-            //topBar = {TopAppBar()},
-            floatingActionButton = {
-                ExtendedFloatingActionButton(
-                    text = { Text("Menu") },
-                    icon = { Icon(Icons.Filled.Menu, contentDescription = "") },
-                    expanded = false,
-                    onClick = {
-                        scope.launch {
-                            drawerState.apply {
-                                if (isClosed) open() else close()
-                            }
-                        }
-                    }
-                )
-            },
-            floatingActionButtonPosition = FabPosition.Start
-        ) { contentPadding ->
-            LaunchedEffect(locationPermissionGranted) {
-                if (locationPermissionGranted) {
-                    fusedLocationClient.lastLocation
-                        .addOnSuccessListener { locationResult: Location? ->
-                            trackerLocation = locationResult
-                        }
-                }
-            }
-            val tag = "MainScreen"
-            when (BluetoothManagerRepository.bluetoothConnectionState.value) {
-                BluetoothConnectionState.NotStarted -> {
-                    Log.d(tag, "Calling enableBluetooth")
-                    enableBluetooth(context)
-                }
-                BluetoothConnectionState.Enabled, BluetoothConnectionState.NoDevicesAvailable -> {
-                    if (BluetoothManagerRepository.locatorDevice.value == null) {
-                        Log.d(tag, "Calling selectBluetoothDevice")
-                        selectBluetoothDevice(context)
-                    } else {
-                        if (BluetoothManagerRepository.locatorDevice.value?.bondState != BluetoothDevice.BOND_BONDED) {
-                            BluetoothManagerRepository.locatorDevice.value?.createBond()
-                            Log.d(tag, "Changing state from Enabled to Pairing")
-                            BluetoothManagerRepository.updateBluetoothConnectionState(
-                                BluetoothConnectionState.Pairing
-                            )
-                        } else {
-                            Log.d(tag, "Changing state from Enabled to Paired")
-                            BluetoothManagerRepository.updateBluetoothConnectionState(
-                                BluetoothConnectionState.Paired
-                            )
-                        }
-                    }
-                }
-                else -> {}
-            }
-            if (trackerLocation != null && trackerLocation!!.longitude != 0.0) {
-                val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
-                val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
-                if (accelerometerState.isAvailable && magneticFieldState.isAvailable) {
-                    var trackerLatLng = LatLng(trackerLocation!!.latitude, trackerLocation!!.longitude)
-                    var lastAccelerometer = FloatArray(3)
-                    lastAccelerometer[0] = accelerometerState.xForce
-                    lastAccelerometer[1] = accelerometerState.yForce
-                    lastAccelerometer[2] = accelerometerState.zForce
-                    var lastMagnetometer = FloatArray(3)
-                    lastMagnetometer[0] = magneticFieldState.xStrength
-                    lastMagnetometer[1] = magneticFieldState.yStrength
-                    lastMagnetometer[2] = magneticFieldState.zStrength
-                    var rotationMatrix = FloatArray(9)
-                    var orientation = FloatArray(3)
-                    val azimuthHistorySize = 10
-                    var azimuthHistory = remember { FloatArray(azimuthHistorySize) { 0f } }
-                    var azimuth by remember { mutableFloatStateOf(0f) }
-                    var averageAzimuth by remember { mutableFloatStateOf(0f) }
-                    var distanceToLocator by remember { mutableIntStateOf(0) }
-                    var previousDistanceToLocator by remember { mutableIntStateOf(0) }
-                    SensorManager.getRotationMatrix(
-                        rotationMatrix,
-                        null,
-                        lastAccelerometer,
-                        lastMagnetometer
-                    );
-                    SensorManager.getOrientation(rotationMatrix, orientation);
-                    azimuth = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
-                    // To do: adjust average when transitioning between 359 and 0 degrees
-                    for (i in 0..azimuthHistorySize - 2) {
-                        azimuthHistory[i] = azimuthHistory[i + 1]
-                    }
-                    averageAzimuth = azimuthHistory.average().toFloat()
-                    when {
-                        averageAzimuth > 270 && azimuth < 90 ->
-                            azimuth = azimuth + 360
-                        azimuth > 270 && averageAzimuth < 90 ->
-                            azimuth = azimuth - 360
-                    }
-                    when {
-                        averageAzimuth > 360 -> {
-                            for (i in 0..azimuthHistorySize - 2) {
-                                azimuthHistory[i] = azimuthHistory[i] - 360
-                            }
-                        }
-                        averageAzimuth < 0 -> {
-                            for (i in 0..azimuthHistorySize - 2) {
-                                azimuthHistory[i] = azimuthHistory[i] + 360
-                            }
-                        }
-                    }
-                    azimuthHistory[azimuthHistorySize - 1] = azimuth
-                    averageAzimuth = azimuthHistory.average().toFloat()
-                    var autoTargetMode by remember { mutableStateOf(true)}
-                    var autoZoomMode by remember { mutableStateOf(true)}
-                    var cameraPositionStateTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
-                    var cameraPositionStateZoom by remember { mutableFloatStateOf(12f)}
-                    val cameraPositionState = rememberCameraPositionState() {
-                        position = CameraPosition.Builder().target(trackerLatLng).zoom(cameraPositionStateZoom).bearing(azimuth).build()
-                    }
-                    val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
-                    val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
-                    var showControls by remember { mutableStateOf(false) }
-                    distanceToLocator = computeDistanceBetween(trackerLatLng, locatorLatLng)
-                    GoogleMap(
-                        modifier = Modifier.fillMaxSize(),
-                        onMapLoaded = { isMapLoaded = true },
-                        cameraPositionState = cameraPositionState,
-                        properties = properties,
-                        uiSettings = uiSettings,
-                        onMapClick = { showControls = !showControls }
+    }
+    val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
+    val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
+    val azimuth = viewModel.azimuth.collectAsState().value
+    val lastAzimuth = viewModel.averageAzimuth.collectAsState().value
+    val azimuthChange = ((lastAzimuth - azimuth + 540) % 360) - 180
+    val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+    LaunchedEffect(accelerometerState) {
+        if (trackerLocation?.longitude != 0.0 && accelerometerState.isAvailable && magneticFieldState.isAvailable) {
+            viewModel.handheldDeviceAzimuth(accelerometerState, magneticFieldState)
+            viewModel.locatorVector(LatLng(trackerLocation?.latitude ?: 0.0, trackerLocation?.longitude ?: 0.0), locatorLatLng)
+        }
+    }
+    val distanceToLocator = viewModel.distanceToLocator.collectAsState().value
+    val azimuthToLocator = viewModel.azimuthToLocator.collectAsState().value
+
+    if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+        CameraPreviewScreen(azimuth, azimuthToLocator)
+    }
+    else {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = true,
+            drawerContent = {
+                ModalDrawerSheet(
+                    modifier = modifier.height(IntrinsicSize.Min)
+                        .width(IntrinsicSize.Min),
+                    drawerContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    //drawerContentColor = MaterialTheme.colorScheme.secondary
+                    drawerShape = RoundedCornerShape(bottomEnd = 16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(0.dp)
                     ) {
-                        Marker(
-                            state = state,
-                            title = locatorConfig.deviceName,
-                            snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
-                            icon = BitmapDescriptorFactory.defaultMarker(
-                                if (lastMessageAge < messageTimeout)
-                                    BitmapDescriptorFactory.HUE_GREEN
-                                else
-                                    BitmapDescriptorFactory.HUE_RED
-                            )
-                        )
-                        Circle(
-                            center = locatorLatLng,
-                            fillColor = Color(if (lastMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
-                            radius = (4 * rocketState.hdop).toDouble(),
-                            strokeColor = Color(if (lastMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
-                            strokeWidth = 1f,
-                        )
-                    }
-                    if (isMapLoaded) {
-                        // Update camera position when markerPosition changes
-                        val coroutineScope = rememberCoroutineScope()
-                        var lastAverageAzimuth by remember { mutableFloatStateOf(0f) }
-                        LaunchedEffect(averageAzimuth) {
-                            if (abs(averageAzimuth - lastAverageAzimuth) > 2 && !cameraPositionState.isMoving) {
-                                // Animate map to rotate to new bearing, with smooth transition between 359 and 0 degrees
-                                coroutineScope.launch {
-                                    var newBearing = 0f
-                                    var duration = 0
-                                    when {
-                                        lastAverageAzimuth > 270 && averageAzimuth < 90 -> {
-                                            newBearing = azimuthHistory.average().toFloat() + 360
-                                            duration =
-                                                (averageAzimuth - lastAverageAzimuth + 360).toInt() * 10 + 100
-                                        }
-
-                                        lastAverageAzimuth < 90 && averageAzimuth > 270 -> {
-                                            newBearing = azimuthHistory.average().toFloat() - 360
-                                            duration =
-                                                (lastAverageAzimuth - averageAzimuth + 360).toInt() * 10 + 1
-                                        }
-
-                                        else -> {
-                                            newBearing = azimuthHistory.average().toFloat()
-                                            duration =
-                                                (abs(lastAverageAzimuth - averageAzimuth)).toInt() * 10 + 1
-                                        }
-                                    }
-                                    if (autoZoomMode) {
-                                        if (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0) {
-                                            if (abs((distanceToLocator - previousDistanceToLocator).toFloat() / (previousDistanceToLocator + 1)) > 0.1) {
-                                                cameraPositionStateZoom =
-                                                    23 - log2(distanceToLocator.toFloat())
-                                                previousDistanceToLocator = distanceToLocator
-                                            }
-                                        }
-                                    }
-                                    else
-                                        cameraPositionStateZoom = cameraPositionState.position.zoom
-                                    cameraPositionStateTarget = if (autoTargetMode){
-                                        trackerLatLng
-                                    } else {
-                                        cameraPositionState.position.target
-                                    }
-                                    cameraPositionState.animate(
-                                        update = CameraUpdateFactory.newCameraPosition(
-                                            CameraPosition(
-                                                cameraPositionStateTarget,
-                                                cameraPositionStateZoom,
-                                                0f,
-                                                newBearing
-                                            )
-                                        ),
-                                        durationMs = 500
+                        if (lastMessageAge < messageTimeout) {
+                            NavigationDrawerItem(
+                                //colors = NavigationDrawerItemDefaults.colors(
+                                //    selectedContainerColor = Color.White,
+                                //    unselectedContainerColor = Color.White
+                                //),
+                                label = {
+                                    Text(
+                                        text = "Locator settings",
+                                        style = typography.titleLarge,
+                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
                                     )
-                                    /*cameraPositionState.animate(
+                                },
+                                selected = false,
+                                onClick = {
+                                        scope.launch { drawerState.apply { close() } }
+                                        navController.navigate(RocketScreen.LocatorSettings.name)
+                                }
+                            )
+                            NavigationDrawerItem(
+                                label = {
+                                    Text(
+                                        text = "Receiver settings",
+                                        style = typography.titleLarge,
+                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
+                                    )
+                                },
+                                selected = false,
+                                onClick = { /*TODO*/ }
+                            )
+                            NavigationDrawerItem(
+                                label = {
+                                    Text(
+                                        text = "Export flight path",
+                                        style = typography.titleLarge,
+                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
+                                    )
+                                },
+                                selected = false,
+                                onClick = { /*TODO*/ }
+                            )
+                        }
+                    }
+                }
+            }
+        ) {
+            Scaffold(
+                //topBar = {TopAppBar()},
+                floatingActionButton = {
+                    ExtendedFloatingActionButton(
+                        text = { Text("Menu") },
+                        icon = { Icon(Icons.Filled.Menu, contentDescription = "") },
+                        expanded = false,
+                        onClick = { scope.launch { drawerState.apply { if (isClosed) open() else close() } } }
+                    )
+                },
+                floatingActionButtonPosition = FabPosition.Start
+            ) {
+                val trackerLatLng = LatLng(trackerLocation?.latitude ?: 0.0, trackerLocation?.longitude ?: 0.0)
+                if (trackerLocation != null && trackerLocation?.longitude != 0.0) {
+                    if (accelerometerState.isAvailable && magneticFieldState.isAvailable) {
+                        var previousDistanceToLocator by remember { mutableIntStateOf(0) }
+                        var autoTargetMode by remember { mutableStateOf(true) }
+                        var autoZoomMode by remember { mutableStateOf(true) }
+                        var cameraPositionStateTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
+                        var cameraPositionStateZoom by remember { mutableFloatStateOf(12f) }
+                        val cameraPositionState = rememberCameraPositionState() {
+                            position = CameraPosition.Builder().target(trackerLatLng)
+                                .zoom(cameraPositionStateZoom).bearing(azimuth).build()
+                        }
+                        val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
+                        var showControls by remember { mutableStateOf(false) }
+                        GoogleMap(
+                            modifier = Modifier.fillMaxSize(),
+                            onMapLoaded = { isMapLoaded = true },
+                            cameraPositionState = cameraPositionState,
+                            properties = properties,
+                            uiSettings = uiSettings,
+                            onMapClick = { showControls = !showControls }
+                        ) {
+                            Marker(
+                                state = state,
+                                title = locatorConfig.deviceName,
+                                snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
+                                icon = BitmapDescriptorFactory.defaultMarker(
+                                    if (lastMessageAge < messageTimeout) BitmapDescriptorFactory.HUE_GREEN
+                                    else BitmapDescriptorFactory.HUE_RED
+                                )
+                            )
+                            Circle(
+                                center = locatorLatLng,
+                                fillColor = Color(if (lastMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
+                                radius = (4 * rocketState.hdop).toDouble(),
+                                strokeColor = Color(if (lastMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
+                                strokeWidth = 1f,
+                            )
+                        }
+                        if (isMapLoaded) {
+                            // Update camera position when markerPosition changes
+                            val coroutineScope = rememberCoroutineScope()
+                            LaunchedEffect(azimuth) {
+                                if (abs(azimuthChange) > 2 && !cameraPositionState.isMoving) {
+                                    // Animate map to rotate to new bearing, with smooth transition between 359 and 0 degrees
+                                    coroutineScope.launch {
+                                        if (autoZoomMode) {
+                                            if (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0) {
+                                                if (abs((distanceToLocator - previousDistanceToLocator).toFloat() / (previousDistanceToLocator + 1)) > 0.1) {
+                                                    cameraPositionStateZoom = 23 - log(distanceToLocator.toFloat(), 3f)
+                                                    previousDistanceToLocator = distanceToLocator
+                                                }
+                                            }
+                                        } else
+                                            cameraPositionStateZoom = cameraPositionState.position.zoom
+                                        cameraPositionStateTarget = if (autoTargetMode) { trackerLatLng } else { cameraPositionState.position.target }
+                                        cameraPositionState.animate(
+                                            update = CameraUpdateFactory.newCameraPosition(
+                                                CameraPosition(cameraPositionStateTarget, cameraPositionStateZoom, 0f, lastAzimuth + azimuthChange)
+                                            ),
+                                            durationMs = 500
+                                        )
+                                        /*cameraPositionState.animate(
                                         update = CameraUpdateFactory.newLatLngBounds(
                                             LatLngBounds(LatLng(min(location!!.latitude, rocketData.latitude), min(location!!.longitude, rocketData.longitude)), // Southwest corner
                                                 LatLng(max(location!!.latitude, rocketData.latitude), max(location!!.longitude, rocketData.longitude)) // Northeast corner
@@ -467,132 +362,175 @@ fun HomeScreen(
                                         ),
                                         durationMs = 500
                                     )*/
-                                }
-                                lastAverageAzimuth = azimuthHistory.average().toFloat()
-                            }
-                        }
-                        Column (
-                            modifier = modifier,
-                            verticalArrangement = Arrangement.SpaceAround
-                        ) {
-                            Row(
-                                modifier = modifier,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Spacer(modifier = modifier.weight(1f))
-                                Column(
-                                    modifier = Modifier.padding(0.dp).heightIn(min = 200.dp),
-                                    verticalArrangement = Arrangement.Top,
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    if (showControls) {
-                                        val armedState = BluetoothManagerRepository.armedState.collectAsState().value
-                                        Button(
-                                            onClick = {
-                                                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                    || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated)
-                                                    BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendRequested)
-                                            },
-                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text(
-                                                when {
-                                                    armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Armed"
-                                                    armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
-                                                    armedState -> "Disarming"
-                                                    !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Disarmed"
-                                                    !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
-                                                    !armedState -> "Arming"
-                                                    else -> "Unknown"
-                                                }
-                                            )
-                                        }
-                                        Button(
-                                            onClick = {
-                                                autoTargetMode = !autoTargetMode
-                                            },
-                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text(
-                                                when (autoTargetMode) {
-                                                    true -> "Auto center"
-                                                    false -> "Manual center"
-                                                }
-                                            )
-                                        }
-                                        Button(onClick = {
-                                            autoZoomMode = !autoZoomMode
-                                        },
-                                            modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text(
-                                                when (autoZoomMode) {
-                                                    true -> "Auto zoom"
-                                                    false -> "Manual zoom"
-                                                }
-                                            )
-                                        }
                                     }
                                 }
                             }
-                            Row(
-                                modifier = modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
-                            ) {
-                                //Spacer(modifier = modifier)
-                                Text(
-                                    textAlign = TextAlign.Center,
-                                    text =
-                                    when (BluetoothManagerRepository.bluetoothConnectionState.value) {
-                                        BluetoothConnectionState.NotStarted,
-                                        BluetoothConnectionState.Enabling -> "Enabling bluetooth"
-                                        BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
-                                        BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
-                                        BluetoothConnectionState.Enabled,
-                                        BluetoothConnectionState.AssociateStart,
-                                        BluetoothConnectionState.AssociateWait,
-                                        BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
-                                        BluetoothConnectionState.Pairing -> "Pairing with receiver"
-                                        BluetoothConnectionState.Paired,
-                                        BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
-                                        BluetoothConnectionState.Connected -> ""
-                                        BluetoothConnectionState.Disconnected -> "Receiver disconnected"
-                                        else -> "Undefined state"
-                                    },
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                Spacer(modifier = modifier)
-                            }
-                            Spacer(modifier = modifier)
-                            Row(
+                            Column(
                                 modifier = modifier,
-                                horizontalArrangement = Arrangement.SpaceAround
+                                verticalArrangement = Arrangement.SpaceAround
                             ) {
-                                Spacer (modifier = modifier)
-                                Spacer (modifier = modifier)
-                                Column(
+                                Row(
                                     modifier = modifier,
-                                    verticalArrangement = Arrangement.Bottom,
-                                    horizontalAlignment = Alignment.Start
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
+                                    Spacer(modifier = modifier.weight(1f))
+                                    Column(
+                                        modifier = Modifier.padding(0.dp).heightIn(min = 200.dp),
+                                        verticalArrangement = Arrangement.Top,
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                        if (showControls) {
+                                            val armedState =
+                                                BluetoothManagerRepository.armedState.collectAsState().value
+                                            Button(
+                                                onClick = {
+                                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                        || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
+                                                    )
+                                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                                            LocatorArmedMessageState.SendRequested
+                                                        )
+                                                },
+                                                modifier = Modifier.padding(4.dp)
+                                                    .size(width = 120.dp, height = 40.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Text(
+                                                    when {
+                                                        armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Armed"
+
+                                                        armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
+                                                        armedState -> "Disarming"
+                                                        !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
+                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Disarmed"
+
+                                                        !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
+                                                        !armedState -> "Arming"
+                                                        else -> "Unknown"
+                                                    }
+                                                )
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    autoTargetMode = !autoTargetMode
+                                                },
+                                                modifier = Modifier.padding(4.dp)
+                                                    .size(width = 120.dp, height = 40.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Text(
+                                                    when (autoTargetMode) {
+                                                        true -> "Auto center"
+                                                        false -> "Manual center"
+                                                    }
+                                                )
+                                            }
+                                            Button(
+                                                onClick = {
+                                                    autoZoomMode = !autoZoomMode
+                                                },
+                                                modifier = Modifier.padding(4.dp)
+                                                    .size(width = 120.dp, height = 40.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Text(
+                                                    when (autoZoomMode) {
+                                                        true -> "Auto zoom"
+                                                        false -> "Manual zoom"
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                Row(
+                                    modifier = modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    //Spacer(modifier = modifier)
+                                    Text(
+                                        textAlign = TextAlign.Center,
+                                        text =
+                                        when (bluetoothConnectionState) {
+                                            BluetoothConnectionState.Starting,
+                                            BluetoothConnectionState.Enabling -> "Enabling bluetooth"
+
+                                            BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
+                                            BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
+                                            BluetoothConnectionState.Enabled,
+                                            BluetoothConnectionState.AssociateStart,
+                                            BluetoothConnectionState.AssociateWait,
+                                            BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
+
+                                            BluetoothConnectionState.Pairing -> "Pairing with receiver"
+                                            BluetoothConnectionState.Paired,
+                                            BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
+
+                                            BluetoothConnectionState.Connected -> ""
+                                            BluetoothConnectionState.Disconnected -> "Receiver disconnected"
+                                            else -> "Undefined state"
+                                        },
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = modifier)
+                                }
+                                Spacer(modifier = modifier)
+                                Row(
+                                    modifier = modifier,
+                                    horizontalArrangement = Arrangement.SpaceAround
+                                ) {
+                                    Spacer(modifier = modifier)
+                                    Spacer(modifier = modifier)
+                                    Column(
+                                        modifier = modifier,
+                                        verticalArrangement = Arrangement.Bottom,
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (BluetoothManagerRepository.bluetoothConnectionState.value ==
-                        BluetoothConnectionState.Connected
-                    ) {
-                        LocatorStats(rocketState, locatorConfig, modifier)
+                        if (bluetoothConnectionState ==
+                            BluetoothConnectionState.Connected
+                        ) {
+                            LocatorStats(rocketState, locatorConfig, modifier)
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothConnectionState) {
+    val tag = "MainScreen"
+    when (bluetoothConnectionState) {
+        BluetoothConnectionState.Starting -> {
+            Log.d(tag, "Calling enableBluetooth")
+            enableBluetooth(context)
+        }
+        BluetoothConnectionState.Enabled, BluetoothConnectionState.NoDevicesAvailable -> {
+            if (BluetoothManagerRepository.locatorDevice.value == null) {
+                Log.d(tag, "Calling selectBluetoothDevice")
+                selectBluetoothDevice(context, bluetoothConnectionState)
+            } else {
+                if (BluetoothManagerRepository.locatorDevice.value?.bondState != BluetoothDevice.BOND_BONDED) {
+                    BluetoothManagerRepository.locatorDevice.value?.createBond()
+                    Log.d(tag, "Changing state from Enabled to Pairing")
+                    BluetoothManagerRepository.updateBluetoothConnectionState(
+                        BluetoothConnectionState.Pairing
+                    )
+                } else {
+                    Log.d(tag, "Changing state from Enabled to Paired")
+                    BluetoothManagerRepository.updateBluetoothConnectionState(
+                        BluetoothConnectionState.Paired
+                    )
+                }
+            }
+        }
+        else -> {}
     }
 }
 
@@ -621,12 +559,12 @@ fun enableBluetooth(context: Context) : Boolean? {
     return bluetoothAdapter?.isEnabled
 }
 
-fun selectBluetoothDevice(context: Context) {
+fun selectBluetoothDevice(context: Context, bluetoothConnectionState: BluetoothConnectionState) {
     val tag = "selectBluetoothDevice"
     val deviceManager = context.getSystemService(Context.COMPANION_DEVICE_SERVICE) as CompanionDeviceManager
 
     // Create an association request
-    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Enabled) {
+    if (bluetoothConnectionState == BluetoothConnectionState.Enabled) {
         val deviceFilter: BluetoothDeviceFilter = BluetoothDeviceFilter.Builder()
             .setNamePattern(Pattern.compile("RocketReceiver"))
             .build()
@@ -639,10 +577,7 @@ fun selectBluetoothDevice(context: Context) {
         Log.d(tag, "Launch association")
         deviceManager.associate(pairingRequest, object : CompanionDeviceManager.Callback() {
             override fun onDeviceFound(chooserLauncher: IntentSender) {
-                launcher.launch(
-                    IntentSenderRequest.Builder(chooserLauncher).build()
-                )
-                //bluetoothConnectionState = BluetoothConnectionState.Pairing
+                launcher.launch(IntentSenderRequest.Builder(chooserLauncher).build())
                 Log.d(tag, "onDeviceFound: ${chooserLauncher.toString()}")
             }
 
@@ -676,7 +611,7 @@ fun unpairBluetoothDevice() {
             // Handle the exception, maybe log it or show a message to the user
         }
     }
-    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotStarted)
+    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Idle)
 }
 
 @Composable
@@ -797,66 +732,78 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TopAppBar(modifier: Modifier = Modifier) {
-    CenterAlignedTopAppBar(
-        title = {
-            Row() {
-                Image(
-                    modifier = Modifier
-                        .size(dimensionResource(id = R.dimen.image_size))
-                        .padding(dimensionResource(id = R.dimen.padding_small)),
-                    painter = painterResource(R.drawable.rocket),
-                    contentDescription = null
-                )
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = typography.headlineLarge,
-                )
-            }
-        },
-        modifier = modifier
-    )
-}
-
-fun computeDistanceBetween(latLng1: LatLng, latLng2: LatLng): Int {
-    val earthRadius = 6371000 // in meters
-
-    val dLat = Math.toRadians(latLng2.latitude - latLng1.latitude)
-    val dLon = Math.toRadians(latLng2.longitude - latLng1.longitude)
-
-    val a = sin(dLat / 2) * sin(dLat / 2) +
-            cos(Math.toRadians(latLng1.latitude)) * cos(Math.toRadians(latLng2.latitude)) *
-            sin(dLon / 2) * sin(dLon / 2)
-
-    val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-
-    return (earthRadius * c).toInt()
-}
-
 @Composable
 fun rememberUpdatedMarkerState(newPosition: LatLng) =
     remember { MarkerState(position = newPosition) }
         .apply { position = newPosition }
 
 @Composable
-fun CameraPreviewScreen() {
-    val lensFacing = CameraSelector.LENS_FACING_BACK
-    val lifecycleOwner = LocalLifecycleOwner.current
+fun CameraPreviewScreen(azimuth: Float, angleToLocator: Float) {
     val context = LocalContext.current
-    val preview = Preview.Builder().build()
-    val previewView = remember {
-        PreviewView(context)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var camera by remember { mutableStateOf<Camera?>(null) }
+    var zoomRatio by remember { mutableStateOf(1f) }
+
+    // Request camera permissions
+    // (You will need to handle permissions properly)
+
+    LaunchedEffect(Unit) {
+        val provider = ProcessCameraProvider.getInstance(context)
+        provider.addListener({
+            cameraProvider = provider.get()
+        }, ContextCompat.getMainExecutor(context))
     }
-    val cameraxSelector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
-    LaunchedEffect(lensFacing) {
-        val cameraProvider = context.getCameraProvider()
-        cameraProvider.unbindAll()
-        cameraProvider.bindToLifecycle(lifecycleOwner, cameraxSelector, preview)
-        preview.setSurfaceProvider(previewView.surfaceProvider)
+
+    if (cameraProvider != null) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = {
+                PreviewView(it).apply {
+                    // Setup CameraX preview use case
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = surfaceProvider
+                    }
+                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                    camera = cameraProvider?.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                }
+            }
+        )
+
+        val viewError = ((angleToLocator - azimuth + 540) % 360) - 180
+        val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+        val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
+        val centerPxX = with(LocalDensity.current) { (screenWidthDp / 2).toPx() }
+        val centerPxY = with(LocalDensity.current) { (screenHeightDp / 2).toPx() }
+        Canvas(modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    zoomRatio = if (zoomRatio == 1f) (camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f)
+                    else 1f
+                }
+            }
+        ) {
+            drawCircle(
+                color = Color.Red,
+                radius = 50.dp.toPx(),
+                center = Offset(centerPxX + viewError * 10, centerPxY),
+                style = Stroke(width = 2.dp.toPx())
+            )
+        }
+        Column{
+            Text("Compass: $azimuth")
+            Text("Locator: $angleToLocator")
+            Text("View Offset: $viewError")
+            Text("centerPxX: $centerPxX")
+            Text("centerPxY: $centerPxY")
+        }
     }
-    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+
+    LaunchedEffect(zoomRatio) {
+        camera?.cameraControl?.setZoomRatio(zoomRatio.coerceIn(1f, 3f))
+    }
 }
 
 private suspend fun Context.getCameraProvider(): ProcessCameraProvider =
