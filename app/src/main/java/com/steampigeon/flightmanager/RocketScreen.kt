@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.os.IBinder
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
@@ -29,6 +30,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
@@ -78,8 +81,9 @@ fun RocketAppBar(
                 Text(stringResource(id = currentScreen.title))
             }
         },
-        colors = TopAppBarDefaults.mediumTopAppBarColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
+        colors = TopAppBarDefaults.topAppBarColors(
+            //containerColor = MaterialTheme.colorScheme.primaryContainer
+            containerColor = Color.Transparent,
         ),
         modifier = modifier,
         navigationIcon = {
@@ -106,14 +110,17 @@ fun RocketApp(
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name
     )
+    val orientation = LocalConfiguration.current.orientation
     Scaffold(
         topBar = {
-            RocketAppBar(
-                currentScreen = currentScreen,
-                canNavigateBack = navController.previousBackStackEntry != null,
-                navigateUp = { navController.navigateUp() },
-                modifier = modifier
-            )
+            if (orientation == Configuration.ORIENTATION_PORTRAIT) {
+                RocketAppBar(
+                    currentScreen = currentScreen,
+                    canNavigateBack = navController.previousBackStackEntry != null,
+                    navigateUp = { navController.navigateUp() },
+                    modifier = modifier
+                )
+            }
         }
     ) { innerPadding ->
         NavHost(

@@ -120,8 +120,6 @@ import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.RocketState
 import java.text.DecimalFormat
 import java.util.regex.Pattern
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 import kotlin.math.abs
 import kotlin.math.log
 import kotlin.math.round
@@ -203,21 +201,23 @@ fun HomeScreen(
     }
     val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
     val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
-    val azimuth = viewModel.azimuth.collectAsState().value
-    val lastAzimuth = viewModel.averageAzimuth.collectAsState().value
+    val azimuth = viewModel.handheldDeviceAzimuth.collectAsState().value
+    val lastAzimuth = viewModel.lastHandheldDeviceAzimuth.collectAsState().value
     val azimuthChange = ((lastAzimuth - azimuth + 540) % 360) - 180
     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
     LaunchedEffect(accelerometerState) {
         if (trackerLocation?.longitude != 0.0 && accelerometerState.isAvailable && magneticFieldState.isAvailable) {
-            viewModel.handheldDeviceAzimuth(accelerometerState, magneticFieldState)
+            viewModel.handheldDeviceOrientation(accelerometerState, magneticFieldState, orientation == Configuration.ORIENTATION_LANDSCAPE)
             viewModel.locatorVector(LatLng(trackerLocation?.latitude ?: 0.0, trackerLocation?.longitude ?: 0.0), locatorLatLng)
         }
     }
-    val distanceToLocator = viewModel.distanceToLocator.collectAsState().value
-    val azimuthToLocator = viewModel.azimuthToLocator.collectAsState().value
+    val distanceToLocator = viewModel.locatorDistance.collectAsState().value
+    val azimuthToLocator = viewModel.locatorAzimuth.collectAsState().value
+    val handheldDevicePitch = viewModel.handheldDevicePitch.collectAsState().value
+    val locatorElevation = viewModel.locatorElevation.collectAsState().value
 
     if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-        CameraPreviewScreen(azimuth, azimuthToLocator)
+        CameraPreviewScreen(azimuth, azimuthToLocator, handheldDevicePitch, locatorElevation)
     }
     else {
         ModalNavigationDrawer(
@@ -236,15 +236,10 @@ fun HomeScreen(
                     ) {
                         if (lastMessageAge < messageTimeout) {
                             NavigationDrawerItem(
-                                //colors = NavigationDrawerItemDefaults.colors(
-                                //    selectedContainerColor = Color.White,
-                                //    unselectedContainerColor = Color.White
-                                //),
                                 label = {
                                     Text(
                                         text = "Locator settings",
                                         style = typography.titleLarge,
-                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
                                     )
                                 },
                                 selected = false,
@@ -258,7 +253,6 @@ fun HomeScreen(
                                     Text(
                                         text = "Receiver settings",
                                         style = typography.titleLarge,
-                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
                                     )
                                 },
                                 selected = false,
@@ -269,7 +263,6 @@ fun HomeScreen(
                                     Text(
                                         text = "Export flight path",
                                         style = typography.titleLarge,
-                                        //modifier = Modifier.padding(dimensionResource(R.dimen.padding_small))
                                     )
                                 },
                                 selected = false,
@@ -281,7 +274,6 @@ fun HomeScreen(
             }
         ) {
             Scaffold(
-                //topBar = {TopAppBar()},
                 floatingActionButton = {
                     ExtendedFloatingActionButton(
                         text = { Text("Menu") },
@@ -391,20 +383,17 @@ fun HomeScreen(
                                                             LocatorArmedMessageState.SendRequested
                                                         )
                                                 },
-                                                modifier = Modifier.padding(4.dp)
-                                                    .size(width = 120.dp, height = 40.dp),
+                                                modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
                                             ) {
                                                 Text(
                                                     when {
                                                         armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                                 || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Armed"
-
                                                         armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
                                                         armedState -> "Disarming"
                                                         !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                                 || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Disarmed"
-
                                                         !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
                                                         !armedState -> "Arming"
                                                         else -> "Unknown"
@@ -412,35 +401,16 @@ fun HomeScreen(
                                                 )
                                             }
                                             Button(
-                                                onClick = {
-                                                    autoTargetMode = !autoTargetMode
-                                                },
-                                                modifier = Modifier.padding(4.dp)
-                                                    .size(width = 120.dp, height = 40.dp),
+                                                onClick = { autoTargetMode = !autoTargetMode },
+                                                modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
                                             ) {
-                                                Text(
-                                                    when (autoTargetMode) {
-                                                        true -> "Auto center"
-                                                        false -> "Manual center"
-                                                    }
-                                                )
-                                            }
+                                                Text(when (autoTargetMode) { true -> "Auto center" false -> "Manual center" }) }
                                             Button(
-                                                onClick = {
-                                                    autoZoomMode = !autoZoomMode
-                                                },
-                                                modifier = Modifier.padding(4.dp)
-                                                    .size(width = 120.dp, height = 40.dp),
+                                                onClick = { autoZoomMode = !autoZoomMode },
+                                                modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
-                                            ) {
-                                                Text(
-                                                    when (autoZoomMode) {
-                                                        true -> "Auto zoom"
-                                                        false -> "Manual zoom"
-                                                    }
-                                                )
-                                            }
+                                            ) { Text(when (autoZoomMode) { true -> "Auto zoom" false -> "Manual zoom" }) }
                                         }
                                     }
                                 }
@@ -452,49 +422,30 @@ fun HomeScreen(
                                     Text(
                                         textAlign = TextAlign.Center,
                                         text =
-                                        when (bluetoothConnectionState) {
-                                            BluetoothConnectionState.Starting,
-                                            BluetoothConnectionState.Enabling -> "Enabling bluetooth"
-
-                                            BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
-                                            BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
-                                            BluetoothConnectionState.Enabled,
-                                            BluetoothConnectionState.AssociateStart,
-                                            BluetoothConnectionState.AssociateWait,
-                                            BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
-
-                                            BluetoothConnectionState.Pairing -> "Pairing with receiver"
-                                            BluetoothConnectionState.Paired,
-                                            BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
-
-                                            BluetoothConnectionState.Connected -> ""
-                                            BluetoothConnectionState.Disconnected -> "Receiver disconnected"
-                                            else -> "Undefined state"
-                                        },
+                                            when (bluetoothConnectionState) {
+                                                BluetoothConnectionState.Starting,
+                                                BluetoothConnectionState.Enabling -> "Enabling bluetooth"
+                                                BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
+                                                BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
+                                                BluetoothConnectionState.Enabled,
+                                                BluetoothConnectionState.AssociateStart,
+                                                BluetoothConnectionState.AssociateWait,
+                                                BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
+                                                BluetoothConnectionState.Pairing -> "Pairing with receiver"
+                                                BluetoothConnectionState.Paired,
+                                                BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
+                                                BluetoothConnectionState.Connected -> ""
+                                                BluetoothConnectionState.Disconnected -> "Receiver disconnected"
+                                                else -> "Undefined state"
+                                            },
                                         style = MaterialTheme.typography.headlineMedium,
                                         color = MaterialTheme.colorScheme.error
                                     )
                                     Spacer(modifier = modifier)
                                 }
-                                Spacer(modifier = modifier)
-                                Row(
-                                    modifier = modifier,
-                                    horizontalArrangement = Arrangement.SpaceAround
-                                ) {
-                                    Spacer(modifier = modifier)
-                                    Spacer(modifier = modifier)
-                                    Column(
-                                        modifier = modifier,
-                                        verticalArrangement = Arrangement.Bottom,
-                                        horizontalAlignment = Alignment.Start
-                                    ) {
-                                    }
-                                }
                             }
                         }
-                        if (bluetoothConnectionState ==
-                            BluetoothConnectionState.Connected
-                        ) {
+                        if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
                             LocatorStats(rocketState, locatorConfig, modifier)
                         }
                     }
@@ -738,7 +689,7 @@ fun rememberUpdatedMarkerState(newPosition: LatLng) =
         .apply { position = newPosition }
 
 @Composable
-fun CameraPreviewScreen(azimuth: Float, angleToLocator: Float) {
+fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, handheldDevicePitch: Float, locatorElevation: Float) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
@@ -771,11 +722,18 @@ fun CameraPreviewScreen(azimuth: Float, angleToLocator: Float) {
             }
         )
 
-        val viewError = ((angleToLocator - azimuth + 540) % 360) - 180
+        val horizontalDelta = ((locatorAzimuth - handheldDeviceAzimuth + 540) % 360) - 180
+        val verticalDelta = ((handheldDevicePitch - locatorElevation + 540) % 360) - 180
         val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
         val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
         val centerPxX = with(LocalDensity.current) { (screenWidthDp / 2).toPx() }
         val centerPxY = with(LocalDensity.current) { (screenHeightDp / 2).toPx() }
+        val locatorWindowScale = 10
+        val locatorWindowSize = 50
+        val crosshairLineLength = 25
+        val lineWidthDp = 2
+        val locatorColor = Color(0xffff8080)
+        val crosshairColor = Color(0xff80ff80)
         Canvas(modifier = Modifier
             .fillMaxSize()
             .pointerInput(Unit) {
@@ -785,35 +743,57 @@ fun CameraPreviewScreen(azimuth: Float, angleToLocator: Float) {
                 }
             }
         ) {
+            drawLine(
+                color = crosshairColor,
+                start = Offset(centerPxX, centerPxY - (locatorWindowSize + crosshairLineLength).dp.toPx()),
+                end = Offset(centerPxX, centerPxY - locatorWindowSize.dp.toPx()),
+                strokeWidth = lineWidthDp.dp.toPx(),
+            )
+            drawLine(
+                color = crosshairColor,
+                start = Offset(centerPxX + (locatorWindowSize + crosshairLineLength).dp.toPx(), centerPxY),
+                end = Offset(centerPxX + locatorWindowSize.dp.toPx(), centerPxY),
+                strokeWidth = lineWidthDp.dp.toPx(),
+            )
+            drawLine(
+                color = crosshairColor,
+                start = Offset(centerPxX, centerPxY + (locatorWindowSize + crosshairLineLength).dp.toPx()),
+                end = Offset(centerPxX, centerPxY + locatorWindowSize.dp.toPx()),
+                strokeWidth = lineWidthDp.dp.toPx(),
+            )
+            drawLine(
+                color = crosshairColor,
+                start = Offset(centerPxX - (locatorWindowSize + crosshairLineLength).dp.toPx(), centerPxY),
+                end = Offset(centerPxX - locatorWindowSize.dp.toPx(), centerPxY),
+                strokeWidth = lineWidthDp.dp.toPx(),
+            )
+//            drawRect(
+//                color = crosshairColor,
+//                topLeft = Offset(centerPxX - 50.dp.toPx(), centerPxY - 50.dp.toPx()),
+//                size = Size(100.dp.toPx(), 100.dp.toPx()),
+//                style = Stroke(width = 2.dp.toPx())
+//            )
             drawCircle(
-                color = Color.Red,
-                radius = 50.dp.toPx(),
-                center = Offset(centerPxX + viewError * 10, centerPxY),
-                style = Stroke(width = 2.dp.toPx())
+                color = locatorColor,
+                radius = locatorWindowSize.dp.toPx(),
+                center = Offset(centerPxX + horizontalDelta * locatorWindowScale, centerPxY + verticalDelta * locatorWindowScale),
+                style = Stroke(width = lineWidthDp.dp.toPx())
             )
         }
         Column{
-            Text("Compass: $azimuth")
-            Text("Locator: $angleToLocator")
-            Text("View Offset: $viewError")
-            Text("centerPxX: $centerPxX")
-            Text("centerPxY: $centerPxY")
+            Text("Compass: ${handheldDeviceAzimuth.toInt()}")
+            Text("Locator: ${locatorAzimuth.toInt()}")
+            Text("H Delta: ${horizontalDelta.toInt()}")
+            Text("Pitch: ${handheldDevicePitch.toInt()}")
+            Text("Elevation: ${locatorElevation.toInt()}")
+            Text("V Delta: ${verticalDelta.toInt()}")
         }
     }
 
     LaunchedEffect(zoomRatio) {
-        camera?.cameraControl?.setZoomRatio(zoomRatio.coerceIn(1f, 3f))
+        camera?.cameraControl?.setZoomRatio(zoomRatio)
     }
 }
-
-private suspend fun Context.getCameraProvider(): ProcessCameraProvider =
-    suspendCoroutine { continuation ->
-        ProcessCameraProvider.getInstance(this).also { cameraProvider ->
-            cameraProvider.addListener({
-                continuation.resume(cameraProvider.get())
-            }, ContextCompat.getMainExecutor(this))
-        }
-    }
 
 @Composable
 fun ExitAppButton(activity: Activity) {

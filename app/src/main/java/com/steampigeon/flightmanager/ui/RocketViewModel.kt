@@ -34,14 +34,18 @@ class RocketViewModel() : ViewModel() {
         private const val ACCELEROMETER_SCALE = 2048
     }
 
-    private val _azimuth = MutableStateFlow<Float>(0f)
-    val azimuth: StateFlow<Float> = _azimuth.asStateFlow()
-    private val _lastAzimuth = MutableStateFlow<Float>(0f)
-    val averageAzimuth: StateFlow<Float> = _lastAzimuth.asStateFlow()
-    private val _distanceToLocator = MutableStateFlow<Int>(0)
-    val distanceToLocator: StateFlow<Int> = _distanceToLocator.asStateFlow()
-    private val _azimuthToLocator = MutableStateFlow<Float>(0f)
-    val azimuthToLocator: StateFlow<Float> = _azimuthToLocator.asStateFlow()
+    private val _handheldDeviceAzimuth = MutableStateFlow<Float>(0f)
+    val handheldDeviceAzimuth: StateFlow<Float> = _handheldDeviceAzimuth.asStateFlow()
+    private val _lastHandheldDeviceAzimuth = MutableStateFlow<Float>(0f)
+    val lastHandheldDeviceAzimuth: StateFlow<Float> = _lastHandheldDeviceAzimuth.asStateFlow()
+    private val _handheldDevicePitch = MutableStateFlow<Float>(0f)
+    val handheldDevicePitch: StateFlow<Float> = _handheldDevicePitch.asStateFlow()
+    private val _locatorDistance = MutableStateFlow<Int>(0)
+    val locatorDistance: StateFlow<Int> = _locatorDistance.asStateFlow()
+    private val _locatorAzimuth = MutableStateFlow<Float>(0f)
+    val locatorAzimuth: StateFlow<Float> = _locatorAzimuth.asStateFlow()
+    private val _locatorElevation = MutableStateFlow<Float>(0f)
+    val locatorElevation: StateFlow<Float> = _locatorElevation.asStateFlow()
 
     /**
      * Display state
@@ -160,7 +164,7 @@ class RocketViewModel() : ViewModel() {
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
     }
 
-    fun handheldDeviceAzimuth(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState) {
+    fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, landscapeOrientation: Boolean) {
         val lastAccelerometer = FloatArray(3)
         lastAccelerometer[0] = accelerometerState.xForce
         lastAccelerometer[1] = accelerometerState.yForce
@@ -172,11 +176,16 @@ class RocketViewModel() : ViewModel() {
         val rotationMatrix = FloatArray(9)
         val orientation = FloatArray(3)
         SensorManager.getRotationMatrix(rotationMatrix, null, lastAccelerometer, lastMagnetometer)
-        val rotationMatrixB = FloatArray(9)
-        SensorManager.remapCoordinateSystem(rotationMatrix, SensorManager.AXIS_X, SensorManager.AXIS_Z, rotationMatrixB)
-        SensorManager.getOrientation(rotationMatrixB, orientation)
-        _lastAzimuth.value = _azimuth.value
-        _azimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
+        val rotationMatrixLandscape = FloatArray(9)
+        if (landscapeOrientation) {
+            SensorManager.remapCoordinateSystem(rotationMatrix, SensorManager.AXIS_X, SensorManager.AXIS_Z, rotationMatrixLandscape)
+            SensorManager.getOrientation(rotationMatrixLandscape, orientation)
+        }
+        else
+            SensorManager.getOrientation(rotationMatrix, orientation)
+        _lastHandheldDeviceAzimuth.value = _handheldDeviceAzimuth.value
+        _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
+        _handheldDevicePitch.value = ((Math.toDegrees(-orientation[1].toDouble()) + 360) % 360).toFloat()
     }
 
     fun locatorVector(latLng1: LatLng, latLng2: LatLng) {
@@ -189,12 +198,13 @@ class RocketViewModel() : ViewModel() {
 
         val a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2) * sin(dLon / 2)
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        _distanceToLocator.value = (earthRadius * c).toInt()
+        _locatorDistance.value = (earthRadius * c).toInt()
 
         val y = sin(dLon) * cos(lat2Rad)
         val x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLon)
-        val bearing = Math.toDegrees(atan2(y, x))
-        _azimuthToLocator.value = ((bearing + 360) % 360).toFloat()
+        _locatorAzimuth.value = ((Math.toDegrees(atan2(y, x)) + 360) % 360).toFloat()
+
+        _locatorElevation.value = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, _locatorDistance.value.toFloat()).toDouble()) + 360) % 360).toFloat()
     }
 
 }
