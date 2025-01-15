@@ -17,7 +17,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         startForegroundService(Intent(this, BluetoothService()::class.java))
-        //Thread.sleep(1000)
     }
 
     override fun onStart() {

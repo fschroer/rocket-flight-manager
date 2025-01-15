@@ -3,52 +3,70 @@ package com.steampigeon.flightmanager.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.ui.theme.FlightManagerTheme
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.ConfigMessageState
 
 /**
  * Composable that displays map download options,
- * [onSelectionChanged] lambda that notifies the parent composable when a new value is selected,
- * [onCancelButtonClicked] lambda that cancels the order when user clicks cancel and
- * [onNextButtonClicked] lambda that triggers the navigation to next screen
+ * [onCancelButtonClicked] lambda that cancels receiver settings when user clicks cancel
  */
 @Composable
 fun ReceiverSettingsScreen(
-    onSelectionChanged: (String) -> Unit = {},
+    viewModel: RocketViewModel = viewModel(),
+    service: BluetoothService?,
     onCancelButtonClicked: () -> Unit = {},
-    onNextButtonClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var selectedValue by rememberSaveable { mutableStateOf("") }
+    var stagedReceiverConfig by remember {mutableStateOf(viewModel.remoteReceiverConfig.value)}
+    var receiverConfigChanged = viewModel.receiverConfigChanged.collectAsState().value
+    val receiverConfigMessageState = viewModel.receiverConfigMessageState.collectAsState().value
 
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.SpaceBetween
+    Column (
+        modifier = modifier.fillMaxHeight().padding(16.dp)
     ) {
-        Column(modifier = Modifier.padding(dimensionResource(R.dimen.padding_medium))) {
+        Column(
+            modifier = modifier.padding(start = 40.dp),
+            verticalArrangement = Arrangement.SpaceAround
+        ) {
+            // Capture initial and updated receiver configuration data.
+            // Used for configuration screen and confirming receiver update acknowledgement.
+            ConfigurationItemNumeric(
+                configItemName = stringResource(R.string.lora_channel),
+                initialConfigValue = stagedReceiverConfig.channel,
+                minValue = 0,
+                maxValue = 63,
+                configMessageState = receiverConfigMessageState,
+                modifier = modifier
+            ) { newConfigValue ->
+                stagedReceiverConfig = stagedReceiverConfig.copy(channel = newConfigValue)
+                viewModel.updateReceiverConfigChanged(true)
+            }
         }
+        Spacer (modifier = modifier.weight(1f))
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(dimensionResource(R.dimen.padding_medium)),
+            modifier = modifier,
+            //.fillMaxWidth()
+            //.padding(dimensionResource(R.dimen.padding_medium)),
             horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
             verticalAlignment = Alignment.Bottom
         ) {
@@ -61,21 +79,28 @@ fun ReceiverSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = selectedValue.isNotEmpty(),
-                onClick = onNextButtonClicked
+                enabled = (receiverConfigChanged && receiverConfigMessageState == ConfigMessageState.Idle),
+                onClick = {
+                    if (receiverConfigMessageState == ConfigMessageState.Idle) {
+                        viewModel.updateReceiverConfigMessageState(ConfigMessageState.SendRequested)
+                        if (service?.changeReceiverConfig(stagedReceiverConfig) == true)
+                            viewModel.updateReceiverConfigMessageState(ConfigMessageState.Sent)
+                        else
+                            viewModel.updateReceiverConfigMessageState(ConfigMessageState.SendFailure)
+                        viewModel.updateReceiverConfigState(stagedReceiverConfig)                    }
+                }
             ) {
-                Text(stringResource(R.string.next))
+                Text(
+                    when (receiverConfigMessageState) {
+                        ConfigMessageState.Idle -> stringResource(R.string.update)
+                        ConfigMessageState.SendRequested,
+                        ConfigMessageState.Sent -> stringResource(R.string.updating)
+                        ConfigMessageState.AckUpdated -> stringResource(R.string.updated)
+                        ConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
+                        ConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
+                    }
+                )
             }
         }
-    }
-}
-
-@Preview
-@Composable
-fun ReceiverSettingsScreenPreview() {
-    FlightManagerTheme {
-        ReceiverSettingsScreen(
-            modifier = Modifier.fillMaxHeight()
-        )
     }
 }

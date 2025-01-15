@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Data class that represents the current rocket locator state]
  */
 data class RocketState(
-    val lastMessageTime: Long = 0,
+    val lastPreLaunchMessageTime: Long = 0,
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val qInd: UByte = 0.toUByte(),
@@ -47,6 +47,10 @@ data class LocatorConfig(
     val deviceName: String = "",
 )
 
+data class ReceiverConfig(
+    val channel: Int = 0,
+)
+
 enum class DeployMode (val deployMode: UByte) {
     DroguePrimaryDrogueBackup(0u),
     MainPrimaryMainBackup(1u),
@@ -55,6 +59,16 @@ enum class DeployMode (val deployMode: UByte) {
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.deployMode == value }
+    }
+}
+
+enum class DeploymentTestOption (val deploymentTestOption: UByte) {
+    None(0u),
+    Channel1(1u),
+    Channel2(2u);
+
+    companion object {
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.deploymentTestOption == value }
     }
 }
 
@@ -110,7 +124,7 @@ enum class LocatorArmedMessageState (val locatorArmedMessageState: UByte) {
 
 }
 
-enum class LocatorConfigMessageState (val locatorConfigMessageState: UByte) {
+enum class ConfigMessageState (val locatorConfigMessageState: UByte) {
     Idle(0u),
     SendRequested(1u),
     Sent(2u),
@@ -137,12 +151,6 @@ object BluetoothManagerRepository {
     private val _locatorArmedMessageState = MutableStateFlow<LocatorArmedMessageState>(LocatorArmedMessageState.Idle)
     val locatorArmedMessageState: StateFlow<LocatorArmedMessageState> = _locatorArmedMessageState.asStateFlow()
 
-    private val _locatorConfigMessageState = MutableStateFlow<LocatorConfigMessageState>(LocatorConfigMessageState.Idle)
-    val locatorConfigMessageState: StateFlow<LocatorConfigMessageState> = _locatorConfigMessageState.asStateFlow()
-
-    private val _configChangeAcknowldedgeWaitCount = MutableStateFlow<Int>(0)
-    val configChangeAcknowldedgeWaitCount: StateFlow<Int> = _configChangeAcknowldedgeWaitCount.asStateFlow()
-
     fun updateBluetoothConnectionState(newBluetoothConnectionState: BluetoothConnectionState) {
         _bluetoothConnectionState.value = newBluetoothConnectionState
     }
@@ -157,13 +165,5 @@ object BluetoothManagerRepository {
 
     fun updateLocatorArmedMessageState(newArmedMessageState: LocatorArmedMessageState) {
         _locatorArmedMessageState.value = newArmedMessageState
-    }
-
-    fun updateLocatorConfigMessageState(newConfigMessageState: LocatorConfigMessageState) {
-        _locatorConfigMessageState.value = newConfigMessageState
-    }
-
-    fun updateConfigChangeAcknowldedgeWaitCount(newConfigChangeAcknowldedgeWaitCount: Int) {
-        _configChangeAcknowldedgeWaitCount.value = newConfigChangeAcknowldedgeWaitCount
     }
 }
