@@ -84,6 +84,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -117,6 +118,7 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.RocketState
 import java.text.DecimalFormat
 import java.util.regex.Pattern
@@ -164,9 +166,11 @@ fun HomeScreen(
             BluetoothManagerRepository.updateLocatorDevice(result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE))
             BluetoothManagerRepository.locatorDevice.value!!.createBond()
             BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
+            Log.d("Pairing", "Changing state to Paired")
         } else {
             // Handle pairing failure
             BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+            Log.d("Pairing", "Changing state to PairingFailed")
         }
     }
     val bluetoothConnectionState = BluetoothManagerRepository.bluetoothConnectionState.collectAsState().value
@@ -188,7 +192,7 @@ fun HomeScreen(
     }
     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
     val rocketState by viewModel.rocketState.collectAsState()
-    val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
+    val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
     val orientation = LocalConfiguration.current.orientation
 
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
@@ -234,7 +238,22 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier.padding(0.dp)
                     ) {
-                        if (lastMessageAge < messageTimeout) {
+                        if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
+                            NavigationDrawerItem(
+                                label = {
+                                    Text(
+                                        text = "Receiver settings",
+                                        style = typography.titleLarge,
+                                    )
+                                },
+                                selected = false,
+                                onClick = {
+                                    scope.launch { drawerState.apply { close() } }
+                                    navController.navigate(RocketScreen.ReceiverSettings.name)
+                                }
+                            )
+                        }
+                        if (lastPreLaunchMessageAge < messageTimeout) {
                             NavigationDrawerItem(
                                 label = {
                                     Text(
@@ -251,22 +270,15 @@ fun HomeScreen(
                             NavigationDrawerItem(
                                 label = {
                                     Text(
-                                        text = "Receiver settings",
+                                        text = stringResource(R.string.deployment_test),
                                         style = typography.titleLarge,
                                     )
                                 },
                                 selected = false,
-                                onClick = { /*TODO*/ }
-                            )
-                            NavigationDrawerItem(
-                                label = {
-                                    Text(
-                                        text = "Export flight path",
-                                        style = typography.titleLarge,
-                                    )
-                                },
-                                selected = false,
-                                onClick = { /*TODO*/ }
+                                onClick = {
+                                    scope.launch { drawerState.apply { close() } }
+                                    navController.navigate(RocketScreen.DeploymentTest.name)
+                                }
                             )
                         }
                     }
@@ -311,15 +323,15 @@ fun HomeScreen(
                                 title = locatorConfig.deviceName,
                                 snippet = DecimalFormat("#,###").format(distanceToLocator).toString() + "m",
                                 icon = BitmapDescriptorFactory.defaultMarker(
-                                    if (lastMessageAge < messageTimeout) BitmapDescriptorFactory.HUE_GREEN
+                                    if (lastPreLaunchMessageAge < messageTimeout) BitmapDescriptorFactory.HUE_GREEN
                                     else BitmapDescriptorFactory.HUE_RED
                                 )
                             )
                             Circle(
                                 center = locatorLatLng,
-                                fillColor = Color(if (lastMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
+                                fillColor = Color(if (lastPreLaunchMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
                                 radius = (4 * rocketState.hdop).toDouble(),
-                                strokeColor = Color(if (lastMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
+                                strokeColor = Color(if (lastPreLaunchMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
                                 strokeWidth = 1f,
                             )
                         }
@@ -470,14 +482,10 @@ fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothCo
                 if (BluetoothManagerRepository.locatorDevice.value?.bondState != BluetoothDevice.BOND_BONDED) {
                     BluetoothManagerRepository.locatorDevice.value?.createBond()
                     Log.d(tag, "Changing state from Enabled to Pairing")
-                    BluetoothManagerRepository.updateBluetoothConnectionState(
-                        BluetoothConnectionState.Pairing
-                    )
+                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Pairing)
                 } else {
                     Log.d(tag, "Changing state from Enabled to Paired")
-                    BluetoothManagerRepository.updateBluetoothConnectionState(
-                        BluetoothConnectionState.Paired
-                    )
+                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
                 }
             }
         }
@@ -729,11 +737,11 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
         val centerPxX = with(LocalDensity.current) { (screenWidthDp / 2).toPx() }
         val centerPxY = with(LocalDensity.current) { (screenHeightDp / 2).toPx() }
         val locatorWindowScale = 10
-        val locatorWindowSize = 50
+        val locatorWindowPositionSize = 50
         val crosshairLineLength = 25
         val lineWidthDp = 2
-        val locatorColor = Color(0xffff8080)
-        val crosshairColor = Color(0xff80ff80)
+        val locatorColor = Color(0xffffc0c0)
+        val crosshairColor = Color(0xffc0ffc0)
         Canvas(modifier = Modifier
             .fillMaxSize()
             .pointerInput(Unit) {
@@ -745,26 +753,26 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
         ) {
             drawLine(
                 color = crosshairColor,
-                start = Offset(centerPxX, centerPxY - (locatorWindowSize + crosshairLineLength).dp.toPx()),
-                end = Offset(centerPxX, centerPxY - locatorWindowSize.dp.toPx()),
+                start = Offset(centerPxX, centerPxY - (locatorWindowPositionSize + crosshairLineLength).dp.toPx()),
+                end = Offset(centerPxX, centerPxY - locatorWindowPositionSize.dp.toPx()),
                 strokeWidth = lineWidthDp.dp.toPx(),
             )
             drawLine(
                 color = crosshairColor,
-                start = Offset(centerPxX + (locatorWindowSize + crosshairLineLength).dp.toPx(), centerPxY),
-                end = Offset(centerPxX + locatorWindowSize.dp.toPx(), centerPxY),
+                start = Offset(centerPxX + (locatorWindowPositionSize + crosshairLineLength).dp.toPx(), centerPxY),
+                end = Offset(centerPxX + locatorWindowPositionSize.dp.toPx(), centerPxY),
                 strokeWidth = lineWidthDp.dp.toPx(),
             )
             drawLine(
                 color = crosshairColor,
-                start = Offset(centerPxX, centerPxY + (locatorWindowSize + crosshairLineLength).dp.toPx()),
-                end = Offset(centerPxX, centerPxY + locatorWindowSize.dp.toPx()),
+                start = Offset(centerPxX, centerPxY + (locatorWindowPositionSize + crosshairLineLength).dp.toPx()),
+                end = Offset(centerPxX, centerPxY + locatorWindowPositionSize.dp.toPx()),
                 strokeWidth = lineWidthDp.dp.toPx(),
             )
             drawLine(
                 color = crosshairColor,
-                start = Offset(centerPxX - (locatorWindowSize + crosshairLineLength).dp.toPx(), centerPxY),
-                end = Offset(centerPxX - locatorWindowSize.dp.toPx(), centerPxY),
+                start = Offset(centerPxX - (locatorWindowPositionSize + crosshairLineLength).dp.toPx(), centerPxY),
+                end = Offset(centerPxX - locatorWindowPositionSize.dp.toPx(), centerPxY),
                 strokeWidth = lineWidthDp.dp.toPx(),
             )
 //            drawRect(
@@ -775,7 +783,7 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
 //            )
             drawCircle(
                 color = locatorColor,
-                radius = locatorWindowSize.dp.toPx(),
+                radius = locatorWindowPositionSize.dp.toPx(),
                 center = Offset(centerPxX + horizontalDelta * locatorWindowScale, centerPxY + verticalDelta * locatorWindowScale),
                 style = Stroke(width = lineWidthDp.dp.toPx())
             )

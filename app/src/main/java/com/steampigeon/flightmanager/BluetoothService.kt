@@ -22,7 +22,8 @@ import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
-import com.steampigeon.flightmanager.data.LocatorConfigMessageState
+import com.steampigeon.flightmanager.data.ConfigMessageState
+import com.steampigeon.flightmanager.data.ReceiverConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,14 +39,19 @@ import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 256
-private const val prelaunchMessageSize = 74
+private const val prelaunchMessageSize = 75
 private const val telemetryMessageSize = 90
+private const val receiverConfigMessageSize = 4
+private const val deploymentTestMessageSize = 4
 private const val CHANNEL_ID = "BluetoothService"
+private val EOT = "\u0003\u0019\u0004".toByteArray()
 
 enum class MessageType (val messageType: UByte) {
-    none(0u),
-    prelaunch(1u),
-    telemetry(2u);
+    None(0u),
+    Prelaunch(1u),
+    Telemetry(2u),
+    ReceiverConfig(3u),
+    DeploymentTest(4u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.messageType == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -56,6 +62,8 @@ class BluetoothService() : Service() {
     companion object {
         val prelaunchMessageHeader: ByteArray = byteArrayOf(0x50, 0x52, 0x45) // PRE
         val telemetryMessageHeader: ByteArray = byteArrayOf(0x54, 0x4C, 0x4D) // TLM
+        val receiverConfigMessageHeader: ByteArray = byteArrayOf(0x43, 0x48, 0x4E) // CHN
+        val deploymentTestMessageHeader: ByteArray = byteArrayOf(0x54, 0x53, 0x54) // TST
     }
     private var serviceStarted = false
     private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
@@ -72,11 +80,11 @@ class BluetoothService() : Service() {
     private lateinit var locatorInputStream: InputStream
     private lateinit var locatorOutputStream: OutputStream
     private var armedStateChangeWaitCount = 0
-    private val locatorInputBuffer: ByteArray = ByteArray(messageBufferSize) // buffer store for the stream
+    private val inboundMessageBuffer: ByteArray = ByteArray(messageBufferSize) // buffer store for the stream
     private var numBytes = 0 // bytes returned from read()
     private var messageReceived = false
     private var currentMessageSize = 0
-    private var messageType = MessageType.none
+    private var messageType = MessageType.None
 
     override fun onCreate() {
         super.onCreate()
@@ -107,7 +115,7 @@ class BluetoothService() : Service() {
                         // Read from the InputStream.
                         try {
                             numBytes = locatorInputStream.read(
-                                locatorInputBuffer,
+                                inboundMessageBuffer,
                                 currentMessageSize,
                                 messageBufferSize - currentMessageSize
                             )
@@ -119,17 +127,20 @@ class BluetoothService() : Service() {
                             )
                         }
                         if (currentMessageSize >= 3) {
-                            Log.d(TAG, logByteArrayAsChars(locatorInputBuffer, currentMessageSize))
+                            Log.d(TAG, logByteArrayAsChars(inboundMessageBuffer, currentMessageSize))
                             // Update message type
                             when {
-                                locatorInputBuffer.copyOfRange(0, 3)
-                                    .contentEquals(prelaunchMessageHeader) -> {
-                                    messageType = MessageType.prelaunch
+                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(prelaunchMessageHeader) -> {
+                                    messageType = MessageType.Prelaunch
                                 }
-
-                                locatorInputBuffer.copyOfRange(0, 3)
-                                    .contentEquals(telemetryMessageHeader) -> {
-                                    messageType = MessageType.telemetry
+                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(telemetryMessageHeader) -> {
+                                    messageType = MessageType.Telemetry
+                                }
+                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(receiverConfigMessageHeader) -> {
+                                    messageType = MessageType.ReceiverConfig
+                                }
+                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(deploymentTestMessageHeader) -> {
+                                    messageType = MessageType.DeploymentTest
                                 }
                             }
                         }
@@ -138,9 +149,9 @@ class BluetoothService() : Service() {
                         Log.d(TAG, "MessageType: $messageType")
                         Log.d(TAG, "Received size: $currentMessageSize")
                         when {
-                            messageType == MessageType.prelaunch && currentMessageSize == prelaunchMessageSize -> {
+                            messageType == MessageType.Prelaunch && currentMessageSize >= prelaunchMessageSize -> {
                                 Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
-                                _data.emit(locatorInputBuffer.copyOfRange(0, prelaunchMessageSize))
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, prelaunchMessageSize))
                                 if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
                                     BluetoothManagerRepository.updateArmedState(false)
                                     BluetoothManagerRepository.updateLocatorArmedMessageState(
@@ -157,15 +168,12 @@ class BluetoothService() : Service() {
                                         }
                                     }
                                 }
-                                if (BluetoothManagerRepository.locatorConfigMessageState.value == LocatorConfigMessageState.Sent) {
-                                    BluetoothManagerRepository.updateConfigChangeAcknowldedgeWaitCount(BluetoothManagerRepository.configChangeAcknowldedgeWaitCount.value + 1)
-                                }
                                 clearMessage()
                             }
 
-                            messageType == MessageType.telemetry && currentMessageSize == telemetryMessageSize -> {
+                            messageType == MessageType.Telemetry && currentMessageSize >= telemetryMessageSize -> {
                                 Log.d(TAG, "Telemetry message detected, $currentMessageSize")
-                                _data.emit(locatorInputBuffer.copyOfRange(0, telemetryMessageSize))
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, telemetryMessageSize))
                                 if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
                                     BluetoothManagerRepository.updateArmedState(true)
                                     BluetoothManagerRepository.updateLocatorArmedMessageState(
@@ -182,11 +190,23 @@ class BluetoothService() : Service() {
                                         }
                                     }
                                 }
-                                clearMessage()                            }
+                                clearMessage()
+                            }
+                            messageType == MessageType.ReceiverConfig && currentMessageSize >= receiverConfigMessageSize -> {
+                                Log.d(TAG, "Receiver config message detected, $currentMessageSize")
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, receiverConfigMessageSize))
+                                clearMessage()
+                            }
+                            messageType == MessageType.DeploymentTest && currentMessageSize >= deploymentTestMessageSize -> {
+                                Log.d(TAG, "Deployment test message detected, $currentMessageSize")
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, deploymentTestMessageSize))
+                                clearMessage()
+                            }
 
                             currentMessageSize > telemetryMessageSize -> {
                                 Log.d(TAG, "Overflow detected, $currentMessageSize")
-                                clearMessage()                            }
+                                clearMessage()
+                            }
                         }
                         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
                             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
@@ -204,11 +224,11 @@ class BluetoothService() : Service() {
     }
 
     private fun clearMessage(){
-        locatorInputBuffer.fill(0)
+        inboundMessageBuffer.fill(0)
         numBytes = 0
         currentMessageSize = 0
         messageReceived = false
-        messageType = MessageType.none
+        messageType = MessageType.None
     }
 
     private fun createNotificationChannel() {
@@ -246,7 +266,7 @@ class BluetoothService() : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    fun maintainLocatorDevicePairing() {
+    suspend fun maintainLocatorDevicePairing() {
         //if (bluetoothConnectionManager.receiverRegistered) {
         when (BluetoothManagerRepository.bluetoothConnectionState.value) {
             BluetoothConnectionState.Idle -> {
@@ -258,10 +278,14 @@ class BluetoothService() : Service() {
             }
             BluetoothConnectionState.AssociateStart -> {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.AssociateWait)
-                Log.d(TAG, "SelectingDevices delay start. Discovering: " + bluetoothAdapter.isDiscovering)
-                while (bluetoothAdapter.isDiscovering != false) { Thread.sleep(100) }
-                Log.d(TAG, "Changing state from SelectingDevices to PairingFailed")
-                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+                Log.d(TAG, "Changing state from AssociateStart to AssociateWait")
+//                serviceScope.launch {
+//                    while (bluetoothAdapter.isDiscovering != false) { delay(100) }
+//                    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.AssociateWait) {
+//                        Log.d(TAG, "Changing state from SelectingDevices to PairingFailed")
+//                        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
+//                    }
+//                }
             }
             BluetoothConnectionState.Paired -> {
                 if (bluetoothAdapter.isEnabled == true) {
@@ -279,7 +303,7 @@ class BluetoothService() : Service() {
                 if (bluetoothAdapter.isDiscovering == true)
                     bluetoothAdapter.cancelDiscovery()
                 Log.d(TAG, "PairingFailed delay start")
-                Thread.sleep(500)
+                delay(500)
                 Log.d(TAG, "PairingFailed delay end")
                 Log.d(TAG, "Changing state from PairingFailed to Enabled")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
@@ -287,7 +311,7 @@ class BluetoothService() : Service() {
             BluetoothConnectionState.Disconnected -> {
                 cancelLocatorBluetoothSocket(locatorSocket)
                 Log.d(TAG, "Disconnected delay start")
-                Thread.sleep(500)
+                delay(500)
                 Log.d(TAG, "Disconnected delay end")
                 Log.d(TAG, "Changing state from Disconnected to Paired")
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
@@ -344,8 +368,8 @@ class BluetoothService() : Service() {
     }
 
     fun changeLocatorArmedState(armedState: Boolean) {
-        val armCommand = "Run\u0004".toByteArray()
-        val disarmCommand = "Stop\u0004".toByteArray()
+        val armCommand = "Run".toByteArray() + EOT
+        val disarmCommand = "Stop".toByteArray() + EOT
         try {
             locatorOutputStream.write(when (armedState) {
                 true -> armCommand
@@ -359,28 +383,51 @@ class BluetoothService() : Service() {
         BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Sent)
     }
 
-    fun changeLocatorConfig(locatorConfig: LocatorConfig) {
+    fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean {
         val configMessage = "CFG".toByteArray() +
-            byteArrayOf((locatorConfig.deployMode ?: DeployMode.DroguePrimaryMainPrimary).deployMode.toByte(),
-            locatorConfig.launchDetectAltitude.toByte(),
-            (locatorConfig.launchDetectAltitude / 256).toByte(),
-            locatorConfig.droguePrimaryDeployDelay.toByte(),
-            locatorConfig.drogueBackupDeployDelay.toByte(),
-            locatorConfig.mainPrimaryDeployAltitude.toByte(),
-            (locatorConfig.mainPrimaryDeployAltitude / 256).toByte(),
-            locatorConfig.mainBackupDeployAltitude.toByte(),
-            (locatorConfig.mainBackupDeployAltitude / 256).toByte(),
-            locatorConfig.deploySignalDuration.toByte()
-        ) + locatorConfig.deviceName.toByteArray() + "\u0004".toByteArray()
+                byteArrayOf((locatorConfig.deployMode ?: DeployMode.DroguePrimaryMainPrimary).deployMode.toByte(),
+                    locatorConfig.launchDetectAltitude.toByte(),
+                    (locatorConfig.launchDetectAltitude / 256).toByte(),
+                    locatorConfig.droguePrimaryDeployDelay.toByte(),
+                    locatorConfig.drogueBackupDeployDelay.toByte(),
+                    locatorConfig.mainPrimaryDeployAltitude.toByte(),
+                    (locatorConfig.mainPrimaryDeployAltitude / 256).toByte(),
+                    locatorConfig.mainBackupDeployAltitude.toByte(),
+                    (locatorConfig.mainBackupDeployAltitude / 256).toByte(),
+                    locatorConfig.deploySignalDuration.toByte()
+                ) + locatorConfig.deviceName.toByteArray() + EOT
 
         try {
             locatorOutputStream.write(configMessage)
         } catch (e: IOException) {
             Log.e(TAG, "Error occurred when sending data", e)
-            BluetoothManagerRepository.updateLocatorConfigMessageState(LocatorConfigMessageState.SendFailure)
-            return
+            return false
         }
-        BluetoothManagerRepository.updateLocatorConfigMessageState(LocatorConfigMessageState.Sent)
+        return true
+    }
+
+    fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean {
+        val configMessage = "CHN".toByteArray() + byteArrayOf(receiverConfig.channel.toByte()) + EOT
+
+        try {
+            locatorOutputStream.write(configMessage)
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            return false
+        }
+        return true
+    }
+
+    fun deploymentTest(deploymentChannel: Int): Boolean {
+        val testMessage = "TST".toByteArray() + byteArrayOf(deploymentChannel.toByte()) + EOT
+
+        try {
+            locatorOutputStream.write(testMessage)
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            return false
+        }
+        return true
     }
 
     // Call this method from the main activity to shut down the connection.

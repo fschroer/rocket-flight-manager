@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -49,9 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.LocatorConfigMessageState
+import com.steampigeon.flightmanager.data.ConfigMessageState
 import kotlinx.coroutines.delay
 import java.math.RoundingMode
 import kotlin.math.max
@@ -65,42 +63,19 @@ private const val delayDecayFactor: Float = .25f
 
 /**
  * Composable that displays map download options,
- * [onSelectionChanged] lambda that notifies the parent composable when a new value is selected,
  * [onCancelButtonClicked] lambda that cancels the order when user clicks cancel and
- * [onNextButtonClicked] lambda that triggers the navigation to next screen
  */
 @Composable
 fun LocatorSettingsScreen(
     viewModel: RocketViewModel = viewModel(),
     service: BluetoothService?,
-    onSelectionChanged: (String) -> Unit = {},
     onCancelButtonClicked: () -> Unit = {},
-    onNextButtonClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var configChanged = remember {mutableStateOf(false)}
     var stagedLocatorConfig by remember {mutableStateOf(viewModel.remoteLocatorConfig.value)}
-    val remoteLocatorConfig = viewModel.remoteLocatorConfig.collectAsState()
-    val locatorConfigMessageState = BluetoothManagerRepository.locatorConfigMessageState.collectAsState().value
-    val configChangeAcknowldedgeWaitCount = BluetoothManagerRepository.configChangeAcknowldedgeWaitCount.collectAsState().value
-    LaunchedEffect(configChangeAcknowldedgeWaitCount) {
-        when (locatorConfigMessageState) {
-            LocatorConfigMessageState.Sent -> {
-                if (remoteLocatorConfig.value == stagedLocatorConfig)
-                    BluetoothManagerRepository.updateLocatorConfigMessageState(
-                        LocatorConfigMessageState.AckUpdated
-                    )
-                else {
-                    if (configChangeAcknowldedgeWaitCount >= 5) {
-                        BluetoothManagerRepository.updateLocatorConfigMessageState(
-                            LocatorConfigMessageState.NotAcknowledged
-                        )
-                    }
-                }
-            }
-            else -> {}
-        }
-    }
+    var locatorConfigChanged = viewModel.locatorConfigChanged.collectAsState().value
+    val locatorConfigMessageState = viewModel.locatorConfigMessageState.collectAsState().value
+
     Column (
         modifier = modifier
             .fillMaxHeight()
@@ -112,31 +87,17 @@ fun LocatorSettingsScreen(
                 .padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
-            LaunchedEffect(locatorConfigMessageState) {
-                if (locatorConfigMessageState == LocatorConfigMessageState.AckUpdated ||
-                    locatorConfigMessageState == LocatorConfigMessageState.SendFailure ||
-                    locatorConfigMessageState == LocatorConfigMessageState.NotAcknowledged
-                ) {
-                    if (locatorConfigMessageState == LocatorConfigMessageState.AckUpdated)
-                        configChanged.value = false
-                    delay(1000)
-                    BluetoothManagerRepository.updateLocatorConfigMessageState(
-                        LocatorConfigMessageState.Idle
-                    )
-                }
-            }
             // Capture initial and updated locator configuration data.
             // Used for configuration screen and confirming locator update acknowledgement.
             EnumDropdown(
                 DeployMode::class,
                 stagedLocatorConfig.deployMode ?: DeployMode.DroguePrimaryDrogueBackup,
-                locatorConfigMessageState = locatorConfigMessageState,
+                enabled = locatorConfigMessageState == ConfigMessageState.Idle,
                 modifier = modifier
             )
             { newConfigValue ->
-                stagedLocatorConfig =
-                    stagedLocatorConfig.copy(deployMode = newConfigValue as DeployMode)
-                configChanged.value = true
+                stagedLocatorConfig = stagedLocatorConfig.copy(deployMode = newConfigValue as DeployMode)
+                viewModel.updateLocatorConfigChanged(true)
             }
             if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary)
                 ConfigurationItemNumeric(
@@ -144,12 +105,11 @@ fun LocatorSettingsScreen(
                     initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
                     minValue = 0.0,
                     maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                    locatorConfigMessageState = locatorConfigMessageState,
+                    configMessageState = locatorConfigMessageState,
                     modifier = modifier
                 ) { newConfigValue ->
-                    stagedLocatorConfig =
-                        stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                    configChanged.value = true
+                    stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
+                    viewModel.updateLocatorConfigChanged(true)
                 }
             if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || stagedLocatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
                 ConfigurationItemNumeric(
@@ -157,12 +117,11 @@ fun LocatorSettingsScreen(
                     initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
                     minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
                     maxValue = 3.0,
-                    locatorConfigMessageState = locatorConfigMessageState,
+                    configMessageState = locatorConfigMessageState,
                     modifier = modifier
                 ) { newConfigValue ->
-                    stagedLocatorConfig =
-                        stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                    configChanged.value = true
+                    stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
+                    viewModel.updateLocatorConfigChanged(true)
                 }
             if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary || stagedLocatorConfig.deployMode == DeployMode.MainPrimaryMainBackup)
                 ConfigurationItemNumeric(
@@ -170,12 +129,11 @@ fun LocatorSettingsScreen(
                     initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
                     minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
                     maxValue = 500,
-                    locatorConfigMessageState = locatorConfigMessageState,
+                    configMessageState = locatorConfigMessageState,
                     modifier = modifier
                 ) { newConfigValue ->
-                    stagedLocatorConfig =
-                        stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                    configChanged.value = true
+                    stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
+                    viewModel.updateLocatorConfigChanged(true)
                 }
             if (stagedLocatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || stagedLocatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
                 ConfigurationItemNumeric(
@@ -183,45 +141,44 @@ fun LocatorSettingsScreen(
                     initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
                     minValue = 0,
                     maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                    locatorConfigMessageState = locatorConfigMessageState,
+                    configMessageState = locatorConfigMessageState,
                     modifier = modifier
                 ) { newConfigValue ->
-                    stagedLocatorConfig =
-                        stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                    configChanged.value = true
+                    stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
+                    viewModel.updateLocatorConfigChanged(true)
                 }
             ConfigurationItemText(
                 configItemName = stringResource(R.string.device_name),
                 configItemValue = stagedLocatorConfig.deviceName,
-                locatorConfigMessageState = locatorConfigMessageState,
+                configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
                 stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue)
-                configChanged.value = true
+                viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.launch_detect_altitude),
                 initialConfigValue = stagedLocatorConfig.launchDetectAltitude,
                 minValue = 0,
                 maxValue = 100,
-                locatorConfigMessageState = locatorConfigMessageState,
+                configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
                 stagedLocatorConfig =
                     stagedLocatorConfig.copy(launchDetectAltitude = newConfigValue)
-                configChanged.value = true
+                viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.deploy_signal_duration),
                 initialConfigValue = stagedLocatorConfig.deploySignalDuration.toDouble() / 10,
                 minValue = 0.5,
                 maxValue = 2.0,
-                locatorConfigMessageState = locatorConfigMessageState,
+                configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
                 stagedLocatorConfig =
                     stagedLocatorConfig.copy(deploySignalDuration = (newConfigValue * 10).toInt())
-                configChanged.value = true
+                viewModel.updateLocatorConfigChanged(true)
             }
         }
         Spacer (modifier = modifier.weight(1f))
@@ -241,25 +198,27 @@ fun LocatorSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = (configChanged.value && locatorConfigMessageState == LocatorConfigMessageState.Idle),
+                enabled = (locatorConfigChanged && locatorConfigMessageState == ConfigMessageState.Idle),
                 onClick = {
-                    if (locatorConfigMessageState == LocatorConfigMessageState.Idle) {
-                        BluetoothManagerRepository.updateLocatorConfigMessageState(
-                            LocatorConfigMessageState.SendRequested
-                        )
-                        service?.changeLocatorConfig(stagedLocatorConfig)
+                    if (locatorConfigMessageState == ConfigMessageState.Idle) {
+                        viewModel.updateLocatorConfigMessageState(ConfigMessageState.SendRequested)
+                        if (service?.changeLocatorConfig(stagedLocatorConfig) == true)
+                            viewModel.updateLocatorConfigMessageState(ConfigMessageState.Sent)
+                        else
+                            viewModel.updateLocatorConfigMessageState(ConfigMessageState.SendFailure)
+                        viewModel.updateLocatorConfigState(stagedLocatorConfig)
                     }
 
                 }
             ) {
                 Text(
                     when (locatorConfigMessageState) {
-                        LocatorConfigMessageState.Idle -> stringResource(R.string.update)
-                        LocatorConfigMessageState.SendRequested,
-                             LocatorConfigMessageState.Sent -> stringResource(R.string.updating)
-                        LocatorConfigMessageState.AckUpdated -> stringResource(R.string.updated)
-                        LocatorConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
-                        LocatorConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
+                        ConfigMessageState.Idle -> stringResource(R.string.update)
+                        ConfigMessageState.SendRequested,
+                             ConfigMessageState.Sent -> stringResource(R.string.updating)
+                        ConfigMessageState.AckUpdated -> stringResource(R.string.updated)
+                        ConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
+                        ConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
                     }
                 )
             }
@@ -272,7 +231,7 @@ fun LocatorSettingsScreen(
 fun EnumDropdown(
     enumClass: KClass<out Enum<*>>,
     selectedValue: Enum<*>,
-    locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     onValueChange: (Enum<*>) -> Unit,
 ) {
@@ -280,7 +239,7 @@ fun EnumDropdown(
 
     ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { if (locatorConfigMessageState == LocatorConfigMessageState.Idle) expanded = !expanded },
+        onExpandedChange = { if (enabled) expanded = !expanded },
         modifier = modifier.padding(bottom = 16.dp)
     ) {
         TextField(
@@ -311,7 +270,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              initialConfigValue: Int,
                              minValue: Int = 0,
                              maxValue: Int = Int.MAX_VALUE,
-                             locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+                             configMessageState: ConfigMessageState = ConfigMessageState.Idle,
                              modifier: Modifier = Modifier,
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
@@ -334,7 +293,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                     onConfigUpdate(currentValue)
                 }
                                                },
-            enabled = locatorConfigMessageState == LocatorConfigMessageState.Idle,
+            enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             //modifier = Modifier.weight(1f)
@@ -343,12 +302,12 @@ fun ConfigurationItemNumeric(configItemName: String,
         Column(
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            NudgeButton(currentValue, 1, maxValue, locatorConfigMessageState,
+            NudgeButton(currentValue, 1, maxValue, configMessageState,
                 { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment") },
                 { newValue -> currentValue = newValue
                     onConfigUpdate(newValue)
                 })
-            NudgeButton(currentValue, -1, minValue, locatorConfigMessageState,
+            NudgeButton(currentValue, -1, minValue, configMessageState,
                 { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement") },
                 { newValue -> currentValue = newValue
                     onConfigUpdate(newValue)
@@ -362,7 +321,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              initialConfigValue: Double,
                              minValue: Double = 0.0,
                              maxValue: Double = Double.MAX_VALUE,
-                             locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+                             configMessageState: ConfigMessageState = ConfigMessageState.Idle,
                              modifier: Modifier = Modifier,
                              onConfigUpdate: (Double) -> Unit) {
     var configValue by remember { mutableDoubleStateOf(initialConfigValue)}
@@ -385,7 +344,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                     onConfigUpdate(configValue)
                 }
             },
-            enabled = locatorConfigMessageState == LocatorConfigMessageState.Idle,
+            enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             //modifier = Modifier.weight(1f)
@@ -394,13 +353,13 @@ fun ConfigurationItemNumeric(configItemName: String,
         Column(
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            NudgeButton(configValue, 0.1, maxValue, locatorConfigMessageState,
+            NudgeButton(configValue, 0.1, maxValue, configMessageState,
                 { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment") },
                 { newValue -> configValue = newValue
                     configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
                     onConfigUpdate(newValue)
                 })
-            NudgeButton(configValue, -0.1, minValue, locatorConfigMessageState,
+            NudgeButton(configValue, -0.1, minValue, configMessageState,
                 { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement") },
                 { newValue -> configValue = newValue
                     configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
@@ -413,7 +372,7 @@ fun ConfigurationItemNumeric(configItemName: String,
 @Composable
 fun ConfigurationItemText(configItemName: String,
                           configItemValue: String,
-                          locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+                          configMessageState: ConfigMessageState = ConfigMessageState.Idle,
                           modifier: Modifier = Modifier,
                           onConfigUpdate: (String) -> Unit) {
 
@@ -427,7 +386,7 @@ fun ConfigurationItemText(configItemName: String,
             onValueChange = { newValue ->
                 onConfigUpdate(newValue)
             },
-            enabled = locatorConfigMessageState == LocatorConfigMessageState.Idle,
+            enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             //modifier = Modifier.weight(1f)
@@ -440,7 +399,7 @@ fun NudgeButton(
     configItemValue: Int,
     change: Int,
     bound: Int,
-    locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+    configMessageState: ConfigMessageState = ConfigMessageState.Idle,
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Int) -> Unit
 ) {
@@ -451,7 +410,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        enabled = (if(change > 0) counter < bound else counter > bound) && locatorConfigMessageState == LocatorConfigMessageState.Idle,
+        enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content
     )
@@ -474,7 +433,7 @@ fun NudgeButton(
     configItemValue: Double,
     change: Double,
     bound: Double,
-    locatorConfigMessageState: LocatorConfigMessageState = LocatorConfigMessageState.Idle,
+    configMessageState: ConfigMessageState = ConfigMessageState.Idle,
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Double) -> Unit
 ) {
@@ -485,7 +444,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && locatorConfigMessageState == LocatorConfigMessageState.Idle,
+        enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content
     )

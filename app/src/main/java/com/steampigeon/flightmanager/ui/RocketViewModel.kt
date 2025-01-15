@@ -1,12 +1,15 @@
 package com.steampigeon.flightmanager.ui
 
 import android.hardware.SensorManager
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.maps.model.LatLng
 import com.mutualmobile.composesensors.AccelerometerSensorState
 import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.ConfigMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,9 +22,14 @@ import kotlin.experimental.and
 import kotlin.math.sqrt
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.ReceiverConfig
+import kotlinx.coroutines.delay
+import java.lang.Thread.sleep
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+
+private const val TAG = "RocketViewModel"
 
 /**
  * [RocketViewModel] holds rocket locator status
@@ -56,87 +64,129 @@ class RocketViewModel() : ViewModel() {
     private val _remoteLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
     val remoteLocatorConfig: StateFlow<LocatorConfig> = _remoteLocatorConfig.asStateFlow()
 
-    fun collectLocatorData(service: BluetoothService) {
+    private val _remoteReceiverConfig = MutableStateFlow<ReceiverConfig>(ReceiverConfig())
+    val remoteReceiverConfig: StateFlow<ReceiverConfig> = _remoteReceiverConfig.asStateFlow()
+
+    private val _receiverConfigChanged = MutableStateFlow<Boolean>(false)
+    val receiverConfigChanged: StateFlow<Boolean> = _receiverConfigChanged.asStateFlow()
+
+    fun updateReceiverConfigChanged(newReceiverConfigChanged: Boolean) {
+        _receiverConfigChanged.value = newReceiverConfigChanged
+    }
+
+    private val _locatorConfigChanged = MutableStateFlow<Boolean>(false)
+    val locatorConfigChanged: StateFlow<Boolean> = _locatorConfigChanged.asStateFlow()
+
+    fun updateLocatorConfigChanged(newLocatorConfigChanged: Boolean) {
+        _locatorConfigChanged.value = newLocatorConfigChanged
+    }
+
+    private val _locatorConfigMessageState = MutableStateFlow<ConfigMessageState>(ConfigMessageState.Idle)
+    val locatorConfigMessageState: StateFlow<ConfigMessageState> = _locatorConfigMessageState.asStateFlow()
+
+    fun updateLocatorConfigMessageState(newLocatorConfigMessageState: ConfigMessageState) {
+        _locatorConfigMessageState.value = newLocatorConfigMessageState
+    }
+
+    private val _receiverConfigMessageState = MutableStateFlow<ConfigMessageState>(ConfigMessageState.Idle)
+    val receiverConfigMessageState: StateFlow<ConfigMessageState> = _receiverConfigMessageState.asStateFlow()
+
+    fun updateReceiverConfigMessageState(newReceiverConfigMessageState: ConfigMessageState) {
+        _receiverConfigMessageState.value = newReceiverConfigMessageState
+    }
+
+    private val _deploymentTestCountdown = MutableStateFlow<Int>(0)
+    val deploymentTestCountdown: StateFlow<Int> = _deploymentTestCountdown.asStateFlow()
+
+    fun updateDeploymentTestCountdown(newDeploymentTestCountdown: Int) {
+        _deploymentTestCountdown.value = newDeploymentTestCountdown
+    }
+
+    fun collectInboundMessageData(service: BluetoothService) {
         viewModelScope.launch {
             service.data.collect { locatorMessage ->
-                val currentTime = System.currentTimeMillis()
-                _rocketState.update { currentState -> currentState.copy(lastMessageTime = currentTime) }
-                if (locatorMessage.copyOfRange(0, 3)
-                        .contentEquals(BluetoothService.prelaunchMessageHeader)
-                ) {
-                    val rawGForce = sqrt(
-                        (_rocketState.value.accelerometer.x * _rocketState.value.accelerometer.x
-                                + _rocketState.value.accelerometer.y * _rocketState.value.accelerometer.y
-                                + _rocketState.value.accelerometer.z * _rocketState.value.accelerometer.z).toFloat()
-                    )
-                    _rocketState.update { currentState ->
-                        currentState.copy(
-                            latitude = gpsCoord(locatorMessage, 11),
-                            longitude = gpsCoord(locatorMessage, 19),
-                            qInd = (locatorMessage[27] - 48).toUByte(),
-                            satellites = locatorMessage[28].toUByte(),
-                            hdop = byteArrayToFloat(locatorMessage, 29),
-                            altimeterStatus = (locatorMessage[40].and(8)
-                                .toInt() ushr 3) == 1,
-                            accelerometerStatus = (locatorMessage[40].and(4)
-                                .toInt() ushr 2) == 1,
-                            deployChannel1Armed = (locatorMessage[40].and(2)
-                                .toInt() ushr 1) == 1,
-                            deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
-                            altitudeAboveGroundLevel = byteArrayToUShort(
-                                locatorMessage,
-                                41
-                            ).toFloat() / ALTIMETER_SCALE,
-                            accelerometer = RocketState.Accelerometer(
-                                byteArrayToShort(locatorMessage, 43),
-                                byteArrayToShort(locatorMessage, 45),
-                                byteArrayToShort(locatorMessage, 47)
-                            ),
-                            gForce = rawGForce / ACCELEROMETER_SCALE,
-                            orientation =
-                            when {
-                                _rocketState.value.accelerometer.x.toFloat() / rawGForce < -0.5 -> "up"
-                                _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
-                                else -> "side"
-                            },
-                            batteryVoltage = byteArrayToUShort(locatorMessage, 71),
+                when {
+                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader) -> {
+                        val currentTime = System.currentTimeMillis()
+                        val rawGForce = sqrt(
+                            (_rocketState.value.accelerometer.x * _rocketState.value.accelerometer.x
+                                    + _rocketState.value.accelerometer.y * _rocketState.value.accelerometer.y
+                                    + _rocketState.value.accelerometer.z * _rocketState.value.accelerometer.z).toFloat()
                         )
+                        _rocketState.update { currentState ->
+                            currentState.copy(
+                                lastPreLaunchMessageTime = currentTime,
+                                latitude = gpsCoord(locatorMessage, 11),
+                                longitude = gpsCoord(locatorMessage, 19),
+                                qInd = (locatorMessage[27] - 48).toUByte(),
+                                satellites = locatorMessage[28].toUByte(),
+                                hdop = byteArrayToFloat(locatorMessage, 29),
+                                altimeterStatus = (locatorMessage[40].and(8).toInt() ushr 3) == 1,
+                                accelerometerStatus = (locatorMessage[40].and(4).toInt() ushr 2) == 1,
+                                deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
+                                deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
+                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
+                                accelerometer = RocketState.Accelerometer(
+                                    byteArrayToShort(locatorMessage, 43),
+                                    byteArrayToShort(locatorMessage, 45),
+                                    byteArrayToShort(locatorMessage, 47)
+                                ),
+                                gForce = rawGForce / ACCELEROMETER_SCALE,
+                                orientation =
+                                when {
+                                    _rocketState.value.accelerometer.x.toFloat() / rawGForce < -0.5 -> "up"
+                                    _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
+                                    else -> "side"
+                                },
+                                batteryVoltage = byteArrayToUShort(locatorMessage, 71),
+                            )
+                        }
+                        _remoteLocatorConfig.update { currentState ->
+                            currentState.copy(
+                                deployMode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
+                                launchDetectAltitude = byteArrayToUShort(locatorMessage, 50).toInt(),
+                                droguePrimaryDeployDelay = locatorMessage[52].toInt(),
+                                drogueBackupDeployDelay = locatorMessage[53].toInt(),
+                                mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 54).toInt(),
+                                mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 56).toInt(),
+                                deploySignalDuration = locatorMessage[58].toInt(),
+                                deviceName = String(locatorMessage.copyOfRange(59, 71), Charsets.UTF_8).trimEnd('\u0000'),
+                            )
+                        }
+                        _remoteReceiverConfig.update { currentState ->
+                            currentState.copy(
+                                channel = locatorMessage[74].toInt(),
+                            )
+                        }
                     }
-                    _remoteLocatorConfig.update { currentState ->
-                        currentState.copy(
-                            deployMode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
-                            launchDetectAltitude = byteArrayToUShort(locatorMessage, 50).toInt(),
-                            droguePrimaryDeployDelay = locatorMessage[52].toInt(),
-                            drogueBackupDeployDelay = locatorMessage[53].toInt(),
-                            mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 54).toInt(),
-                            mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 56).toInt(),
-                            deploySignalDuration = locatorMessage[58].toInt(),
-                            deviceName = String(
-                                locatorMessage.copyOfRange(59, 71),
-                                Charsets.UTF_8
-                            ).trimEnd('\u0000'),
-                        )
+
+                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader) -> {
+                        _rocketState.update { currentState ->
+                            currentState.copy(
+                                latitude = gpsCoord(locatorMessage, 11),
+                                longitude = gpsCoord(locatorMessage, 19),
+                                qInd = locatorMessage[27].toUByte(),
+                                satellites = locatorMessage[28].toUByte(),
+                                hdop = byteArrayToFloat(locatorMessage, 29),
+                                flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
+                                    ?: currentState.flightState,
+                            )
+                        }
+                        val inFlight = (_rocketState.value.flightState
+                            ?: FlightStates.WaitingLaunch) > FlightStates.Launched && (_rocketState.value.flightState
+                            ?: FlightStates.WaitingLaunch) < FlightStates.Landed
+                        for (i in 0..(if (inFlight) SAMPLES_PER_SECOND else 1) - 1) {
+                            _rocketState.value.agl[i] =
+                                byteArrayToFloat(locatorMessage, 40 + i * 4) / ALTIMETER_SCALE
+                        }
                     }
-                } else if (locatorMessage.copyOfRange(0, 3)
-                        .contentEquals(BluetoothService.telemetryMessageHeader)
-                ) {
-                    _rocketState.update { currentState ->
-                        currentState.copy(
-                            latitude = gpsCoord(locatorMessage, 11),
-                            longitude = gpsCoord(locatorMessage, 19),
-                            qInd = locatorMessage[27].toUByte(),
-                            satellites = locatorMessage[28].toUByte(),
-                            hdop = byteArrayToFloat(locatorMessage, 29),
-                            flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
-                                ?: currentState.flightState,
-                        )
+                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.receiverConfigMessageHeader) -> {
+                        _remoteReceiverConfig.update { currentState ->
+                            currentState.copy(channel = locatorMessage[3].toInt())
+                        }
                     }
-                    val inFlight = (_rocketState.value.flightState
-                        ?: FlightStates.WaitingLaunch) > FlightStates.Launched && (_rocketState.value.flightState
-                        ?: FlightStates.WaitingLaunch) < FlightStates.Landed
-                    for (i in 0..(if (inFlight) SAMPLES_PER_SECOND else 1) - 1) {
-                        _rocketState.value.agl[i] =
-                            byteArrayToFloat(locatorMessage, 40 + i * 4) / ALTIMETER_SCALE
+                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
+                        _deploymentTestCountdown.value = locatorMessage[3].toInt()
                     }
                 }
             }
@@ -207,4 +257,47 @@ class RocketViewModel() : ViewModel() {
         _locatorElevation.value = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, _locatorDistance.value.toFloat()).toDouble()) + 360) % 360).toFloat()
     }
 
+    fun updateReceiverConfigState(stagedReceiverConfig: ReceiverConfig) {
+        viewModelScope.launch {
+            for (i in 1..50) {
+                delay(100)
+                if (_remoteReceiverConfig.value == stagedReceiverConfig) {
+                    _receiverConfigMessageState.value = ConfigMessageState.AckUpdated
+                    break
+                }
+                else if (_receiverConfigMessageState.value == ConfigMessageState.SendFailure)
+                    break
+            }
+            if (_receiverConfigMessageState.value == ConfigMessageState.SendRequested ||
+                _receiverConfigMessageState.value == ConfigMessageState.Sent) {
+                _receiverConfigMessageState.value = ConfigMessageState.NotAcknowledged
+            }
+            if (_receiverConfigMessageState.value == ConfigMessageState.AckUpdated)
+                _receiverConfigChanged.value = false
+            delay(2000)
+            _receiverConfigMessageState.value = ConfigMessageState.Idle
+        }
+    }
+
+    fun updateLocatorConfigState(stagedLocatorConfig: LocatorConfig) {
+        viewModelScope.launch {
+            for (i in 1..50) {
+                delay(100)
+                if (_remoteLocatorConfig.value == stagedLocatorConfig) {
+                    _locatorConfigMessageState.value = ConfigMessageState.AckUpdated
+                    break
+                }
+                else if (_locatorConfigMessageState.value == ConfigMessageState.SendFailure)
+                    break
+            }
+            if (_locatorConfigMessageState.value == ConfigMessageState.SendRequested ||
+                _locatorConfigMessageState.value == ConfigMessageState.Sent) {
+                _locatorConfigMessageState.value = ConfigMessageState.NotAcknowledged
+            }
+            if (_locatorConfigMessageState.value == ConfigMessageState.AckUpdated)
+                _locatorConfigChanged.value = false
+            delay(2000)
+            _locatorConfigMessageState.value = ConfigMessageState.Idle
+        }
+    }
 }
