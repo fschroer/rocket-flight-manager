@@ -15,6 +15,8 @@ import android.content.Intent
 import android.content.IntentSender
 import android.content.res.Configuration
 import android.location.Location
+import android.speech.tts.TextToSpeech
+import android.speech.tts.Voice
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,6 +51,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -84,6 +87,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -108,6 +112,7 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.maps.android.compose.widgets.ScaleBar
 import com.mutualmobile.composesensors.SensorDelay
 import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
@@ -127,6 +132,7 @@ import kotlin.math.log
 import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 private const val messageTimeout = 2000
@@ -136,6 +142,7 @@ private const val messageTimeout = 2000
 fun HomeScreen(
     navController: NavHostController,
     viewModel: RocketViewModel = viewModel(),
+    textToSpeech: TextToSpeech?,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -175,7 +182,7 @@ fun HomeScreen(
     }
     val bluetoothConnectionState = BluetoothManagerRepository.bluetoothConnectionState.collectAsState().value
     LaunchedEffect(bluetoothConnectionState) {
-        manageBlueToothState(context, bluetoothConnectionState)
+        manageBlueToothState(context, bluetoothConnectionState, textToSpeech)
     }
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -230,7 +237,7 @@ fun HomeScreen(
             drawerContent = {
                 ModalDrawerSheet(
                     modifier = modifier.height(IntrinsicSize.Min)
-                        .width(IntrinsicSize.Min),
+                        .width(IntrinsicSize.Max),
                     drawerContainerColor = MaterialTheme.colorScheme.primaryContainer,
                     //drawerContentColor = MaterialTheme.colorScheme.secondary
                     drawerShape = RoundedCornerShape(bottomEnd = 16.dp)
@@ -238,6 +245,23 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier.padding(0.dp)
                     ) {
+                        NavigationDrawerItem(
+                            label = {
+                                Text(
+                                    text = "App settings",
+                                    style = typography.titleLarge,
+                                )
+                            },
+                            selected = false,
+                            onClick = {
+                                scope.launch { drawerState.apply { close() } }
+                                navController.navigate(RocketScreen.AppSettings.name)
+                            },
+                            icon = { Icon(
+                                painter = painterResource(R.drawable.settings_applications),
+                                contentDescription = stringResource(id = R.string.application_settings)
+                            ) }
+                        )
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
                             NavigationDrawerItem(
                                 label = {
@@ -250,36 +274,56 @@ fun HomeScreen(
                                 onClick = {
                                     scope.launch { drawerState.apply { close() } }
                                     navController.navigate(RocketScreen.ReceiverSettings.name)
-                                }
+                                },
+                                icon = { Icon(
+                                    painter = painterResource(R.drawable.radio),
+                                    contentDescription = stringResource(id = R.string.receiver_settings)
+                                ) }
                             )
                         }
                         if (lastPreLaunchMessageAge < messageTimeout) {
-                            NavigationDrawerItem(
-                                label = {
-                                    Text(
-                                        text = "Locator settings",
-                                        style = typography.titleLarge,
-                                    )
-                                },
-                                selected = false,
-                                onClick = {
+                            if (!BluetoothManagerRepository.armedState.value) {
+                                NavigationDrawerItem(
+                                    label = {
+                                        Text(
+                                            text = "Locator settings",
+                                            style = typography.titleLarge,
+                                        )
+                                    },
+                                    selected = false,
+                                    onClick = {
                                         scope.launch { drawerState.apply { close() } }
                                         navController.navigate(RocketScreen.LocatorSettings.name)
-                                }
-                            )
-                            NavigationDrawerItem(
-                                label = {
-                                    Text(
-                                        text = stringResource(R.string.deployment_test),
-                                        style = typography.titleLarge,
-                                    )
-                                },
-                                selected = false,
-                                onClick = {
-                                    scope.launch { drawerState.apply { close() } }
-                                    navController.navigate(RocketScreen.DeploymentTest.name)
-                                }
-                            )
+                                    },
+                                    icon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.navigation),
+                                            contentDescription = stringResource(id = R.string.locator_settings)
+                                        )
+                                    }
+                                )
+                            }
+                            else {
+                                NavigationDrawerItem(
+                                    label = {
+                                        Text(
+                                            text = stringResource(R.string.deployment_test),
+                                            style = typography.titleLarge,
+                                        )
+                                    },
+                                    selected = false,
+                                    onClick = {
+                                        scope.launch { drawerState.apply { close() } }
+                                        navController.navigate(RocketScreen.DeploymentTest.name)
+                                    },
+                                    icon = {
+                                        Icon(
+                                            painter = painterResource(R.drawable.bomb),
+                                            contentDescription = stringResource(id = R.string.deployment_test)
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -334,6 +378,12 @@ fun HomeScreen(
                                 strokeColor = Color(if (lastPreLaunchMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
                                 strokeWidth = 1f,
                             )
+                            //ScaleBar( //crashes
+                                //modifier = modifier
+                                    //.align(Alignment.BottomStart)
+                                //    .padding(16.dp),
+                                //cameraPositionState = cameraPositionState,
+                            //)
                         }
                         if (isMapLoaded) {
                             // Update camera position when markerPosition changes
@@ -450,7 +500,7 @@ fun HomeScreen(
                                                 BluetoothConnectionState.Disconnected -> "Receiver disconnected"
                                                 else -> "Undefined state"
                                             },
-                                        style = MaterialTheme.typography.headlineMedium,
+                                        style = typography.headlineMedium,
                                         color = MaterialTheme.colorScheme.error
                                     )
                                     Spacer(modifier = modifier)
@@ -467,7 +517,7 @@ fun HomeScreen(
     }
 }
 
-fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothConnectionState) {
+fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothConnectionState, textToSpeech: TextToSpeech?) {
     val tag = "MainScreen"
     when (bluetoothConnectionState) {
         BluetoothConnectionState.Starting -> {
@@ -489,6 +539,8 @@ fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothCo
                 }
             }
         }
+        BluetoothConnectionState.Connected ->
+            textToSpeech?.speak("connected to reciever", TextToSpeech.QUEUE_FLUSH, null, null)
         else -> {}
     }
 }
@@ -612,6 +664,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
         //verticalArrangement = Arrangement.Top,
         //horizontalAlignment = Alignment.Start
     ) {
+        Text(text = locatorConfig.deviceName)
         if (BluetoothManagerRepository.armedState.value) {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
@@ -801,6 +854,10 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
     LaunchedEffect(zoomRatio) {
         camera?.cameraControl?.setZoomRatio(zoomRatio)
     }
+}
+
+fun Speak(textToSpeech: TextToSpeech?, textToSpeak: String) {
+    textToSpeech?.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, null, null)
 }
 
 @Composable
