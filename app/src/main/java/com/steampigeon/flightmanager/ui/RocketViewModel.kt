@@ -102,12 +102,19 @@ class RocketViewModel() : ViewModel() {
         _deploymentTestCountdown.value = newDeploymentTestCountdown
     }
 
+    private val _voiceName = MutableStateFlow<String>("us-x-iob-local")
+    val voiceName: StateFlow<String> = _voiceName.asStateFlow()
+
+    fun updateVoiceName(newVoiceName: String) {
+        _voiceName.value = newVoiceName
+    }
+
     fun collectInboundMessageData(service: BluetoothService) {
         viewModelScope.launch {
             service.data.collect { locatorMessage ->
+                val currentTime = System.currentTimeMillis()
                 when {
                     locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader) -> {
-                        val currentTime = System.currentTimeMillis()
                         val rawGForce = sqrt(
                             (_rocketState.value.accelerometer.x * _rocketState.value.accelerometer.x
                                     + _rocketState.value.accelerometer.y * _rocketState.value.accelerometer.y
@@ -163,6 +170,7 @@ class RocketViewModel() : ViewModel() {
                     locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader) -> {
                         _rocketState.update { currentState ->
                             currentState.copy(
+                                lastPreLaunchMessageTime = currentTime,
                                 latitude = gpsCoord(locatorMessage, 11),
                                 longitude = gpsCoord(locatorMessage, 19),
                                 qInd = locatorMessage[27].toUByte(),

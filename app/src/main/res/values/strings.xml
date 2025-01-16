@@ -1,13 +1,22 @@
 <resources>
     <string name="app_name">Wherezit?</string>
+    <string name="application_settings">Application Settings</string>
     <string name="back_button">Back</string>
     <string name="cancel">Cancel</string>
     <string name="channel_name">LocatorCommService</string>
     <string name="channel_description">Rocket locator communicator</string>
+    <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
     <string name="deployment_test">Deployment Test</string>
+    <string name="device_name">Locator Name</string>
+    <string name="drogue_backup_deploy_delay">Drogue Backup Deploy Delay (s)</string>
+    <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>
     <string name="exit">Exit</string>
     <string name="export">Export flight path</string>
+    <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
     <string name="locator_settings">Locator Settings</string>
+    <string name="lora_channel">LoRa Channel</string>
+    <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>
+    <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
     <string name="next">Next</string>
     <string name="receiver_settings">Receiver Settings</string>
     <string name="return_to_main">Return</string>
@@ -16,13 +25,4 @@
     <string name="update_not_acknowledged">Not Received</string>
     <string name="updated">Updated</string>
     <string name="updating">Updating</string>
-    <string name="deploy_mode">Deployment Mode</string>
-    <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
-    <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>
-    <string name="drogue_backup_deploy_delay">Drogue Backup Deploy Delay (s)</string>
-    <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
-    <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>
-    <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
-    <string name="device_name">Locator Name</string>
-    <string name="lora_channel">LoRa Channel</string>
 </resources>

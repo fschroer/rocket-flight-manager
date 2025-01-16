@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.res.Configuration
 import android.os.IBinder
+import android.speech.tts.TextToSpeech
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Row
@@ -16,14 +17,19 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -38,15 +44,18 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
 import com.steampigeon.flightmanager.ui.ExportFlightPathScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
+import java.util.Locale
 
 enum class RocketScreen(@StringRes val title: Int) {
     Start(title = R.string.app_name),
+    AppSettings(title = R.string.application_settings),
     LocatorSettings(title = R.string.locator_settings),
     ReceiverSettings(title = R.string.receiver_settings),
     DeploymentTest(title = R.string.deployment_test),
@@ -80,8 +89,8 @@ fun RocketAppBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            //containerColor = MaterialTheme.colorScheme.primaryContainer
-            containerColor = Color.Transparent,
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+            //containerColor = Color.Transparent,
         ),
         modifier = modifier,
         navigationIcon = {
@@ -102,13 +111,32 @@ fun RocketApp(
     navController: NavHostController = rememberNavController(),
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val viewModel: RocketViewModel = viewModel()
-    StartLocatorDataCollection(LocalContext.current, viewModel)
+    StartLocatorDataCollection(context, viewModel)
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name
     )
     val orientation = LocalConfiguration.current.orientation
+    var textToSpeech: TextToSpeech? by remember { mutableStateOf(null) }
+    val voiceName = viewModel.voiceName.collectAsState().value
+    LaunchedEffect(voiceName) {
+        textToSpeech = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech?.language = Locale.US
+                val voices = textToSpeech?.voices
+                val desiredVoice = voices?.find { voice ->
+                    voice.name.contains(voiceName)
+                }
+                if (desiredVoice != null) {
+                    textToSpeech?.voice = desiredVoice
+                } else {
+                    // Handle case where voice is not found
+                }
+            }
+        }
+    }
     Scaffold(
         topBar = {
             if (orientation == Configuration.ORIENTATION_PORTRAIT) {
@@ -130,14 +158,21 @@ fun RocketApp(
                 HomeScreen(
                     navController,
                     viewModel,
+                    textToSpeech,
                     modifier = modifier
-                        //.fillMaxSize()
-                        //.padding(dimensionResource(R.dimen.padding_medium))
+                    //.fillMaxSize()
+                    //.padding(dimensionResource(R.dimen.padding_medium))
+                )
+            }
+            composable(route = RocketScreen.AppSettings.name) {
+                AppSettingsScreen(
+                    viewModel,
+                    textToSpeech,
+                    onCancelButtonClicked = { navigateToStart(navController) },
+                    modifier = modifier
                 )
             }
             composable(route = RocketScreen.LocatorSettings.name) {
-                //val mainBackStackEntry = remember { navController.getBackStackEntry(RocketScreen.Start.name) }
-                //val mainViewModel: RocketViewModel = viewModel(mainBackStackEntry)
                 LocatorSettingsScreen(
                     viewModel,
                     service,
