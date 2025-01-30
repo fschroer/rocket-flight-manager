@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -82,9 +84,9 @@ fun LocatorSettingsScreen(
             .padding(16.dp)
     ) {
         Column(
-            modifier = modifier
-//            .verticalScroll(scrollState)
-                .padding(start = 40.dp),
+            modifier = modifier.weight(11f),
+                //.verticalScroll(scrollState)
+                //.padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
             // Capture initial and updated locator configuration data.
@@ -153,7 +155,7 @@ fun LocatorSettingsScreen(
                 configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
-                stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue)
+                stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue.take(RocketViewModel.DEVICE_NAME_LENGTH))
                 viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(
@@ -183,8 +185,7 @@ fun LocatorSettingsScreen(
         }
         Spacer (modifier = modifier.weight(1f))
         Row(
-            modifier = modifier,
-            //.fillMaxWidth()
+            modifier = modifier.weight(1f),
             //.padding(dimensionResource(R.dimen.padding_medium)),
             horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
             verticalAlignment = Alignment.Bottom
@@ -286,29 +287,31 @@ fun ConfigurationItemNumeric(configItemName: String,
                         "",
             onValueChange = { newValue ->
                 currentValue = (newValue.filter { it.isDigit() }.toIntOrNull() ?: 0)
+                onConfigUpdate(currentValue)
             },
-            modifier = modifier.onFocusChanged { focusState ->
+            modifier = Modifier.onFocusChanged { focusState ->
                 if (!focusState.isFocused && currentValue != initialConfigValue) {
                     currentValue = currentValue.coerceIn(minValue, maxValue)
                     onConfigUpdate(currentValue)
                 }
-                                               },
+            }
+                .weight(6f),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            //modifier = Modifier.weight(1f)
         )
         //Spacer(modifier = Modifier.width(8.dp))
         Column(
+            modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
             NudgeButton(currentValue, 1, maxValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment") },
+                { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = stringResource(id = R.string.increment)) },
                 { newValue -> currentValue = newValue
                     onConfigUpdate(newValue)
                 })
             NudgeButton(currentValue, -1, minValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement") },
+                { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = stringResource(id = R.string.decrement)) },
                 { newValue -> currentValue = newValue
                     onConfigUpdate(newValue)
                 })
@@ -336,6 +339,7 @@ fun ConfigurationItemNumeric(configItemName: String,
             onValueChange = { newValue ->
                 configValue = (newValue.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: 0.0)
                 configText = newValue
+                onConfigUpdate(configValue)
             },
             modifier = modifier.onFocusChanged { focusState ->
                 if (!focusState.isFocused && configValue != initialConfigValue) {
@@ -343,24 +347,25 @@ fun ConfigurationItemNumeric(configItemName: String,
                     configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
                     onConfigUpdate(configValue)
                 }
-            },
+            }
+                .weight(6f),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            //modifier = Modifier.weight(1f)
         )
         //Spacer(modifier = Modifier.width(8.dp))
         Column(
+            modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
             NudgeButton(configValue, 0.1, maxValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "Increment") },
+                { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = stringResource(id = R.string.increment)) },
                 { newValue -> configValue = newValue
                     configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
                     onConfigUpdate(newValue)
                 })
             NudgeButton(configValue, -0.1, minValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "Decrement") },
+                { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = stringResource(id = R.string.decrement)) },
                 { newValue -> configValue = newValue
                     configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
                     onConfigUpdate(newValue)
@@ -386,11 +391,17 @@ fun ConfigurationItemText(configItemName: String,
             onValueChange = { newValue ->
                 onConfigUpdate(newValue)
             },
+            modifier = modifier.weight(6f),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             //modifier = Modifier.weight(1f)
         )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.SpaceEvenly
+        ) {
+        }
     }
 }
 
@@ -410,6 +421,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
+        modifier = Modifier.heightIn(max = 32.dp),
         enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content
@@ -444,6 +456,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
+        modifier = Modifier.heightIn(max = 32.dp),
         enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content

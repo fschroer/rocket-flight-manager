@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="Rocket Flight Manager">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2024-12-06T18:56:46.705209400Z">
+        <DropdownSelection timestamp="2025-01-30T04:47:02.012486700Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="PhysicalDevice" identifier="serial=49261FDAS0029F" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=ZY322C36QH" />
             </handle>
           </Target>
         </DropdownSelection>

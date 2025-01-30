@@ -1,14 +1,12 @@
 package com.steampigeon.flightmanager.ui
 
 import android.hardware.SensorManager
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.maps.model.LatLng
 import com.mutualmobile.composesensors.AccelerometerSensorState
 import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.ConfigMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketState
@@ -24,7 +22,6 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.ReceiverConfig
 import kotlinx.coroutines.delay
-import java.lang.Thread.sleep
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -37,9 +34,11 @@ private const val TAG = "RocketViewModel"
 
 class RocketViewModel() : ViewModel() {
     companion object {
-        const val SAMPLES_PER_SECOND = 20
+        private const val SAMPLES_PER_SECOND = 20
         private const val ALTIMETER_SCALE = 10
         private const val ACCELEROMETER_SCALE = 2048
+        private const val BATTERY_SCALE = 8.0 / 4096
+        const val DEVICE_NAME_LENGTH = 12
     }
 
     private val _handheldDeviceAzimuth = MutableStateFlow<Float>(0f)
@@ -102,6 +101,13 @@ class RocketViewModel() : ViewModel() {
         _deploymentTestCountdown.value = newDeploymentTestCountdown
     }
 
+    private val _voiceEnabled = MutableStateFlow<Boolean>(true)
+    val voiceEnabled: StateFlow<Boolean> = _voiceEnabled.asStateFlow()
+
+    fun updateVoiceEnabled(newVoiceEnabled: Boolean) {
+        _voiceEnabled.value = newVoiceEnabled
+    }
+
     private val _voiceName = MutableStateFlow<String>("us-x-iob-local")
     val voiceName: StateFlow<String> = _voiceName.asStateFlow()
 
@@ -145,7 +151,7 @@ class RocketViewModel() : ViewModel() {
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                batteryVoltage = byteArrayToUShort(locatorMessage, 71),
+                                batteryLevel = ((byteArrayToShort(locatorMessage, 72) - 3686.4) / 409.6 * 8).toInt(),
                             )
                         }
                         _remoteLocatorConfig.update { currentState ->
@@ -178,15 +184,16 @@ class RocketViewModel() : ViewModel() {
                                 hdop = byteArrayToFloat(locatorMessage, 29),
                                 flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
                                     ?: currentState.flightState,
+                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
                             )
                         }
-                        val inFlight = (_rocketState.value.flightState
-                            ?: FlightStates.WaitingLaunch) > FlightStates.Launched && (_rocketState.value.flightState
-                            ?: FlightStates.WaitingLaunch) < FlightStates.Landed
-                        for (i in 0..(if (inFlight) SAMPLES_PER_SECOND else 1) - 1) {
-                            _rocketState.value.agl[i] =
-                                byteArrayToFloat(locatorMessage, 40 + i * 4) / ALTIMETER_SCALE
-                        }
+//                        val inFlight = (_rocketState.value.flightState
+//                            ?: FlightStates.WaitingForLaunch) > FlightStates.Launched && (_rocketState.value.flightState
+//                            ?: FlightStates.WaitingForLaunch) < FlightStates.Landed
+//                        for (i in 0..(if (inFlight) SAMPLES_PER_SECOND else 1) - 1) {
+//                            _rocketState.value.agl[i] =
+//                                byteArrayToFloat(locatorMessage, 41 + i * 4) / ALTIMETER_SCALE
+//                        }
                     }
                     locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.receiverConfigMessageHeader) -> {
                         _remoteReceiverConfig.update { currentState ->

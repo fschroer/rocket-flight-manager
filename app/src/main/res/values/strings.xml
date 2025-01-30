@@ -1,10 +1,24 @@
 <resources>
     <string name="app_name">Wherezit?</string>
     <string name="application_settings">Application Settings</string>
+    <string name="armed_state_armed">Armed</string>
+    <string name="armed_state_arming">Arming</string>
+    <string name="armed_state_disarmed">Disarmed</string>
+    <string name="armed_state_disarming">Disarming</string>
     <string name="back_button">Back</string>
+    <string name="battery_0_bar">Battery Empty</string>
+    <string name="battery_1_bar">Battery 1 Bar</string>
+    <string name="battery_2_bar">Battery 2 Bars</string>
+    <string name="battery_3_bar">Battery 3 Bars</string>
+    <string name="battery_4_bar">Battery 4 Bars</string>
+    <string name="battery_5_bar">Battery 5 Bars</string>
+    <string name="battery_6_bar">Battery 6 Bars</string>
+    <string name="battery_7_bar">Battery Full</string>
+    <string name="bluetooth_state_disconnected">Disconnected</string>
     <string name="cancel">Cancel</string>
     <string name="channel_name">LocatorCommService</string>
     <string name="channel_description">Rocket locator communicator</string>
+    <string name="decrement">Decrement</string>
     <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
     <string name="deployment_test">Deployment Test</string>
     <string name="device_name">Locator Name</string>
@@ -12,7 +26,9 @@
     <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>
     <string name="exit">Exit</string>
     <string name="export">Export flight path</string>
+    <string name="increment">Increment</string>
     <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
+    <string name="locator_satellites">Locator Satellites</string>
     <string name="locator_settings">Locator Settings</string>
     <string name="lora_channel">LoRa Channel</string>
     <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>

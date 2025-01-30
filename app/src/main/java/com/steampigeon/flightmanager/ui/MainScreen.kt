@@ -15,8 +15,8 @@ import android.content.Intent
 import android.content.IntentSender
 import android.content.res.Configuration
 import android.location.Location
+import android.os.Build
 import android.speech.tts.TextToSpeech
-import android.speech.tts.Voice
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +30,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -51,7 +52,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -89,9 +89,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -112,7 +117,6 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
-import com.google.maps.android.compose.widgets.ScaleBar
 import com.mutualmobile.composesensors.SensorDelay
 import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
@@ -132,7 +136,7 @@ import kotlin.math.log
 import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
-import java.util.Locale
+import kotlin.toString
 
 private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 private const val messageTimeout = 2000
@@ -147,18 +151,46 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val permissionsState = rememberMultiplePermissionsState(
-        permissions = listOf(
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.FOREGROUND_SERVICE,
-            Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
-            Manifest.permission.CAMERA
-        )
+        when (Build.VERSION.SDK_INT) {
+            in 1..27 -> {
+                listOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH,
+                    Manifest.permission.CAMERA,
+                )
+            }
+            in 28..30 -> {
+                listOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.FOREGROUND_SERVICE,
+                )
+            }
+            in 31..33 -> {
+                listOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.FOREGROUND_SERVICE,
+                )
+            }
+            else -> {
+                listOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.FOREGROUND_SERVICE,
+                    Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
+                )
+            }
+        }
     )
     val allPermissionsGranted = permissionsState.allPermissionsGranted
-    val bluetoothPermissionGranted = permissionsState.permissions[0].hasPermission
-    val locationPermissionGranted = permissionsState.permissions[1].hasPermission
+    val bluetoothPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.BLUETOOTH }
+    val locationPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
 // Request permissions
     LaunchedEffect(allPermissionsGranted) {
         if (!allPermissionsGranted) 
@@ -199,13 +231,18 @@ fun HomeScreen(
     }
     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
     val rocketState by viewModel.rocketState.collectAsState()
+    val armedState = BluetoothManagerRepository.armedState.collectAsState().value
+    LaunchedEffect(rocketState.flightState) {
+        if (armedState && rocketState.flightState != null)
+            textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
+    }
     val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
     val orientation = LocalConfiguration.current.orientation
 
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
     var trackerLocation by remember { mutableStateOf<Location?>(null) }
-    LaunchedEffect(locationPermissionGranted) {
-        if (locationPermissionGranted) {
+    LaunchedEffect(locationPermissionState?.hasPermission) {
+        if (locationPermissionState?.hasPermission == true) {
             fusedLocationClient.lastLocation
                 .addOnSuccessListener { trackerLocation = it }
         }
@@ -395,7 +432,7 @@ fun HomeScreen(
                                         if (autoZoomMode) {
                                             if (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0) {
                                                 if (abs((distanceToLocator - previousDistanceToLocator).toFloat() / (previousDistanceToLocator + 1)) > 0.1) {
-                                                    cameraPositionStateZoom = 23 - log(distanceToLocator.toFloat(), 3f)
+                                                    cameraPositionStateZoom = 23 - log(distanceToLocator.toFloat(), 2.5f)
                                                     previousDistanceToLocator = distanceToLocator
                                                 }
                                             }
@@ -434,33 +471,37 @@ fun HomeScreen(
                                         horizontalAlignment = Alignment.Start
                                     ) {
                                         if (showControls) {
-                                            val armedState =
-                                                BluetoothManagerRepository.armedState.collectAsState().value
                                             Button(
                                                 onClick = {
                                                     if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                         || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
                                                     )
-                                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                                            LocatorArmedMessageState.SendRequested
-                                                        )
+                                                        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendRequested)
                                                 },
                                                 modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
                                             ) {
+                                                val armedStateText = if (armedState) stringResource(R.string.armed_state_armed) else stringResource(R.string.armed_state_disarmed)
                                                 Text(
                                                     when {
                                                         armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Armed"
-                                                        armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
-                                                        armedState -> "Disarming"
+                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) ->
+                                                                stringResource(id = R.string.armed_state_armed)
+                                                        armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure ->
+                                                            stringResource(id = R.string.bluetooth_state_disconnected)
+                                                        armedState -> stringResource(id = R.string.armed_state_disarming)
                                                         !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) -> "Disarmed"
-                                                        !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure -> "Disconnected"
-                                                        !armedState -> "Arming"
+                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) ->
+                                                            stringResource(id = R.string.armed_state_disarmed)
+                                                        !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure ->
+                                                            stringResource(id = R.string.bluetooth_state_disconnected)
+                                                        !armedState -> stringResource(id = R.string.armed_state_arming)
                                                         else -> "Unknown"
                                                     }
                                                 )
+                                                LaunchedEffect(armedState) {
+                                                    textToSpeech?.speak(armedStateText, TextToSpeech.QUEUE_FLUSH, null, null)
+                                                }
                                             }
                                             Button(
                                                 onClick = { autoTargetMode = !autoTargetMode },
@@ -508,7 +549,7 @@ fun HomeScreen(
                             }
                         }
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
-                            LocatorStats(rocketState, locatorConfig, modifier)
+                            LocatorStats(rocketState, distanceToLocator, locatorConfig, modifier, textToSpeech)
                         }
                     }
                 }
@@ -539,8 +580,8 @@ fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothCo
                 }
             }
         }
-        BluetoothConnectionState.Connected ->
-            textToSpeech?.speak("connected to reciever", TextToSpeech.QUEUE_FLUSH, null, null)
+        //BluetoothConnectionState.Connected ->
+        //    textToSpeech?.speak("connected to receiver", TextToSpeech.QUEUE_FLUSH, null, null)
         else -> {}
     }
 }
@@ -626,7 +667,7 @@ fun unpairBluetoothDevice() {
 }
 
 @Composable
-fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifier: Modifier) {
+fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig: LocatorConfig, modifier: Modifier, textToSpeech: TextToSpeech?) {
     var userMoved by remember { mutableStateOf(false) }
     var columnWidth by remember { mutableStateOf(0) }
     var columnHeight by remember { mutableStateOf(0) }
@@ -644,6 +685,10 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
     Column (
         modifier = modifier
             .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .clickable{
+                if (BluetoothManagerRepository.armedState.value && rocketState.flightState != null)
+                    textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
+            }
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
@@ -664,12 +709,38 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
         //verticalArrangement = Arrangement.Top,
         //horizontalAlignment = Alignment.Start
     ) {
-        Text(text = locatorConfig.deviceName)
+        Row {
+            Text(text = locatorConfig.deviceName)
+            Text(text = " ".repeat(RocketViewModel.DEVICE_NAME_LENGTH).take(RocketViewModel.DEVICE_NAME_LENGTH - locatorConfig.deviceName.length))
+            Icon(
+                painter = painterResource(R.drawable.rocket_md),
+                contentDescription = stringResource(id = R.string.locator_satellites)
+            )
+            Text(text = buildAnnotatedString {
+                withStyle(
+                    style = SpanStyle(
+                        fontSize = 10.sp, // Adjust the size of the superscript text
+                        baselineShift = BaselineShift.Superscript
+                    )
+                ) {
+                    append(rocketState.satellites.toString())
+                }
+            })
+            Text(text = " ")
+            val batteryLevel = rocketState.batteryLevel.coerceIn(0..7)
+            val drawableResourceID = context.resources.getIdentifier("battery_${batteryLevel}_bar", "drawable", context.packageName)
+            val stringResourceID = context.resources.getIdentifier("battery_${batteryLevel}_bar", "string", context.packageName)
+            Icon(
+                painter = painterResource(drawableResourceID),
+                contentDescription = stringResource(stringResourceID)
+            )
+        }
+        Text(text = "Dist: ${DecimalFormat("#,###").format(distanceToLocator)} m")
         if (BluetoothManagerRepository.armedState.value) {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (rocketState.flightState) {
-                    FlightStates.WaitingLaunch -> "On the pad"
+                    FlightStates.WaitingForLaunch -> "Waiting For Launch"
                     FlightStates.Launched -> "Launched"
                     FlightStates.Burnout -> "Burnout"
                     FlightStates.Noseover -> "Noseover"
@@ -684,7 +755,7 @@ fun LocatorStats(rocketState: RocketState, locatorConfig: LocatorConfig, modifie
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${round(rocketState.agl[0] * 10) / 10}m",
+                text = "AGL: ${rocketState.altitudeAboveGroundLevel}m",
                 style = typography.bodyLarge,
             )
         }
@@ -854,10 +925,6 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
     LaunchedEffect(zoomRatio) {
         camera?.cameraControl?.setZoomRatio(zoomRatio)
     }
-}
-
-fun Speak(textToSpeech: TextToSpeech?, textToSpeak: String) {
-    textToSpeech?.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, null, null)
 }
 
 @Composable

@@ -22,7 +22,6 @@ import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
-import com.steampigeon.flightmanager.data.ConfigMessageState
 import com.steampigeon.flightmanager.data.ReceiverConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +39,7 @@ import java.io.OutputStream
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 256
 private const val prelaunchMessageSize = 75
-private const val telemetryMessageSize = 90
+private const val telemetryMessageSize = 46
 private const val receiverConfigMessageSize = 4
 private const val deploymentTestMessageSize = 4
 private const val CHANNEL_ID = "BluetoothService"
@@ -109,7 +108,7 @@ class BluetoothService() : Service() {
                 // Keep listening to the InputStream until an exception occurs.
                 var loopCount = 0
                 while (true) {
-                    Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
+                    //Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
                     maintainLocatorDevicePairing()
                     if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected) {
                         // Read from the InputStream.
@@ -145,9 +144,9 @@ class BluetoothService() : Service() {
                             }
                         }
                         // Emit received message for viewmodel collection, update armed state, reset for next message
-                        Log.d(TAG, "Checking for message match")
-                        Log.d(TAG, "MessageType: $messageType")
-                        Log.d(TAG, "Received size: $currentMessageSize")
+                        //Log.d(TAG, "Checking for message match")
+                        //Log.d(TAG, "MessageType: $messageType")
+                        //Log.d(TAG, "Received size: $currentMessageSize")
                         when {
                             messageType == MessageType.Prelaunch && currentMessageSize >= prelaunchMessageSize -> {
                                 Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
