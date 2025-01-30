@@ -121,21 +121,26 @@ fun RocketApp(
     val orientation = LocalConfiguration.current.orientation
     var textToSpeech: TextToSpeech? by remember { mutableStateOf(null) }
     val voiceName = viewModel.voiceName.collectAsState().value
-    LaunchedEffect(voiceName) {
-        textToSpeech = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                textToSpeech?.language = Locale.US
-                val voices = textToSpeech?.voices
-                val desiredVoice = voices?.find { voice ->
-                    voice.name.contains(voiceName)
-                }
-                if (desiredVoice != null) {
-                    textToSpeech?.voice = desiredVoice
-                } else {
-                    // Handle case where voice is not found
+    val voiceEnabled = viewModel.voiceEnabled.collectAsState().value
+    LaunchedEffect(voiceEnabled, voiceName) {
+        if (voiceEnabled) {
+            textToSpeech = TextToSpeech(context) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    textToSpeech?.language = Locale.US
+                    val voices = textToSpeech?.voices
+                    val desiredVoice = voices?.find { voice ->
+                        voice.name.contains(voiceName)
+                    }
+                    if (desiredVoice != null) {
+                        textToSpeech?.voice = desiredVoice
+                    } else {
+                        // Handle case where voice is not found
+                    }
                 }
             }
         }
+        else
+            textToSpeech = null
     }
     Scaffold(
         topBar = {

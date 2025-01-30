@@ -25,9 +25,8 @@ data class RocketState(
     val accelerometer: Accelerometer = Accelerometer(0, 0, 0),
     val gForce: Float = 0f,
     val orientation: String = "",
-    val batteryVoltage: UShort = 0u,
+    val batteryLevel: Int = 0,
     val flightState: FlightStates? = null,
-    val agl: FloatArray = FloatArray(RocketViewModel.SAMPLES_PER_SECOND) { 0f },
 ) {
     data class Accelerometer(
         val x: Short = 0,
@@ -73,7 +72,7 @@ enum class DeploymentTestOption (val deploymentTestOption: UByte) {
 }
 
 enum class FlightStates (val flightStates: UByte) {
-    WaitingLaunch(0u),
+    WaitingForLaunch(0u),
     Launched(1u),
     Burnout(2u),
     Noseover(3u),
