@@ -25,6 +25,7 @@ data class RocketState(
     val accelerometer: Accelerometer = Accelerometer(0, 0, 0),
     val gForce: Float = 0f,
     val orientation: String = "",
+    val velocity: Float = 0f,
     val batteryLevel: Int = 0,
     val flightState: FlightStates? = null,
 ) {

@@ -234,3 +234,16 @@ private fun navigateToStart(
 ) {
     navController.popBackStack(RocketScreen.Start.name, inclusive = false)
 }
+
+fun saveData(context: Context, key: String, value: String) {
+    val sharedPref = context.getSharedPreferences("steam_pigeon_prefs", Context.MODE_PRIVATE)
+    with(sharedPref.edit()) {
+        putString(key, value)
+        apply()
+    }
+}
+
+fun loadData(context: Context, key: String, defaultValue: String): String {
+    val sharedPref = context.getSharedPreferences("steam_pigeon_prefs", Context.MODE_PRIVATE)
+    return sharedPref.getString(key, defaultValue) ?: defaultValue
+}

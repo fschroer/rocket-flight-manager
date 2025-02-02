@@ -1,12 +1,18 @@
 package com.steampigeon.flightmanager.ui
 
+import android.app.Application
+import android.content.Context
 import android.hardware.SensorManager
-import androidx.lifecycle.ViewModel
+import androidx.compose.ui.unit.IntOffset
+import androidx.datastore.core.DataStore
+import androidx.datastore.dataStore
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.maps.model.LatLng
 import com.mutualmobile.composesensors.AccelerometerSensorState
 import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
+import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.ConfigMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.RocketState
@@ -21,6 +27,7 @@ import kotlin.math.sqrt
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.ReceiverConfig
+import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import kotlinx.coroutines.delay
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -28,17 +35,69 @@ import kotlin.math.sin
 
 private const val TAG = "RocketViewModel"
 
+val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
+    fileName = "user_prefs.pb",
+    serializer = UserPreferencesSerializer
+)
+
 /**
  * [RocketViewModel] holds rocket locator status
  */
 
-class RocketViewModel() : ViewModel() {
+class RocketViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val SAMPLES_PER_SECOND = 20
         private const val ALTIMETER_SCALE = 10
         private const val ACCELEROMETER_SCALE = 2048
         private const val BATTERY_SCALE = 8.0 / 4096
         const val DEVICE_NAME_LENGTH = 12
+    }
+
+    //private val _userPreferences = MutableStateFlow(UserPreferences.getDefaultInstance())
+    //val userPreferences: StateFlow<UserPreferences> = _userPreferences.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            application.userPreferencesDataStore.data.collect { preferences ->
+                //_userPreferences.value = preferences
+                _locatorStatisticsOffset.value = IntOffset(preferences.locatorStatisticsOffsetX, preferences.locatorStatisticsOffsetY)
+                _voiceEnabled.value = preferences.voiceEnabled
+                _voiceName.value = preferences.voiceName
+            }
+        }
+    }
+
+    val currentContext = application
+    suspend fun saveUserPreferences() {
+        currentContext.userPreferencesDataStore.updateData { userPreferences ->
+            userPreferences.toBuilder()
+                .setLocatorStatisticsOffsetX(_locatorStatisticsOffset.value.x)
+                .setLocatorStatisticsOffsetY(_locatorStatisticsOffset.value.y)
+                .setVoiceEnabled(_voiceEnabled.value)
+                .setVoiceName(_voiceName.value)
+                .build()
+        }
+    }
+
+    private val _voiceEnabled = MutableStateFlow<Boolean>(true)
+    val voiceEnabled: StateFlow<Boolean> = _voiceEnabled.asStateFlow()
+
+    fun updateVoiceEnabled(newVoiceEnabled: Boolean) {
+        _voiceEnabled.value = newVoiceEnabled
+    }
+
+    private val _voiceName = MutableStateFlow<String>("us-x-iob-local")
+    val voiceName: StateFlow<String> = _voiceName.asStateFlow()
+
+    fun updateVoiceName(newVoiceName: String) {
+        _voiceName.value = newVoiceName
+    }
+
+    private val _locatorStatisticsOffset = MutableStateFlow<IntOffset>(IntOffset(0,0))
+    val locatorStatisticsOffset: StateFlow<IntOffset> = _locatorStatisticsOffset.asStateFlow()
+
+    fun updateLocatorStatisticsOffset(newOffset: IntOffset) {
+        _locatorStatisticsOffset.value = newOffset
     }
 
     private val _handheldDeviceAzimuth = MutableStateFlow<Float>(0f)
@@ -101,31 +160,18 @@ class RocketViewModel() : ViewModel() {
         _deploymentTestCountdown.value = newDeploymentTestCountdown
     }
 
-    private val _voiceEnabled = MutableStateFlow<Boolean>(true)
-    val voiceEnabled: StateFlow<Boolean> = _voiceEnabled.asStateFlow()
-
-    fun updateVoiceEnabled(newVoiceEnabled: Boolean) {
-        _voiceEnabled.value = newVoiceEnabled
-    }
-
-    private val _voiceName = MutableStateFlow<String>("us-x-iob-local")
-    val voiceName: StateFlow<String> = _voiceName.asStateFlow()
-
-    fun updateVoiceName(newVoiceName: String) {
-        _voiceName.value = newVoiceName
-    }
-
     fun collectInboundMessageData(service: BluetoothService) {
         viewModelScope.launch {
             service.data.collect { locatorMessage ->
                 val currentTime = System.currentTimeMillis()
                 when {
                     locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader) -> {
-                        val rawGForce = sqrt(
-                            (_rocketState.value.accelerometer.x * _rocketState.value.accelerometer.x
-                                    + _rocketState.value.accelerometer.y * _rocketState.value.accelerometer.y
-                                    + _rocketState.value.accelerometer.z * _rocketState.value.accelerometer.z).toFloat()
+                        val accelerometer = RocketState.Accelerometer(
+                            byteArrayToShort(locatorMessage, 43),
+                            byteArrayToShort(locatorMessage, 45),
+                            byteArrayToShort(locatorMessage, 47)
                         )
+                        val rawGForce = sqrt((accelerometer.x * accelerometer.x + accelerometer.y * accelerometer.y + accelerometer.z * accelerometer.z).toFloat())
                         _rocketState.update { currentState ->
                             currentState.copy(
                                 lastPreLaunchMessageTime = currentTime,
@@ -139,11 +185,7 @@ class RocketViewModel() : ViewModel() {
                                 deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
                                 deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
                                 altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
-                                accelerometer = RocketState.Accelerometer(
-                                    byteArrayToShort(locatorMessage, 43),
-                                    byteArrayToShort(locatorMessage, 45),
-                                    byteArrayToShort(locatorMessage, 47)
-                                ),
+                                accelerometer = accelerometer,
                                 gForce = rawGForce / ACCELEROMETER_SCALE,
                                 orientation =
                                 when {
@@ -174,6 +216,12 @@ class RocketViewModel() : ViewModel() {
                     }
 
                     locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader) -> {
+                        val accelerometer = RocketState.Accelerometer(
+                            byteArrayToShort(locatorMessage, 43),
+                            byteArrayToShort(locatorMessage, 45),
+                            byteArrayToShort(locatorMessage, 47)
+                        )
+                        val rawGForce = sqrt((accelerometer.x * accelerometer.x + accelerometer.y * accelerometer.y + accelerometer.z * accelerometer.z).toFloat())
                         _rocketState.update { currentState ->
                             currentState.copy(
                                 lastPreLaunchMessageTime = currentTime,
@@ -182,9 +230,22 @@ class RocketViewModel() : ViewModel() {
                                 qInd = locatorMessage[27].toUByte(),
                                 satellites = locatorMessage[28].toUByte(),
                                 hdop = byteArrayToFloat(locatorMessage, 29),
-                                flightState = FlightStates.fromUByte(locatorMessage[40].toUByte())
-                                    ?: currentState.flightState,
+                                altimeterStatus = (locatorMessage[40].and(8).toInt() ushr 3) == 1,
+                                accelerometerStatus = (locatorMessage[40].and(4).toInt() ushr 2) == 1,
+                                deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
+                                deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
                                 altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
+                                accelerometer = accelerometer,
+                                gForce = rawGForce / ACCELEROMETER_SCALE,
+                                orientation =
+                                when {
+                                    _rocketState.value.accelerometer.x.toFloat() / rawGForce < -0.5 -> "up"
+                                    _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
+                                    else -> "side"
+                                },
+                                velocity = byteArrayToFloat(locatorMessage, 49),
+                                flightState = FlightStates.fromUByte(locatorMessage[53].toUByte()) ?: currentState.flightState,
+                                //altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 52).toFloat() / ALTIMETER_SCALE,
                             )
                         }
 //                        val inFlight = (_rocketState.value.flightState

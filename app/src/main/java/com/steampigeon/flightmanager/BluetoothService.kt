@@ -38,8 +38,8 @@ import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 256
-private const val prelaunchMessageSize = 75
-private const val telemetryMessageSize = 46
+private const val prelaunchMessageSize = 75 // LoRa message size(74) + channel(1) = 75
+private const val telemetryMessageSize = 56
 private const val receiverConfigMessageSize = 4
 private const val deploymentTestMessageSize = 4
 private const val CHANNEL_ID = "BluetoothService"
@@ -126,7 +126,7 @@ class BluetoothService() : Service() {
                             )
                         }
                         if (currentMessageSize >= 3) {
-                            Log.d(TAG, logByteArrayAsChars(inboundMessageBuffer, currentMessageSize))
+                            //Log.d(TAG, logByteArrayAsChars(inboundMessageBuffer, currentMessageSize))
                             // Update message type
                             when {
                                 inboundMessageBuffer.copyOfRange(0, 3).contentEquals(prelaunchMessageHeader) -> {
@@ -149,7 +149,7 @@ class BluetoothService() : Service() {
                         //Log.d(TAG, "Received size: $currentMessageSize")
                         when {
                             messageType == MessageType.Prelaunch && currentMessageSize >= prelaunchMessageSize -> {
-                                Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
+                                //Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
                                 _data.emit(inboundMessageBuffer.copyOfRange(0, prelaunchMessageSize))
                                 if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
                                     BluetoothManagerRepository.updateArmedState(false)
@@ -171,7 +171,7 @@ class BluetoothService() : Service() {
                             }
 
                             messageType == MessageType.Telemetry && currentMessageSize >= telemetryMessageSize -> {
-                                Log.d(TAG, "Telemetry message detected, $currentMessageSize")
+                                //Log.d(TAG, "Telemetry message detected, $currentMessageSize")
                                 _data.emit(inboundMessageBuffer.copyOfRange(0, telemetryMessageSize))
                                 if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
                                     BluetoothManagerRepository.updateArmedState(true)
@@ -192,12 +192,12 @@ class BluetoothService() : Service() {
                                 clearMessage()
                             }
                             messageType == MessageType.ReceiverConfig && currentMessageSize >= receiverConfigMessageSize -> {
-                                Log.d(TAG, "Receiver config message detected, $currentMessageSize")
+                                //Log.d(TAG, "Receiver config message detected, $currentMessageSize")
                                 _data.emit(inboundMessageBuffer.copyOfRange(0, receiverConfigMessageSize))
                                 clearMessage()
                             }
                             messageType == MessageType.DeploymentTest && currentMessageSize >= deploymentTestMessageSize -> {
-                                Log.d(TAG, "Deployment test message detected, $currentMessageSize")
+                                //Log.d(TAG, "Deployment test message detected, $currentMessageSize")
                                 _data.emit(inboundMessageBuffer.copyOfRange(0, deploymentTestMessageSize))
                                 clearMessage()
                             }
