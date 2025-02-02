@@ -135,6 +135,11 @@ fun AppSettingsScreen(
                     }
                 }
             }
+            LaunchedEffect(voiceEnabled, voiceName) {
+                viewModel.updateVoiceEnabled(voiceEnabled)
+                viewModel.updateVoiceName(voiceName)
+                viewModel.saveUserPreferences()
+            }
             // Capture initial and updated app configuration data.
         }
         Spacer (modifier = modifier.weight(1f))

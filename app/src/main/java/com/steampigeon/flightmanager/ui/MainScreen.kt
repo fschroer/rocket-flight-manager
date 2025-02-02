@@ -83,6 +83,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -95,6 +96,7 @@ import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -134,7 +136,6 @@ import java.util.regex.Pattern
 import kotlin.math.abs
 import kotlin.math.log
 import kotlin.math.round
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import kotlin.toString
 
@@ -219,7 +220,7 @@ fun HomeScreen(
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var isMapLoaded by remember { mutableStateOf(false) }
-    val uiSettings = remember { MapUiSettings(compassEnabled = false,
+    val mapUiSettings = remember { MapUiSettings(compassEnabled = false,
         indoorLevelPickerEnabled = false,
         mapToolbarEnabled = false,
         myLocationButtonEnabled = false,
@@ -232,9 +233,69 @@ fun HomeScreen(
     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
     val rocketState by viewModel.rocketState.collectAsState()
     val armedState = BluetoothManagerRepository.armedState.collectAsState().value
+    var previousAGL by remember { mutableStateOf(0f)}
+    var deployChannel1LaunchConnectivity by remember { mutableStateOf(false)}
+    var deployChannel2LaunchConnectivity by remember { mutableStateOf(false)}
+    var drogueDeploySpoken by remember { mutableStateOf(false)}
+    var mainDeploySpoken by remember { mutableStateOf(false)}
     LaunchedEffect(rocketState.flightState) {
-        if (armedState && rocketState.flightState != null)
-            textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
+        if (armedState && rocketState.flightState != null) {
+            when (rocketState.flightState) {
+                FlightStates.Burnout ->
+                    textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
+                FlightStates.Launched -> {
+                    deployChannel1LaunchConnectivity = rocketState.deployChannel1Armed
+                    deployChannel2LaunchConnectivity = rocketState.deployChannel2Armed
+                }
+                FlightStates.DroguePrimaryDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary)
+                        textToSpeech?.speak("Drogue," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.DrogueBackupDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
+                        textToSpeech?.speak("Drogue backup," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.MainPrimaryDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary || locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup)
+                        textToSpeech?.speak("Main," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.MainBackupDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
+                        textToSpeech?.speak("Main backup," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.Landed -> {
+                    deployChannel1LaunchConnectivity = false
+                    deployChannel2LaunchConnectivity = false
+                    drogueDeploySpoken = false
+                    mainDeploySpoken = false
+                }
+                else -> {}
+            }
+        }
+    }
+    LaunchedEffect(rocketState.altitudeAboveGroundLevel) {
+        rocketState.flightState?.let {
+            if (armedState) {
+                if (it.ordinal < FlightStates.Noseover.ordinal) {
+                    textToSpeech?.isSpeaking?.let { isSpeaking ->
+                        if (!isSpeaking)
+                            textToSpeech.speak("${rocketState.altitudeAboveGroundLevel} meters AGL... ", TextToSpeech.QUEUE_ADD, null, null)
+                    }
+                }
+                else if (it.ordinal > FlightStates.MainPrimaryDeployed.ordinal) {
+                    if (rocketState.velocity < -25)
+                        textToSpeech?.speak("Ballistic!" + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
+                    else {
+                        drogueDeploySpoken = true
+                        textToSpeech?.speak("Drogue deployed," + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
+                    }
+                }
+                else if (it.ordinal > FlightStates.DroguePrimaryDeployed.ordinal) {
+                    if (rocketState.velocity < -25)
+                        textToSpeech?.speak("Ballistic!" + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
+                    else if(rocketState.velocity > -8) {
+                        mainDeploySpoken = true
+                        textToSpeech?.speak("Main deployed," + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
+                    }
+                }
+            }
+        }
     }
     val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
     val orientation = LocalConfiguration.current.orientation
@@ -366,7 +427,11 @@ fun HomeScreen(
                 }
             }
         ) {
+            var scaffoldSize by remember { mutableStateOf(IntSize(0, 0)) }
             Scaffold(
+                modifier = Modifier.onGloballyPositioned { coordinates ->
+                    scaffoldSize = coordinates.size
+                },
                 floatingActionButton = {
                     ExtendedFloatingActionButton(
                         text = { Text("Menu") },
@@ -396,7 +461,7 @@ fun HomeScreen(
                             onMapLoaded = { isMapLoaded = true },
                             cameraPositionState = cameraPositionState,
                             properties = properties,
-                            uiSettings = uiSettings,
+                            uiSettings = mapUiSettings,
                             onMapClick = { showControls = !showControls }
                         ) {
                             Marker(
@@ -471,7 +536,7 @@ fun HomeScreen(
                                         horizontalAlignment = Alignment.Start
                                     ) {
                                         if (showControls) {
-                                            Button(
+                                            Button( //Arm/disarm
                                                 onClick = {
                                                     if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
                                                         || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
@@ -503,13 +568,13 @@ fun HomeScreen(
                                                     textToSpeech?.speak(armedStateText, TextToSpeech.QUEUE_FLUSH, null, null)
                                                 }
                                             }
-                                            Button(
+                                            Button( //Auto-center
                                                 onClick = { autoTargetMode = !autoTargetMode },
                                                 modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
                                             ) {
                                                 Text(when (autoTargetMode) { true -> "Auto center" false -> "Manual center" }) }
-                                            Button(
+                                            Button( //Auto-zoom
                                                 onClick = { autoZoomMode = !autoZoomMode },
                                                 modifier = Modifier.padding(4.dp).size(width = 120.dp, height = 40.dp),
                                                 contentPadding = PaddingValues(0.dp)
@@ -549,7 +614,7 @@ fun HomeScreen(
                             }
                         }
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
-                            LocatorStats(rocketState, distanceToLocator, locatorConfig, modifier, textToSpeech)
+                            LocatorStats(rocketState, distanceToLocator, locatorConfig, viewModel, scaffoldSize, textToSpeech, modifier)
                         }
                     }
                 }
@@ -667,24 +732,19 @@ fun unpairBluetoothDevice() {
 }
 
 @Composable
-fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig: LocatorConfig, modifier: Modifier, textToSpeech: TextToSpeech?) {
-    var userMoved by remember { mutableStateOf(false) }
+fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig: LocatorConfig, viewModel: RocketViewModel, scaffoldSize: IntSize, textToSpeech: TextToSpeech?, modifier: Modifier) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
     var columnWidth by remember { mutableStateOf(0) }
     var columnHeight by remember { mutableStateOf(0) }
-    val configuration = LocalConfiguration.current
-    val context = LocalContext.current
-    val initialPositionX = configuration.screenWidthDp.dp.value.toFloat() * context.resources.displayMetrics.density - columnWidth * 1.3f
-    val initialPositionY = configuration.screenHeightDp.dp.value.toFloat() * context.resources.displayMetrics.density - columnHeight * 2.2f
-    var offsetX by remember { mutableStateOf(0f) }
-    var offsetY by remember { mutableStateOf(0f) }
-    if (!userMoved && columnWidth > 0) {
-        offsetX = initialPositionX
-        offsetY = initialPositionY
-        userMoved = true
+    var locatorStatisticsOffset by remember { mutableStateOf(IntOffset(0, 0))}
+    LaunchedEffect(Unit) {
+        locatorStatisticsOffset = viewModel.locatorStatisticsOffset.value
     }
     Column (
         modifier = modifier
-            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+            .offset { locatorStatisticsOffset }
             .clickable{
                 if (BluetoothManagerRepository.armedState.value && rocketState.flightState != null)
                     textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
@@ -692,8 +752,8 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
-                    offsetX += dragAmount.x
-                    offsetY += dragAmount.y
+                    locatorStatisticsOffset = IntOffset((locatorStatisticsOffset.x + dragAmount.x.toInt()).coerceIn(16, scaffoldSize.width - columnWidth - 48),
+                        (locatorStatisticsOffset.y + dragAmount.y.toInt()).coerceIn(16, scaffoldSize.height - columnHeight - 48))
                 }
             }
             //.size(200.dp, 100.dp)
@@ -703,6 +763,8 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
             .onSizeChanged { size ->
                 columnWidth = size.width
                 columnHeight = size.height
+                locatorStatisticsOffset = IntOffset((locatorStatisticsOffset.x).coerceIn(16, scaffoldSize.width - columnWidth - 48),
+                    (locatorStatisticsOffset.y).coerceIn(16, scaffoldSize.height - columnHeight - 48))
             }
             .defaultMinSize(minWidth = 160.dp)
         ,
@@ -812,6 +874,10 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
                 color = if (rocketState.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
         }
+    }
+    LaunchedEffect(locatorStatisticsOffset) {
+        viewModel.updateLocatorStatisticsOffset(locatorStatisticsOffset)
+        viewModel.saveUserPreferences()
     }
 }
 

@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("org.jetbrains.kotlin.plugin.noarg") version "1.8.22"
+    alias(libs.plugins.protobuf)
 }
 
 android {
@@ -105,8 +106,39 @@ dependencies {
     implementation(libs.androidx.runtime.livedata)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.activity.ktx)
-    implementation (libs.androidx.camera.core)
-    implementation (libs.androidx.camera.camera2)
-    implementation (libs.androidx.camera.lifecycle)
-    implementation (libs.androidx.camera.view)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.datastore)
+    implementation(libs.protobuf.java) // Or the appropriate version
+    implementation(libs.protobuf.java.util)
+    implementation(libs.protobuf.kotlin) // If using Kotlin
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:4.27.0"
+    }
+    // Generates the java Protobuf-lite code for the Protobufs in this project. See
+    // https://github.com/google/protobuf-gradle-plugin#customizing-protobuf-compilation
+    // for more information.
+    generateProtoTasks {
+        // see https://github.com/google/protobuf-gradle-plugin/issues/518
+        // see https://github.com/google/protobuf-gradle-plugin/issues/491
+        // all() here because of android multi-variant
+        all().forEach { task ->
+            // this only works on version 3.8+ that has buildins for javalite / kotlin lite
+            // with previous version the java build in is to be removed and a new plugin
+            // need to be declared
+            task.builtins {
+                create("java") {
+                    option("lite")
+                }
+                create("kotlin") {
+                    option("lite")
+                }
+            }
+        }
+    }
 }

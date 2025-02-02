@@ -61,7 +61,8 @@ import kotlin.reflect.KClass
 private const val TAG = "LocatorSettings"
 private const val maxDelayMillis: Long = 500
 private const val minDelayMillis: Long = 100
-private const val delayDecayFactor: Float = .25f
+private const val delayDecayFactor = .25f
+private const val configItemWidth = 6f
 
 /**
  * Composable that displays map download options,
@@ -295,7 +296,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                     onConfigUpdate(currentValue)
                 }
             }
-                .weight(6f),
+                .weight(configItemWidth),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -348,7 +349,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                     onConfigUpdate(configValue)
                 }
             }
-                .weight(6f),
+                .weight(configItemWidth),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -391,7 +392,7 @@ fun ConfigurationItemText(configItemName: String,
             onValueChange = { newValue ->
                 onConfigUpdate(newValue)
             },
-            modifier = modifier.weight(6f),
+            modifier = modifier.weight(configItemWidth),
             enabled = configMessageState == ConfigMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
@@ -421,7 +422,6 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        modifier = Modifier.heightIn(max = 32.dp),
         enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content
@@ -456,7 +456,6 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        modifier = Modifier.heightIn(max = 32.dp),
         enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == ConfigMessageState.Idle,
         interactionSource = interactionSource,
         content = content

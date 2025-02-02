@@ -5,8 +5,7 @@ bluetooth = "1.0.0-alpha02"
 cameraCore = "1.4.1"
 composesensors = "1.2.0"
 coreKtxVersion = "1.15.0"
-hiltAndroid = "2.51.1"
-hiltNavigationCompose = "1.2.0"
+datastoreCore = "1.1.2"
 kotlin = "2.0.0"
 coreKtx = "1.15.0"
 junit = "4.13.2"
@@ -14,19 +13,23 @@ junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 kotlinxCoroutinesAndroid = "1.8.1"
 lifecycleRuntimeKtx = "2.8.7"
-activityCompose = "1.9.3"
-composeBom = "2024.12.01"
+activityCompose = "1.10.0"
+composeBom = "2025.01.01"
 lifecycleRuntimeKtxVersion = "2.8.7"
 mapsComposeVersion = "4.4.1"
-material = "1.7.6"
+material = "1.7.7"
 playServicesLocation = "21.3.0"
 playServicesMaps = "19.0.0"
 playServicesNearby = "19.3.0"
-runtimeLivedata = "1.7.6"
-ui = "1.7.6"
-uiTextGoogleFonts = "1.7.6"
-navigationRuntimeKtx = "2.8.5"
-navigationCompose = "2.8.5"
+protobufJava = "3.22.3"
+protobufJavaUtil = "3.22.3"
+protobufKotlin = "3.22.2"
+protobuf-plugin = "0.9.4"
+runtimeLivedata = "1.7.7"
+ui = "1.7.7"
+uiTextGoogleFonts = "1.7.7"
+navigationRuntimeKtx = "2.8.6"
+navigationCompose = "2.8.6"
 appcompat = "1.7.0"
 
 [libraries]
@@ -39,6 +42,7 @@ androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", versi
 androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "cameraCore" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-core-ktx-v190 = { module = "androidx.core:core-ktx", version.ref = "coreKtxVersion" }
+androidx-datastore = { module = "androidx.datastore:datastore", version.ref = "datastoreCore" }
 androidx-lifecycle-runtime-ktx-v287 = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtxVersion" }
 androidx-lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycleRuntimeKtxVersion" }
 androidx-material = { module = "androidx.compose.material:material", version.ref = "material" }
@@ -68,10 +72,13 @@ maps-compose-widgets = { module = "com.google.maps.android:maps-compose-widgets"
 play-services-location = { module = "com.google.android.gms:play-services-location", version.ref = "playServicesLocation" }
 play-services-maps = { module = "com.google.android.gms:play-services-maps", version.ref = "playServicesMaps" }
 play-services-nearby = { module = "com.google.android.gms:play-services-nearby", version.ref = "playServicesNearby" }
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobufJava" }
+protobuf-java-util = { module = "com.google.protobuf:protobuf-java-util", version.ref = "protobufJavaUtil" }
+protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobufKotlin" }
 ui = { module = "androidx.compose.ui:ui", version.ref = "ui" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-
+protobuf = { id = "com.google.protobuf", version.ref = "protobuf-plugin" }

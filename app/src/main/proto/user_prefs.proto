@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option java_package = "com.steampigeon.flightmanager";
+option java_multiple_files = true;
+
+message UserPreferences {
+  // Locator statistics screen offset
+  int32 locator_statistics_offset_x = 1;
+  int32 locator_statistics_offset_y = 2;
+  bool voice_enabled = 3;
+  string voice_name = 4;
+}
