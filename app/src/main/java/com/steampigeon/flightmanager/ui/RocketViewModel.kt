@@ -110,6 +110,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val locatorDistance: StateFlow<Int> = _locatorDistance.asStateFlow()
     private val _locatorAzimuth = MutableStateFlow<Float>(0f)
     val locatorAzimuth: StateFlow<Float> = _locatorAzimuth.asStateFlow()
+    private val _locatorOrdinal = MutableStateFlow<String>("")
+    val locatorOrdinal: StateFlow<String> = _locatorOrdinal.asStateFlow()
     private val _locatorElevation = MutableStateFlow<Float>(0f)
     val locatorElevation: StateFlow<Float> = _locatorElevation.asStateFlow()
 
@@ -193,7 +195,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                batteryLevel = ((byteArrayToShort(locatorMessage, 72) - 3686.4) / 409.6 * 8).toInt(),
+                                locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 72) - 3686.4) / 409.6 * 8).toInt(),
+                                receiverBatteryLevel = ((byteArrayToShort(locatorMessage, 75) - 3686.4) / 409.6 * 8).toInt(),
                             )
                         }
                         _remoteLocatorConfig.update { currentState ->
@@ -329,7 +332,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val y = sin(dLon) * cos(lat2Rad)
         val x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLon)
         _locatorAzimuth.value = ((Math.toDegrees(atan2(y, x)) + 360) % 360).toFloat()
-
+        _locatorOrdinal.value = when {
+            _locatorAzimuth.value.toInt() in (0..22) -> "north"
+            _locatorAzimuth.value.toInt() in (23..67) -> "northeast"
+            _locatorAzimuth.value.toInt() in (68..112) -> "east"
+            _locatorAzimuth.value.toInt() in (113..157) -> "southeast"
+            _locatorAzimuth.value.toInt() in (158..202) -> "south"
+            _locatorAzimuth.value.toInt() in (203..247) -> "southwest"
+            _locatorAzimuth.value.toInt() in (248..292) -> "west"
+            _locatorAzimuth.value.toInt() in (293..337) -> "northwest"
+            _locatorAzimuth.value.toInt() in (338..359) -> "north"
+            else -> ""
+        }
         _locatorElevation.value = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, _locatorDistance.value.toFloat()).toDouble()) + 360) % 360).toFloat()
     }
 
