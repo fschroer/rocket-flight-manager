@@ -38,7 +38,7 @@ import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 256
-private const val prelaunchMessageSize = 75 // LoRa message size(74) + channel(1) = 75
+private const val prelaunchMessageSize = 77 // LoRa message size (74) + channel (1) + receiver battery level (2) = 77
 private const val telemetryMessageSize = 56
 private const val receiverConfigMessageSize = 4
 private const val deploymentTestMessageSize = 4

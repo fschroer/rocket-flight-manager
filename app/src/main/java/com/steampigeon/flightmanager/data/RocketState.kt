@@ -2,7 +2,6 @@ package com.steampigeon.flightmanager.data
 
 import android.bluetooth.BluetoothDevice
 import com.steampigeon.flightmanager.data.RocketState.Accelerometer
-import com.steampigeon.flightmanager.ui.RocketViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +25,8 @@ data class RocketState(
     val gForce: Float = 0f,
     val orientation: String = "",
     val velocity: Float = 0f,
-    val batteryLevel: Int = 0,
+    val locatorBatteryLevel: Int = 0,
+    val receiverBatteryLevel: Int = 0,
     val flightState: FlightStates? = null,
 ) {
     data class Accelerometer(

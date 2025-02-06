@@ -141,6 +141,10 @@ import kotlin.toString
 
 private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 private const val messageTimeout = 2000
+private const val drogueVelocityThreshold = -25
+private const val mainVelocityThreshold = -8
+private const val landingAltitudeThreshold = 100
+private const val minimumSpokenAGLVelocity = 2 * 9.8
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
 @Composable
@@ -236,67 +240,10 @@ fun HomeScreen(
     var previousAGL by remember { mutableStateOf(0f)}
     var deployChannel1LaunchConnectivity by remember { mutableStateOf(false)}
     var deployChannel2LaunchConnectivity by remember { mutableStateOf(false)}
+    var apogeeSpoken by remember { mutableStateOf(false)}
     var drogueDeploySpoken by remember { mutableStateOf(false)}
     var mainDeploySpoken by remember { mutableStateOf(false)}
-    LaunchedEffect(rocketState.flightState) {
-        if (armedState && rocketState.flightState != null) {
-            when (rocketState.flightState) {
-                FlightStates.Burnout ->
-                    textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
-                FlightStates.Launched -> {
-                    deployChannel1LaunchConnectivity = rocketState.deployChannel1Armed
-                    deployChannel2LaunchConnectivity = rocketState.deployChannel2Armed
-                }
-                FlightStates.DroguePrimaryDeployed ->
-                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary)
-                        textToSpeech?.speak("Drogue," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
-                FlightStates.DrogueBackupDeployed ->
-                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
-                        textToSpeech?.speak("Drogue backup," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
-                FlightStates.MainPrimaryDeployed ->
-                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary || locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup)
-                        textToSpeech?.speak("Main," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
-                FlightStates.MainBackupDeployed ->
-                    if (locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
-                        textToSpeech?.speak("Main backup," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_ADD, null, null)
-                FlightStates.Landed -> {
-                    deployChannel1LaunchConnectivity = false
-                    deployChannel2LaunchConnectivity = false
-                    drogueDeploySpoken = false
-                    mainDeploySpoken = false
-                }
-                else -> {}
-            }
-        }
-    }
-    LaunchedEffect(rocketState.altitudeAboveGroundLevel) {
-        rocketState.flightState?.let {
-            if (armedState) {
-                if (it.ordinal < FlightStates.Noseover.ordinal) {
-                    textToSpeech?.isSpeaking?.let { isSpeaking ->
-                        if (!isSpeaking)
-                            textToSpeech.speak("${rocketState.altitudeAboveGroundLevel} meters AGL... ", TextToSpeech.QUEUE_ADD, null, null)
-                    }
-                }
-                else if (it.ordinal > FlightStates.MainPrimaryDeployed.ordinal) {
-                    if (rocketState.velocity < -25)
-                        textToSpeech?.speak("Ballistic!" + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
-                    else {
-                        drogueDeploySpoken = true
-                        textToSpeech?.speak("Drogue deployed," + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
-                    }
-                }
-                else if (it.ordinal > FlightStates.DroguePrimaryDeployed.ordinal) {
-                    if (rocketState.velocity < -25)
-                        textToSpeech?.speak("Ballistic!" + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
-                    else if(rocketState.velocity > -8) {
-                        mainDeploySpoken = true
-                        textToSpeech?.speak("Main deployed," + rocketState.altitudeAboveGroundLevel + "meters AGL", TextToSpeech.QUEUE_FLUSH, null, null)
-                    }
-                }
-            }
-        }
-    }
+    var landingSpoken by remember { mutableStateOf(false)}
     val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
     val orientation = LocalConfiguration.current.orientation
 
@@ -322,8 +269,93 @@ fun HomeScreen(
     }
     val distanceToLocator = viewModel.locatorDistance.collectAsState().value
     val azimuthToLocator = viewModel.locatorAzimuth.collectAsState().value
+    val ordinalToLocator = viewModel.locatorOrdinal.collectAsState().value
     val handheldDevicePitch = viewModel.handheldDevicePitch.collectAsState().value
     val locatorElevation = viewModel.locatorElevation.collectAsState().value
+
+    LaunchedEffect(rocketState.flightState) {
+        if (armedState && rocketState.flightState != null) {
+            when (rocketState.flightState) {
+                FlightStates.Launched -> {
+                    deployChannel1LaunchConnectivity = rocketState.deployChannel1Armed
+                    deployChannel2LaunchConnectivity = rocketState.deployChannel2Armed
+                }
+                FlightStates.Burnout ->
+                    textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
+                FlightStates.DroguePrimaryDeployed ->
+                    if ((locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary) &&
+                        deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                        textToSpeech?.speak("Drogue charge.", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.DrogueBackupDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed ||
+                        locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                        textToSpeech?.speak("Drogue backup charge.", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.MainPrimaryDeployed ->
+                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed ||
+                        locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                        textToSpeech?.speak("Main charge.", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.MainBackupDeployed ->
+                    if ((locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup) &&
+                        deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
+                        textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
+                FlightStates.Landed -> {
+                    deployChannel1LaunchConnectivity = false
+                    deployChannel2LaunchConnectivity = false
+                    apogeeSpoken = false
+                    drogueDeploySpoken = false
+                    mainDeploySpoken = false
+                    landingSpoken = false
+                }
+                else -> {}
+            }
+        }
+    }
+    LaunchedEffect(rocketState.altitudeAboveGroundLevel) {
+        rocketState.flightState?.let {
+            if (armedState) {
+                when (it) {
+                    FlightStates.Burnout -> {
+                        textToSpeech?.isSpeaking?.let { isSpeaking ->
+                            //if (!isSpeaking)
+                            //    textToSpeech.speak("${rocketState.velocity.toInt()} meters per second. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                            if (!isSpeaking && rocketState.velocity > minimumSpokenAGLVelocity)
+                                textToSpeech.speak("${rocketState.altitudeAboveGroundLevel.toInt()} meters. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                        }
+                    }
+
+                    FlightStates.Noseover -> {
+                        if (!apogeeSpoken) {
+                            apogeeSpoken = true
+                            textToSpeech?.speak("Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters, $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                        }
+                    }
+                    FlightStates.DroguePrimaryDeployed,
+                    FlightStates.DrogueBackupDeployed,
+                    FlightStates.MainPrimaryDeployed,
+                    FlightStates.MainBackupDeployed -> {
+                        if (!mainDeploySpoken && rocketState.velocity > mainVelocityThreshold) {
+                            mainDeploySpoken = true
+                            drogueDeploySpoken = true
+                            textToSpeech?.speak("Main deployed $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                        else if (!drogueDeploySpoken && rocketState.velocity > drogueVelocityThreshold) {
+                            drogueDeploySpoken = true
+                            textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                    }
+                    else -> {}
+                }
+                textToSpeech?.isSpeaking?.let { isSpeaking ->
+                    if (it.ordinal > FlightStates.Noseover.ordinal && lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken)
+                            textToSpeech.speak("Descent warning, ${-rocketState.velocity.toInt()} meters per second, $distanceToLocator meters $ordinalToLocator of launch point. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                }
+                if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
+                    landingSpoken = true
+                    textToSpeech?.speak("Landing $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                }
+            }
+        }
+    }
 
     if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
         CameraPreviewScreen(azimuth, azimuthToLocator, handheldDevicePitch, locatorElevation)
@@ -789,12 +821,19 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
                 }
             })
             Text(text = " ")
-            val batteryLevel = rocketState.batteryLevel.coerceIn(0..7)
-            val drawableResourceID = context.resources.getIdentifier("battery_${batteryLevel}_bar", "drawable", context.packageName)
-            val stringResourceID = context.resources.getIdentifier("battery_${batteryLevel}_bar", "string", context.packageName)
+            val locatorBatteryLevel = rocketState.locatorBatteryLevel.coerceIn(0..7)
+            val locatorBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "drawable", context.packageName)
+            val locatorBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "string", context.packageName)
             Icon(
-                painter = painterResource(drawableResourceID),
-                contentDescription = stringResource(stringResourceID)
+                painter = painterResource(locatorBatteryLevelDrawableResourceID),
+                contentDescription = stringResource(locatorBatteryLevelStringResourceID)
+            )
+            val receiverBatteryLevel = rocketState.receiverBatteryLevel.coerceIn(0..7)
+            val receiverBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "drawable", context.packageName)
+            val receiverBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "string", context.packageName)
+            Icon(
+                painter = painterResource(receiverBatteryLevelDrawableResourceID),
+                contentDescription = stringResource(receiverBatteryLevelStringResourceID)
             )
         }
         Text(text = "Dist: ${DecimalFormat("#,###").format(distanceToLocator)} m")
@@ -806,10 +845,10 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
                     FlightStates.Launched -> "Launched"
                     FlightStates.Burnout -> "Burnout"
                     FlightStates.Noseover -> "Noseover"
-                    FlightStates.DroguePrimaryDeployed -> "Drogue Primary Deployed"
-                    FlightStates.DrogueBackupDeployed -> "Drogue Backup Deployed"
-                    FlightStates.MainPrimaryDeployed -> "Main Primary Deployed"
-                    FlightStates.MainBackupDeployed -> "Main Backup Deployed"
+                    FlightStates.DroguePrimaryDeployed -> "Drogue Primary"
+                    FlightStates.DrogueBackupDeployed -> "Drogue Backup"
+                    FlightStates.MainPrimaryDeployed -> "Main Primary"
+                    FlightStates.MainBackupDeployed -> "Main Backup"
                     FlightStates.Landed -> "Landed"
                     else -> ""
                 },
