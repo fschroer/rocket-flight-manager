@@ -1,10 +1,10 @@
 package com.steampigeon.flightmanager.data
 
 import android.bluetooth.BluetoothDevice
-import com.steampigeon.flightmanager.data.RocketState.Accelerometer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.Date
 
 /**
  * Data class that represents the current rocket locator state]
@@ -28,13 +28,13 @@ data class RocketState(
     val locatorBatteryLevel: Int = 0,
     val receiverBatteryLevel: Int = 0,
     val flightState: FlightStates? = null,
-) {
-    data class Accelerometer(
-        val x: Short = 0,
-        val y: Short = 0,
-        val z: Short = 0
-    )
-}
+)
+
+data class Accelerometer(
+    val x: Short = 0,
+    val y: Short = 0,
+    val z: Short = 0
+)
 
 data class LocatorConfig(
     val deployMode: DeployMode? = null,
@@ -49,6 +49,17 @@ data class LocatorConfig(
 
 data class ReceiverConfig(
     val channel: Int = 0,
+)
+
+data class FlightProfileMetadata(
+    val date: Date,
+    val apogee: Float,
+    val timeToApogee: Float,
+)
+
+data class FlightProfileData(
+    val agl: MutableList<UShort> = mutableListOf(),
+    val accelerometer: MutableList<Accelerometer> = mutableListOf(),
 )
 
 enum class DeployMode (val deployMode: UByte) {
@@ -124,7 +135,7 @@ enum class LocatorArmedMessageState (val locatorArmedMessageState: UByte) {
 
 }
 
-enum class ConfigMessageState (val locatorConfigMessageState: UByte) {
+enum class LocatorMessageState (val locatorMessageState: UByte) {
     Idle(0u),
     SendRequested(1u),
     Sent(2u),
@@ -133,7 +144,7 @@ enum class ConfigMessageState (val locatorConfigMessageState: UByte) {
     NotAcknowledged(5u);
 
     companion object {
-        fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorConfigMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
+        fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
     }
 
 }

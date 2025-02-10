@@ -26,6 +26,7 @@
     <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>
     <string name="exit">Exit</string>
     <string name="export">Export flight path</string>
+    <string name="flight_profiles">Flight Profiles</string>
     <string name="increment">Increment</string>
     <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
     <string name="locator_satellites">Locator Satellites</string>
@@ -35,6 +36,7 @@
     <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
     <string name="next">Next</string>
     <string name="receiver_settings">Receiver Settings</string>
+    <string name="refresh">Refresh</string>
     <string name="return_to_main">Return</string>
     <string name="update">Update</string>
     <string name="update_failed">Send Failed</string>

@@ -111,9 +111,11 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.datastore)
-    implementation(libs.protobuf.java) // Or the appropriate version
+    implementation(libs.protobuf.java)
     implementation(libs.protobuf.java.util)
-    implementation(libs.protobuf.kotlin) // If using Kotlin
+    implementation(libs.protobuf.kotlin)
+    implementation(libs.jserialcomm)
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
 }
 
 protobuf {

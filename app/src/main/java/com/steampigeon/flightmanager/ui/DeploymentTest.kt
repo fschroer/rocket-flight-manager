@@ -23,8 +23,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.data.ConfigMessageState
-import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentTestOption
 
 /**
