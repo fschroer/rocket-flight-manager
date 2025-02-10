@@ -23,8 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository
-import com.steampigeon.flightmanager.data.ConfigMessageState
+import com.steampigeon.flightmanager.data.LocatorMessageState
 
 /**
  * Composable that displays map download options,
@@ -79,25 +78,26 @@ fun ReceiverSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = (receiverConfigChanged && receiverConfigMessageState == ConfigMessageState.Idle),
+                enabled = (receiverConfigChanged && receiverConfigMessageState == LocatorMessageState.Idle),
                 onClick = {
-                    if (receiverConfigMessageState == ConfigMessageState.Idle) {
-                        viewModel.updateReceiverConfigMessageState(ConfigMessageState.SendRequested)
+                    if (receiverConfigMessageState == LocatorMessageState.Idle) {
+                        viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendRequested)
                         if (service?.changeReceiverConfig(stagedReceiverConfig) == true)
-                            viewModel.updateReceiverConfigMessageState(ConfigMessageState.Sent)
+                            viewModel.updateReceiverConfigMessageState(LocatorMessageState.Sent)
                         else
-                            viewModel.updateReceiverConfigMessageState(ConfigMessageState.SendFailure)
-                        viewModel.updateReceiverConfigState(stagedReceiverConfig)                    }
+                            viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendFailure)
+                        viewModel.updateReceiverConfigState(stagedReceiverConfig)
+                    }
                 }
             ) {
                 Text(
                     when (receiverConfigMessageState) {
-                        ConfigMessageState.Idle -> stringResource(R.string.update)
-                        ConfigMessageState.SendRequested,
-                        ConfigMessageState.Sent -> stringResource(R.string.updating)
-                        ConfigMessageState.AckUpdated -> stringResource(R.string.updated)
-                        ConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
-                        ConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
+                        LocatorMessageState.Idle -> stringResource(R.string.update)
+                        LocatorMessageState.SendRequested,
+                        LocatorMessageState.Sent -> stringResource(R.string.updating)
+                        LocatorMessageState.AckUpdated -> stringResource(R.string.updated)
+                        LocatorMessageState.SendFailure -> stringResource(R.string.update_failed)
+                        LocatorMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
                     }
                 )
             }

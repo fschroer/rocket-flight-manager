@@ -41,6 +41,8 @@ private const val messageBufferSize = 256
 private const val prelaunchMessageSize = 77 // LoRa message size (74) + channel (1) + receiver battery level (2) = 77
 private const val telemetryMessageSize = 56
 private const val receiverConfigMessageSize = 4
+private const val flightProfileMetadataMessageSize = 131
+private const val flightProfileDataMessageSize = 4
 private const val deploymentTestMessageSize = 4
 private const val CHANNEL_ID = "BluetoothService"
 private val EOT = "\u0003\u0019\u0004".toByteArray()
@@ -50,7 +52,9 @@ enum class MessageType (val messageType: UByte) {
     Prelaunch(1u),
     Telemetry(2u),
     ReceiverConfig(3u),
-    DeploymentTest(4u);
+    FlightProfileMetadata(4u),
+    FlightProfileData(5u),
+    DeploymentTest(6u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.messageType == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -62,6 +66,8 @@ class BluetoothService() : Service() {
         val prelaunchMessageHeader: ByteArray = byteArrayOf(0x50, 0x52, 0x45) // PRE
         val telemetryMessageHeader: ByteArray = byteArrayOf(0x54, 0x4C, 0x4D) // TLM
         val receiverConfigMessageHeader: ByteArray = byteArrayOf(0x43, 0x48, 0x4E) // CHN
+        val flightProfileMetadataMessageHeader: ByteArray = byteArrayOf(0x46, 0x50, 0x4D) //FPM
+        val flightProfileDataMessageHeader: ByteArray = byteArrayOf(0x46, 0x50, 0x44) //FPD
         val deploymentTestMessageHeader: ByteArray = byteArrayOf(0x54, 0x53, 0x54) // TST
     }
     private var serviceStarted = false
@@ -128,17 +134,24 @@ class BluetoothService() : Service() {
                         if (currentMessageSize >= 3) {
                             //Log.d(TAG, logByteArrayAsChars(inboundMessageBuffer, currentMessageSize))
                             // Update message type
+                            val messageHeader = inboundMessageBuffer.copyOfRange(0, 3)
                             when {
-                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(prelaunchMessageHeader) -> {
+                                messageHeader.contentEquals(prelaunchMessageHeader) -> {
                                     messageType = MessageType.Prelaunch
                                 }
-                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(telemetryMessageHeader) -> {
+                                messageHeader.contentEquals(telemetryMessageHeader) -> {
                                     messageType = MessageType.Telemetry
                                 }
-                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(receiverConfigMessageHeader) -> {
+                                messageHeader.contentEquals(receiverConfigMessageHeader) -> {
                                     messageType = MessageType.ReceiverConfig
                                 }
-                                inboundMessageBuffer.copyOfRange(0, 3).contentEquals(deploymentTestMessageHeader) -> {
+                                messageHeader.contentEquals(flightProfileMetadataMessageHeader) -> {
+                                    messageType = MessageType.FlightProfileMetadata
+                                }
+                                messageHeader.contentEquals(flightProfileDataMessageHeader) -> {
+                                    messageType = MessageType.FlightProfileData
+                                }
+                                messageHeader.contentEquals(deploymentTestMessageHeader) -> {
                                     messageType = MessageType.DeploymentTest
                                 }
                             }
@@ -194,6 +207,16 @@ class BluetoothService() : Service() {
                             messageType == MessageType.ReceiverConfig && currentMessageSize >= receiverConfigMessageSize -> {
                                 //Log.d(TAG, "Receiver config message detected, $currentMessageSize")
                                 _data.emit(inboundMessageBuffer.copyOfRange(0, receiverConfigMessageSize))
+                                clearMessage()
+                            }
+                            messageType == MessageType.FlightProfileMetadata && currentMessageSize >= flightProfileMetadataMessageSize -> {
+                                //Log.d(TAG, "Flight profile metadata message detected, $currentMessageSize")
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
+                                clearMessage()
+                            }
+                            messageType == MessageType.FlightProfileData && currentMessageSize >= flightProfileDataMessageSize -> {
+                                //Log.d(TAG, "Flight profile data message detected, $currentMessageSize")
+                                _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
                                 clearMessage()
                             }
                             messageType == MessageType.DeploymentTest && currentMessageSize >= deploymentTestMessageSize -> {
@@ -410,6 +433,30 @@ class BluetoothService() : Service() {
 
         try {
             locatorOutputStream.write(configMessage)
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            return false
+        }
+        return true
+    }
+
+    fun requestFlightProfileMetadata(): Boolean {
+        val message = "FPM".toByteArray() + EOT
+
+        try {
+            locatorOutputStream.write(message)
+        } catch (e: IOException) {
+            Log.e(TAG, "Error occurred when sending data", e)
+            return false
+        }
+        return true
+    }
+
+    fun requestFlightProfileData(archivePosition: Int): Boolean {
+        val message = "FPD".toByteArray() + byteArrayOf(archivePosition.toByte()) + EOT
+
+        try {
+            locatorOutputStream.write(message)
         } catch (e: IOException) {
             Log.e(TAG, "Error occurred when sending data", e)
             return false

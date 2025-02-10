@@ -9,9 +9,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,7 +49,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.ConfigMessageState
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import kotlinx.coroutines.delay
 import java.math.RoundingMode
 import kotlin.math.max
@@ -95,7 +93,7 @@ fun LocatorSettingsScreen(
             EnumDropdown(
                 DeployMode::class,
                 stagedLocatorConfig.deployMode ?: DeployMode.DroguePrimaryDrogueBackup,
-                enabled = locatorConfigMessageState == ConfigMessageState.Idle,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
                 modifier = modifier
             )
             { newConfigValue ->
@@ -200,27 +198,26 @@ fun LocatorSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = (locatorConfigChanged && locatorConfigMessageState == ConfigMessageState.Idle),
+                enabled = (locatorConfigChanged && locatorConfigMessageState == LocatorMessageState.Idle),
                 onClick = {
-                    if (locatorConfigMessageState == ConfigMessageState.Idle) {
-                        viewModel.updateLocatorConfigMessageState(ConfigMessageState.SendRequested)
+                    if (locatorConfigMessageState == LocatorMessageState.Idle) {
+                        viewModel.updateLocatorConfigMessageState(LocatorMessageState.SendRequested)
                         if (service?.changeLocatorConfig(stagedLocatorConfig) == true)
-                            viewModel.updateLocatorConfigMessageState(ConfigMessageState.Sent)
+                            viewModel.updateLocatorConfigMessageState(LocatorMessageState.Sent)
                         else
-                            viewModel.updateLocatorConfigMessageState(ConfigMessageState.SendFailure)
+                            viewModel.updateLocatorConfigMessageState(LocatorMessageState.SendFailure)
                         viewModel.updateLocatorConfigState(stagedLocatorConfig)
                     }
-
                 }
             ) {
                 Text(
                     when (locatorConfigMessageState) {
-                        ConfigMessageState.Idle -> stringResource(R.string.update)
-                        ConfigMessageState.SendRequested,
-                             ConfigMessageState.Sent -> stringResource(R.string.updating)
-                        ConfigMessageState.AckUpdated -> stringResource(R.string.updated)
-                        ConfigMessageState.SendFailure -> stringResource(R.string.update_failed)
-                        ConfigMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
+                        LocatorMessageState.Idle -> stringResource(R.string.update)
+                        LocatorMessageState.SendRequested,
+                             LocatorMessageState.Sent -> stringResource(R.string.updating)
+                        LocatorMessageState.AckUpdated -> stringResource(R.string.updated)
+                        LocatorMessageState.SendFailure -> stringResource(R.string.update_failed)
+                        LocatorMessageState.NotAcknowledged -> stringResource(R.string.update_not_acknowledged)
                     }
                 )
             }
@@ -272,7 +269,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              initialConfigValue: Int,
                              minValue: Int = 0,
                              maxValue: Int = Int.MAX_VALUE,
-                             configMessageState: ConfigMessageState = ConfigMessageState.Idle,
+                             configMessageState: LocatorMessageState = LocatorMessageState.Idle,
                              modifier: Modifier = Modifier,
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
@@ -297,7 +294,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                 }
             }
                 .weight(configItemWidth),
-            enabled = configMessageState == ConfigMessageState.Idle,
+            enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         )
@@ -325,7 +322,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              initialConfigValue: Double,
                              minValue: Double = 0.0,
                              maxValue: Double = Double.MAX_VALUE,
-                             configMessageState: ConfigMessageState = ConfigMessageState.Idle,
+                             configMessageState: LocatorMessageState = LocatorMessageState.Idle,
                              modifier: Modifier = Modifier,
                              onConfigUpdate: (Double) -> Unit) {
     var configValue by remember { mutableDoubleStateOf(initialConfigValue)}
@@ -350,7 +347,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                 }
             }
                 .weight(configItemWidth),
-            enabled = configMessageState == ConfigMessageState.Idle,
+            enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         )
@@ -378,7 +375,7 @@ fun ConfigurationItemNumeric(configItemName: String,
 @Composable
 fun ConfigurationItemText(configItemName: String,
                           configItemValue: String,
-                          configMessageState: ConfigMessageState = ConfigMessageState.Idle,
+                          configMessageState: LocatorMessageState = LocatorMessageState.Idle,
                           modifier: Modifier = Modifier,
                           onConfigUpdate: (String) -> Unit) {
 
@@ -393,7 +390,7 @@ fun ConfigurationItemText(configItemName: String,
                 onConfigUpdate(newValue)
             },
             modifier = modifier.weight(configItemWidth),
-            enabled = configMessageState == ConfigMessageState.Idle,
+            enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             //modifier = Modifier.weight(1f)
@@ -411,7 +408,7 @@ fun NudgeButton(
     configItemValue: Int,
     change: Int,
     bound: Int,
-    configMessageState: ConfigMessageState = ConfigMessageState.Idle,
+    configMessageState: LocatorMessageState = LocatorMessageState.Idle,
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Int) -> Unit
 ) {
@@ -422,7 +419,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == ConfigMessageState.Idle,
+        enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == LocatorMessageState.Idle,
         interactionSource = interactionSource,
         content = content
     )
@@ -445,7 +442,7 @@ fun NudgeButton(
     configItemValue: Double,
     change: Double,
     bound: Double,
-    configMessageState: ConfigMessageState = ConfigMessageState.Idle,
+    configMessageState: LocatorMessageState = LocatorMessageState.Idle,
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Double) -> Unit
 ) {
@@ -456,7 +453,7 @@ fun NudgeButton(
 
     TextButton(
         onClick = { },
-        enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == ConfigMessageState.Idle,
+        enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == LocatorMessageState.Idle,
         interactionSource = interactionSource,
         content = content
     )

@@ -44,10 +44,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
 import com.steampigeon.flightmanager.ui.ExportFlightPathScreen
+import com.steampigeon.flightmanager.ui.FlightProfilesScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
@@ -59,6 +61,7 @@ enum class RocketScreen(@StringRes val title: Int) {
     LocatorSettings(title = R.string.locator_settings),
     ReceiverSettings(title = R.string.receiver_settings),
     DeploymentTest(title = R.string.deployment_test),
+    FlightProfiles(title = R.string.flight_profiles),
     Export(title = R.string.export),
 }
 
@@ -198,6 +201,17 @@ fun RocketApp(
                     viewModel,
                     service,
                     onCancelButtonClicked = { navigateToStart(navController) },
+                    modifier = modifier
+                )
+            }
+            composable(route = RocketScreen.FlightProfiles.name) {
+                FlightProfilesScreen(
+                    viewModel,
+                    service,
+                    onCancelButtonClicked = {
+                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+                        navigateToStart(navController)
+                    },
                     modifier = modifier
                 )
             }

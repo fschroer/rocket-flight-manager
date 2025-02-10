@@ -13,8 +13,11 @@ import com.mutualmobile.composesensors.AccelerometerSensorState
 import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.UserPreferences
-import com.steampigeon.flightmanager.data.ConfigMessageState
+import com.steampigeon.flightmanager.data.Accelerometer
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.FlightProfileData
+import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +32,7 @@ import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.ReceiverConfig
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import kotlinx.coroutines.delay
+import java.util.Date
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -141,19 +145,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _locatorConfigChanged.value = newLocatorConfigChanged
     }
 
-    private val _locatorConfigMessageState = MutableStateFlow<ConfigMessageState>(ConfigMessageState.Idle)
-    val locatorConfigMessageState: StateFlow<ConfigMessageState> = _locatorConfigMessageState.asStateFlow()
+    private val _locatorConfigMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
+    val locatorConfigMessageState: StateFlow<LocatorMessageState> = _locatorConfigMessageState.asStateFlow()
 
-    fun updateLocatorConfigMessageState(newLocatorConfigMessageState: ConfigMessageState) {
+    fun updateLocatorConfigMessageState(newLocatorConfigMessageState: LocatorMessageState) {
         _locatorConfigMessageState.value = newLocatorConfigMessageState
     }
 
-    private val _receiverConfigMessageState = MutableStateFlow<ConfigMessageState>(ConfigMessageState.Idle)
-    val receiverConfigMessageState: StateFlow<ConfigMessageState> = _receiverConfigMessageState.asStateFlow()
+    private val _receiverConfigMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
+    val receiverConfigMessageState: StateFlow<LocatorMessageState> = _receiverConfigMessageState.asStateFlow()
 
-    fun updateReceiverConfigMessageState(newReceiverConfigMessageState: ConfigMessageState) {
+    fun updateReceiverConfigMessageState(newReceiverConfigMessageState: LocatorMessageState) {
         _receiverConfigMessageState.value = newReceiverConfigMessageState
     }
+
+    private val _flightProfileMetadataMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
+    val flightProfileMetadataMessageState: StateFlow<LocatorMessageState> = _flightProfileMetadataMessageState.asStateFlow()
+
+    fun updateFlightProfileMetadataMessageState(newFlightProfileMetadataMessageState: LocatorMessageState) {
+        _flightProfileMetadataMessageState.value = newFlightProfileMetadataMessageState
+    }
+
+    private val _flightProfileMetadata = MutableStateFlow<List<FlightProfileMetadata>>(emptyList())
+    val flightProfileMetadata: StateFlow<List<FlightProfileMetadata>> = _flightProfileMetadata.asStateFlow()
+
+    private val _flightProfileDataMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
+    val flightProfileDataMessageState: StateFlow<LocatorMessageState> = _flightProfileDataMessageState.asStateFlow()
+
+    fun updateFlightProfileDataMessageState(newFlightProfileDataMessageState: LocatorMessageState) {
+        _flightProfileMetadataMessageState.value = newFlightProfileDataMessageState
+    }
+
+    private val _flightProfileData = MutableStateFlow(FlightProfileData())
+    val flightProfileData: StateFlow<FlightProfileData> = _flightProfileData.asStateFlow()
 
     private val _deploymentTestCountdown = MutableStateFlow<Int>(0)
     val deploymentTestCountdown: StateFlow<Int> = _deploymentTestCountdown.asStateFlow()
@@ -166,9 +190,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             service.data.collect { locatorMessage ->
                 val currentTime = System.currentTimeMillis()
+                val locatorMessageHeader = locatorMessage.copyOfRange(0, 3)
                 when {
-                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.prelaunchMessageHeader) -> {
-                        val accelerometer = RocketState.Accelerometer(
+                    locatorMessageHeader.contentEquals(BluetoothService.prelaunchMessageHeader) -> {
+                        val accelerometer = Accelerometer(
                             byteArrayToShort(locatorMessage, 43),
                             byteArrayToShort(locatorMessage, 45),
                             byteArrayToShort(locatorMessage, 47)
@@ -218,8 +243,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
 
-                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.telemetryMessageHeader) -> {
-                        val accelerometer = RocketState.Accelerometer(
+                    locatorMessageHeader.contentEquals(BluetoothService.telemetryMessageHeader) -> {
+                        val accelerometer = Accelerometer(
                             byteArrayToShort(locatorMessage, 43),
                             byteArrayToShort(locatorMessage, 45),
                             byteArrayToShort(locatorMessage, 47)
@@ -259,12 +284,26 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 //                                byteArrayToFloat(locatorMessage, 41 + i * 4) / ALTIMETER_SCALE
 //                        }
                     }
-                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.receiverConfigMessageHeader) -> {
+                    locatorMessageHeader.contentEquals(BluetoothService.receiverConfigMessageHeader) -> {
                         _remoteReceiverConfig.update { currentState ->
                             currentState.copy(channel = locatorMessage[3].toInt())
                         }
                     }
-                    locatorMessage.copyOfRange(0, 3).contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
+                    locatorMessageHeader.contentEquals(BluetoothService.flightProfileMetadataMessageHeader) -> {
+                        _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
+                        _flightProfileMetadata.value = emptyList()
+                        var i = locatorMessageHeader.size
+                        while (i < locatorMessage.size) {
+                            val flightProfileMetadataItem = FlightProfileMetadata(
+                                byteArrayToDate(locatorMessage, i),
+                                byteArrayToFloat(locatorMessage, i + 8),
+                                byteArrayToFloat(locatorMessage, i + 12)
+                            )
+                            _flightProfileMetadata.value += flightProfileMetadataItem
+                            i += 16
+                        }
+                    }
+                    locatorMessageHeader.contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
                         _deploymentTestCountdown.value = locatorMessage[3].toInt()
                     }
                 }
@@ -286,11 +325,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun byteArrayToUShort(byteArray: ByteArray, offset: Int): UShort {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
-        return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toUShort()
+        return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u).toUShort()
     }
     fun byteArrayToShort(byteArray: ByteArray, offset: Int): Short {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
-        return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 256u).toShort()
+        return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u).toShort()
+    }
+    fun byteArrayToInt(byteArray: ByteArray, offset: Int): Int {
+        require(offset >= 0 && offset + 4 <= byteArray.size) { "Invalid offset or length" }
+        return (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 0x100 + byteArray[offset + 2].toInt() * 0x10000 + byteArray[offset + 3].toInt() * 0x1000000)
+    }
+    fun byteArrayToDate(byteArray: ByteArray, offset: Int): Date {
+        require(offset >= 0 && offset + 8 <= byteArray.size) { "Invalid offset or length" }
+        val datePart = (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 0x100 + byteArray[offset + 2].toInt() * 0x10000 + byteArray[offset + 3].toInt() * 0x1000000)
+        val timePart = (byteArray[offset + 4].toInt() + byteArray[offset + 5].toInt() * 0x100 + byteArray[offset + 6].toInt() * 0x10000 + byteArray[offset + 7].toInt() * 0x1000000)
+        return (Date(100 + datePart % 100, (datePart - datePart / 10000 * 10000) / 100 - 1, datePart / 10000, timePart / 10000, (timePart - timePart / 10000 * 10000) / 100, timePart % 100))
     }
 
     fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, landscapeOrientation: Boolean) {
@@ -352,20 +401,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             for (i in 1..50) {
                 delay(100)
                 if (_remoteReceiverConfig.value == stagedReceiverConfig) {
-                    _receiverConfigMessageState.value = ConfigMessageState.AckUpdated
+                    _receiverConfigMessageState.value = LocatorMessageState.AckUpdated
                     break
                 }
-                else if (_receiverConfigMessageState.value == ConfigMessageState.SendFailure)
+                else if (_receiverConfigMessageState.value == LocatorMessageState.SendFailure)
                     break
             }
-            if (_receiverConfigMessageState.value == ConfigMessageState.SendRequested ||
-                _receiverConfigMessageState.value == ConfigMessageState.Sent) {
-                _receiverConfigMessageState.value = ConfigMessageState.NotAcknowledged
+            if (_receiverConfigMessageState.value == LocatorMessageState.SendRequested ||
+                _receiverConfigMessageState.value == LocatorMessageState.Sent) {
+                _receiverConfigMessageState.value = LocatorMessageState.NotAcknowledged
             }
-            if (_receiverConfigMessageState.value == ConfigMessageState.AckUpdated)
+            if (_receiverConfigMessageState.value == LocatorMessageState.AckUpdated)
                 _receiverConfigChanged.value = false
             delay(2000)
-            _receiverConfigMessageState.value = ConfigMessageState.Idle
+            _receiverConfigMessageState.value = LocatorMessageState.Idle
         }
     }
 
@@ -374,20 +423,35 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             for (i in 1..50) {
                 delay(100)
                 if (_remoteLocatorConfig.value == stagedLocatorConfig) {
-                    _locatorConfigMessageState.value = ConfigMessageState.AckUpdated
+                    _locatorConfigMessageState.value = LocatorMessageState.AckUpdated
                     break
                 }
-                else if (_locatorConfigMessageState.value == ConfigMessageState.SendFailure)
+                else if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure)
                     break
             }
-            if (_locatorConfigMessageState.value == ConfigMessageState.SendRequested ||
-                _locatorConfigMessageState.value == ConfigMessageState.Sent) {
-                _locatorConfigMessageState.value = ConfigMessageState.NotAcknowledged
+            if (_locatorConfigMessageState.value == LocatorMessageState.SendRequested ||
+                _locatorConfigMessageState.value == LocatorMessageState.Sent) {
+                _locatorConfigMessageState.value = LocatorMessageState.NotAcknowledged
             }
-            if (_locatorConfigMessageState.value == ConfigMessageState.AckUpdated)
+            if (_locatorConfigMessageState.value == LocatorMessageState.AckUpdated)
                 _locatorConfigChanged.value = false
             delay(2000)
-            _locatorConfigMessageState.value = ConfigMessageState.Idle
+            _locatorConfigMessageState.value = LocatorMessageState.Idle
+        }
+    }
+
+    fun updateFlightMetadataState() {
+        viewModelScope.launch {
+            for (i in 1..50) {
+                delay(100)
+                if (_flightProfileMetadataMessageState.value == LocatorMessageState.AckUpdated ||
+                    _flightProfileMetadataMessageState.value == LocatorMessageState.SendFailure)
+                    break
+            }
+            if (_flightProfileMetadataMessageState.value == LocatorMessageState.SendRequested ||
+                _flightProfileMetadataMessageState.value == LocatorMessageState.Sent) {
+                _flightProfileMetadataMessageState.value = LocatorMessageState.NotAcknowledged
+            }
         }
     }
 }

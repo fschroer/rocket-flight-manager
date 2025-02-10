@@ -130,6 +130,7 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorArmedMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.R
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.RocketState
 import java.text.DecimalFormat
 import java.util.regex.Pattern
@@ -378,7 +379,7 @@ fun HomeScreen(
                         NavigationDrawerItem(
                             label = {
                                 Text(
-                                    text = "App settings",
+                                    text = stringResource(R.string.application_settings),
                                     style = typography.titleLarge,
                                 )
                             },
@@ -389,14 +390,14 @@ fun HomeScreen(
                             },
                             icon = { Icon(
                                 painter = painterResource(R.drawable.settings_applications),
-                                contentDescription = stringResource(id = R.string.application_settings)
+                                contentDescription = stringResource(R.string.application_settings)
                             ) }
                         )
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
                             NavigationDrawerItem(
                                 label = {
                                     Text(
-                                        text = "Receiver settings",
+                                        text = stringResource(R.string.receiver_settings),
                                         style = typography.titleLarge,
                                     )
                                 },
@@ -407,7 +408,7 @@ fun HomeScreen(
                                 },
                                 icon = { Icon(
                                     painter = painterResource(R.drawable.radio),
-                                    contentDescription = stringResource(id = R.string.receiver_settings)
+                                    contentDescription = stringResource(R.string.receiver_settings)
                                 ) }
                             )
                         }
@@ -416,7 +417,7 @@ fun HomeScreen(
                                 NavigationDrawerItem(
                                     label = {
                                         Text(
-                                            text = "Locator settings",
+                                            text = stringResource(R.string.locator_settings),
                                             style = typography.titleLarge,
                                         )
                                     },
@@ -428,9 +429,27 @@ fun HomeScreen(
                                     icon = {
                                         Icon(
                                             painter = painterResource(R.drawable.navigation),
-                                            contentDescription = stringResource(id = R.string.locator_settings)
+                                            contentDescription = stringResource(R.string.locator_settings)
                                         )
                                     }
+                                )
+                                NavigationDrawerItem(
+                                    label = {
+                                        Text(
+                                            text = stringResource(R.string.flight_profiles),
+                                            style = typography.titleLarge,
+                                        )
+                                    },
+                                    selected = false,
+                                    onClick = {
+                                        scope.launch { drawerState.apply { close() } }
+                                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+                                        navController.navigate(RocketScreen.FlightProfiles.name)
+                                    },
+                                    icon = { Icon(
+                                        painter = painterResource(R.drawable.u_turn_right),
+                                        contentDescription = stringResource(R.string.flight_profiles)
+                                    ) }
                                 )
                             }
                             else {
@@ -449,7 +468,7 @@ fun HomeScreen(
                                     icon = {
                                         Icon(
                                             painter = painterResource(R.drawable.bomb),
-                                            contentDescription = stringResource(id = R.string.deployment_test)
+                                            contentDescription = stringResource(R.string.deployment_test)
                                         )
                                     }
                                 )
