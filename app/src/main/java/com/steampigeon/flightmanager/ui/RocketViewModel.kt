@@ -3,6 +3,7 @@ package com.steampigeon.flightmanager.ui
 import android.app.Application
 import android.content.Context
 import android.hardware.SensorManager
+import android.util.Log
 import androidx.compose.ui.unit.IntOffset
 import androidx.datastore.core.DataStore
 import androidx.datastore.dataStore
@@ -16,7 +17,6 @@ import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.Accelerometer
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.FlightProfileData
 import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,11 +50,12 @@ val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
 
 class RocketViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
-        private const val SAMPLES_PER_SECOND = 20
-        private const val ALTIMETER_SCALE = 10
-        private const val ACCELEROMETER_SCALE = 2048
+        const val SAMPLES_PER_SECOND = 20
+        const val ALTIMETER_SCALE = 10
+        const val ACCELEROMETER_SCALE = 2048
         private const val BATTERY_SCALE = 8.0 / 4096
         const val DEVICE_NAME_LENGTH = 12
+        const val FLIGHT_DATA_MESSAGE_SAMPLES = 30
     }
 
     //private val _userPreferences = MutableStateFlow(UserPreferences.getDefaultInstance())
@@ -159,6 +160,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _receiverConfigMessageState.value = newReceiverConfigMessageState
     }
 
+    private val _requestFlightProfileMetadata = MutableStateFlow(true)
+    val requestFlightProfileMetadata: StateFlow<Boolean> = _requestFlightProfileMetadata.asStateFlow()
+
+    fun updateRequestFlightProfileMetadata(newRequestFlightProfileMetadata: Boolean) {
+        _requestFlightProfileMetadata.value = newRequestFlightProfileMetadata
+    }
+
     private val _flightProfileMetadataMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
     val flightProfileMetadataMessageState: StateFlow<LocatorMessageState> = _flightProfileMetadataMessageState.asStateFlow()
 
@@ -169,15 +177,29 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _flightProfileMetadata = MutableStateFlow<List<FlightProfileMetadata>>(emptyList())
     val flightProfileMetadata: StateFlow<List<FlightProfileMetadata>> = _flightProfileMetadata.asStateFlow()
 
+    fun clearFlightProfileMetadata() {
+        _flightProfileMetadata.value = emptyList()
+    }
+
+    private val _flightProfileArchivePosition = MutableStateFlow<Int>(0)
+    val flightProfileArchivePosition: StateFlow<Int> = _flightProfileArchivePosition.asStateFlow()
+
+    fun updateFlightProfileArchivePosition(newFlightProfileArchivePosition: Int) {
+        _flightProfileArchivePosition.value = newFlightProfileArchivePosition
+    }
+
     private val _flightProfileDataMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
     val flightProfileDataMessageState: StateFlow<LocatorMessageState> = _flightProfileDataMessageState.asStateFlow()
 
     fun updateFlightProfileDataMessageState(newFlightProfileDataMessageState: LocatorMessageState) {
-        _flightProfileMetadataMessageState.value = newFlightProfileDataMessageState
+        _flightProfileDataMessageState.value = newFlightProfileDataMessageState
     }
 
-    private val _flightProfileData = MutableStateFlow(FlightProfileData())
-    val flightProfileData: StateFlow<FlightProfileData> = _flightProfileData.asStateFlow()
+    private val _flightProfileAglData = MutableStateFlow<List<UShort>>(emptyList())
+    val flightProfileAglData: StateFlow<List<UShort>> = _flightProfileAglData.asStateFlow()
+
+    private val _flightProfileAccelerometerData = MutableStateFlow<List<Accelerometer>>(emptyList())
+    val flightProfileAccelerometerData: StateFlow<List<Accelerometer>> = _flightProfileAccelerometerData.asStateFlow()
 
     private val _deploymentTestCountdown = MutableStateFlow<Int>(0)
     val deploymentTestCountdown: StateFlow<Int> = _deploymentTestCountdown.asStateFlow()
@@ -291,16 +313,44 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     locatorMessageHeader.contentEquals(BluetoothService.flightProfileMetadataMessageHeader) -> {
                         _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
-                        _flightProfileMetadata.value = emptyList()
-                        var i = locatorMessageHeader.size
-                        while (i < locatorMessage.size) {
+                        var archivePosition = 0
+                        var messagePosition = locatorMessageHeader.size
+                        while (messagePosition < locatorMessage.size && !(locatorMessage[messagePosition] == 0.toByte() &&
+                                    locatorMessage[messagePosition + 1] == 0.toByte() && locatorMessage[messagePosition + 2] == 0.toByte())) {
                             val flightProfileMetadataItem = FlightProfileMetadata(
-                                byteArrayToDate(locatorMessage, i),
-                                byteArrayToFloat(locatorMessage, i + 8),
-                                byteArrayToFloat(locatorMessage, i + 12)
+                                archivePosition,
+                                byteArrayToDate(locatorMessage, messagePosition),
+                                byteArrayToFloat(locatorMessage, messagePosition + 8),
+                                byteArrayToFloat(locatorMessage, messagePosition + 12)
                             )
                             _flightProfileMetadata.value += flightProfileMetadataItem
-                            i += 16
+                            archivePosition++
+                            messagePosition += 16
+                        }
+                    }
+                    locatorMessageHeader.contentEquals(BluetoothService.flightProfileDataMessageHeader) -> {
+                        _flightProfileDataMessageState.value = LocatorMessageState.AckUpdated
+                        var archiveSample = 0
+                        val packetIndex = locatorMessage[locatorMessageHeader.size]
+                        Log.d(TAG, "Received flight profile data packet $packetIndex")
+                        if (packetIndex == 0.toByte()) {
+                            _flightProfileAglData.value = emptyList()
+                            _flightProfileAccelerometerData.value = emptyList()
+                        }
+                        var messagePosition = locatorMessageHeader.size + 1
+                        while (messagePosition < locatorMessage.size && !(locatorMessage[messagePosition] == 0.toByte() && locatorMessage[messagePosition + 1] == 0.toByte())) {
+                            _flightProfileAglData.value += byteArrayToUShort(locatorMessage, messagePosition)
+                            messagePosition += 2
+                            if (packetIndex * FLIGHT_DATA_MESSAGE_SAMPLES + archiveSample < _flightProfileMetadata.value[_flightProfileArchivePosition.value].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND) {
+                                _flightProfileAccelerometerData.value +=
+                                    Accelerometer(
+                                    byteArrayToShort(locatorMessage, messagePosition),
+                                    byteArrayToShort(locatorMessage, messagePosition + 2),
+                                    byteArrayToShort(locatorMessage, messagePosition + 4)
+                                    )
+                                messagePosition += 6
+                            }
+                            archiveSample++
                         }
                     }
                     locatorMessageHeader.contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
@@ -331,15 +381,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u).toShort()
     }
-    fun byteArrayToInt(byteArray: ByteArray, offset: Int): Int {
-        require(offset >= 0 && offset + 4 <= byteArray.size) { "Invalid offset or length" }
-        return (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 0x100 + byteArray[offset + 2].toInt() * 0x10000 + byteArray[offset + 3].toInt() * 0x1000000)
-    }
     fun byteArrayToDate(byteArray: ByteArray, offset: Int): Date {
         require(offset >= 0 && offset + 8 <= byteArray.size) { "Invalid offset or length" }
-        val datePart = (byteArray[offset].toInt() + byteArray[offset + 1].toInt() * 0x100 + byteArray[offset + 2].toInt() * 0x10000 + byteArray[offset + 3].toInt() * 0x1000000)
-        val timePart = (byteArray[offset + 4].toInt() + byteArray[offset + 5].toInt() * 0x100 + byteArray[offset + 6].toInt() * 0x10000 + byteArray[offset + 7].toInt() * 0x1000000)
-        return (Date(100 + datePart % 100, (datePart - datePart / 10000 * 10000) / 100 - 1, datePart / 10000, timePart / 10000, (timePart - timePart / 10000 * 10000) / 100, timePart % 100))
+        val datePartByteArray = byteArray.copyOfRange(offset, offset + 4).reversedArray()
+        val timePartByteArray = byteArray.copyOfRange(offset + 4, offset + 8).reversedArray()
+        val datePart = ByteBuffer.wrap(datePartByteArray, 0, 4).int
+        val timePart = ByteBuffer.wrap(timePartByteArray, 0, 4).int
+        return Date(100 + (datePart % 100), (datePart / 100) % 100 - 1, datePart / 10000, timePart / 10000, (timePart / 100) % 100, timePart % 100)
     }
 
     fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, landscapeOrientation: Boolean) {
@@ -441,6 +489,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateFlightMetadataState() {
+        viewModelScope.launch {
+            for (i in 1..50) {
+                delay(100)
+                if (_flightProfileMetadataMessageState.value == LocatorMessageState.AckUpdated ||
+                    _flightProfileMetadataMessageState.value == LocatorMessageState.SendFailure)
+                    break
+            }
+            if (_flightProfileMetadataMessageState.value == LocatorMessageState.SendRequested ||
+                _flightProfileMetadataMessageState.value == LocatorMessageState.Sent) {
+                _flightProfileMetadataMessageState.value = LocatorMessageState.NotAcknowledged
+            }
+        }
+    }
+
+    fun updateFlightDataState() {
         viewModelScope.launch {
             for (i in 1..50) {
                 delay(100)

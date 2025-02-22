@@ -347,12 +347,14 @@ fun HomeScreen(
                     else -> {}
                 }
                 textToSpeech?.isSpeaking?.let { isSpeaking ->
-                    if (it.ordinal > FlightStates.Noseover.ordinal && lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken)
+                    if (it.ordinal > FlightStates.Noseover.ordinal) {
+                        if (lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken)
                             textToSpeech.speak("Descent warning, ${-rocketState.velocity.toInt()} meters per second, $distanceToLocator meters $ordinalToLocator of launch point. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
-                }
-                if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
-                    landingSpoken = true
-                    textToSpeech?.speak("Landing $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                        if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
+                            landingSpoken = true
+                            textToSpeech.speak("Landing $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                        }
+                    }
                 }
             }
         }
@@ -443,7 +445,6 @@ fun HomeScreen(
                                     selected = false,
                                     onClick = {
                                         scope.launch { drawerState.apply { close() } }
-                                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
                                         navController.navigate(RocketScreen.FlightProfiles.name)
                                     },
                                     icon = { Icon(

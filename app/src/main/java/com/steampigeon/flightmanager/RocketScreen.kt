@@ -196,22 +196,22 @@ fun RocketApp(
                     modifier = modifier
                 )
             }
+            composable(route = RocketScreen.FlightProfiles.name) {
+                viewModel.updateRequestFlightProfileMetadata(true)
+                FlightProfilesScreen(
+                    viewModel,
+                    service,
+                    onCancelButtonClicked = {
+                        navigateToStart(navController)
+                    },
+                    modifier = modifier
+                )
+            }
             composable(route = RocketScreen.DeploymentTest.name) {
                 DeploymentTestScreen(
                     viewModel,
                     service,
                     onCancelButtonClicked = { navigateToStart(navController) },
-                    modifier = modifier
-                )
-            }
-            composable(route = RocketScreen.FlightProfiles.name) {
-                FlightProfilesScreen(
-                    viewModel,
-                    service,
-                    onCancelButtonClicked = {
-                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
-                        navigateToStart(navController)
-                    },
                     modifier = modifier
                 )
             }
