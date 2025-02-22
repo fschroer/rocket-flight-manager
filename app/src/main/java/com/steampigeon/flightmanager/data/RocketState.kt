@@ -52,14 +52,10 @@ data class ReceiverConfig(
 )
 
 data class FlightProfileMetadata(
+    val position: Int,
     val date: Date,
     val apogee: Float,
-    val timeToApogee: Float,
-)
-
-data class FlightProfileData(
-    val agl: MutableList<UShort> = mutableListOf(),
-    val accelerometer: MutableList<Accelerometer> = mutableListOf(),
+    val timeToDrogue: Float, // AGL + accelerometer data expected prior to this time, AGL only afterwards
 )
 
 enum class DeployMode (val deployMode: UByte) {

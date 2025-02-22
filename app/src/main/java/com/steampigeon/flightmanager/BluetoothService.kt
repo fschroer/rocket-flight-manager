@@ -37,12 +37,12 @@ import java.io.InputStream
 import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
-private const val messageBufferSize = 256
+private const val messageBufferSize = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
 private const val prelaunchMessageSize = 77 // LoRa message size (74) + channel (1) + receiver battery level (2) = 77
-private const val telemetryMessageSize = 56
+private const val telemetryMessageSize = 56 // Minimum size. Variable length depending on sample rate (20/s ascent vs 1/s descent)
 private const val receiverConfigMessageSize = 4
 private const val flightProfileMetadataMessageSize = 131
-private const val flightProfileDataMessageSize = 4
+private const val flightProfileDataMessageSize = 244
 private const val deploymentTestMessageSize = 4
 private const val CHANNEL_ID = "BluetoothService"
 private val EOT = "\u0003\u0019\u0004".toByteArray()
@@ -74,10 +74,7 @@ class BluetoothService() : Service() {
     private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val bondStateReceiver = BondStateReceiver()
     var receiverRegistered = false
-    //private val application: BluetoothManagerRepository = applicationContext as BluetoothManagerRepository
-    //lateinit var bluetoothManagerRepository: BluetoothManagerRepository
-    // Binder given to clients.
-    private val binder = LocalBinder()
+    private val binder = LocalBinder() // Service binder given to clients
     private val _data = MutableSharedFlow<ByteArray>()
     val data: SharedFlow<ByteArray> = _data.asSharedFlow()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -85,7 +82,7 @@ class BluetoothService() : Service() {
     private lateinit var locatorInputStream: InputStream
     private lateinit var locatorOutputStream: OutputStream
     private var armedStateChangeWaitCount = 0
-    private val inboundMessageBuffer: ByteArray = ByteArray(messageBufferSize) // buffer store for the stream
+    private val inboundMessageBuffer = ByteArray(messageBufferSize) // buffer store for the stream
     private var numBytes = 0 // bytes returned from read()
     private var messageReceived = false
     private var currentMessageSize = 0
@@ -112,13 +109,9 @@ class BluetoothService() : Service() {
             }
             serviceScope.launch {
                 // Keep listening to the InputStream until an exception occurs.
-                var loopCount = 0
                 while (true) {
-                    //Log.d(TAG, "Call maintainLocatorDevicePairing: $loopCount")
-                    maintainLocatorDevicePairing()
                     if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Connected) {
-                        // Read from the InputStream.
-                        try {
+                        try { // Read from the InputStream.
                             numBytes = locatorInputStream.read(
                                 inboundMessageBuffer,
                                 currentMessageSize,
@@ -131,114 +124,93 @@ class BluetoothService() : Service() {
                                 BluetoothConnectionState.Disconnected
                             )
                         }
+                        // Emit received message for viewmodel collection, update armed state, reset for next message
                         if (currentMessageSize >= 3) {
                             //Log.d(TAG, logByteArrayAsChars(inboundMessageBuffer, currentMessageSize))
                             // Update message type
                             val messageHeader = inboundMessageBuffer.copyOfRange(0, 3)
                             when {
-                                messageHeader.contentEquals(prelaunchMessageHeader) -> {
-                                    messageType = MessageType.Prelaunch
-                                }
-                                messageHeader.contentEquals(telemetryMessageHeader) -> {
-                                    messageType = MessageType.Telemetry
-                                }
-                                messageHeader.contentEquals(receiverConfigMessageHeader) -> {
-                                    messageType = MessageType.ReceiverConfig
-                                }
-                                messageHeader.contentEquals(flightProfileMetadataMessageHeader) -> {
-                                    messageType = MessageType.FlightProfileMetadata
-                                }
-                                messageHeader.contentEquals(flightProfileDataMessageHeader) -> {
-                                    messageType = MessageType.FlightProfileData
-                                }
-                                messageHeader.contentEquals(deploymentTestMessageHeader) -> {
-                                    messageType = MessageType.DeploymentTest
-                                }
-                            }
-                        }
-                        // Emit received message for viewmodel collection, update armed state, reset for next message
-                        //Log.d(TAG, "Checking for message match")
-                        //Log.d(TAG, "MessageType: $messageType")
-                        //Log.d(TAG, "Received size: $currentMessageSize")
-                        when {
-                            messageType == MessageType.Prelaunch && currentMessageSize >= prelaunchMessageSize -> {
-                                //Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, prelaunchMessageSize))
-                                if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
-                                    BluetoothManagerRepository.updateArmedState(false)
-                                    BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                        LocatorArmedMessageState.Idle
-                                    )
-                                    armedStateChangeWaitCount = 0
-                                } else {
-                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of arm request
-                                        armedStateChangeWaitCount++
-                                        if (armedStateChangeWaitCount >= 5) {
-                                            BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                                LocatorArmedMessageState.Idle
-                                            )
+                                messageHeader.contentEquals(prelaunchMessageHeader) && currentMessageSize >= prelaunchMessageSize -> {
+                                    //Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, prelaunchMessageSize))
+                                    if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
+                                        BluetoothManagerRepository.updateArmedState(false)
+                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                            LocatorArmedMessageState.Idle
+                                        )
+                                        armedStateChangeWaitCount = 0
+                                    } else {
+                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of arm request
+                                            armedStateChangeWaitCount++
+                                            if (armedStateChangeWaitCount >= 5) {
+                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                                    LocatorArmedMessageState.Idle
+                                                )
+                                            }
                                         }
                                     }
+                                    clearMessage()
                                 }
-                                clearMessage()
-                            }
 
-                            messageType == MessageType.Telemetry && currentMessageSize >= telemetryMessageSize -> {
-                                //Log.d(TAG, "Telemetry message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, telemetryMessageSize))
-                                if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
-                                    BluetoothManagerRepository.updateArmedState(true)
-                                    BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                        LocatorArmedMessageState.Idle
-                                    )
-                                    armedStateChangeWaitCount = 0
-                                } else {
-                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of disarm request
-                                        armedStateChangeWaitCount++
-                                        if (armedStateChangeWaitCount >= 5) {
-                                            BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                                LocatorArmedMessageState.Idle
-                                            )
+                                messageHeader.contentEquals(telemetryMessageHeader) && currentMessageSize >= telemetryMessageSize -> {
+                                    //Log.d(TAG, "Telemetry message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, telemetryMessageSize))
+                                    if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
+                                        BluetoothManagerRepository.updateArmedState(true)
+                                        BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                            LocatorArmedMessageState.Idle
+                                        )
+                                        armedStateChangeWaitCount = 0
+                                    } else {
+                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of disarm request
+                                            armedStateChangeWaitCount++
+                                            if (armedStateChangeWaitCount >= 5) {
+                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                                    LocatorArmedMessageState.Idle
+                                                )
+                                            }
                                         }
                                     }
+                                    clearMessage()
                                 }
-                                clearMessage()
-                            }
-                            messageType == MessageType.ReceiverConfig && currentMessageSize >= receiverConfigMessageSize -> {
-                                //Log.d(TAG, "Receiver config message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, receiverConfigMessageSize))
-                                clearMessage()
-                            }
-                            messageType == MessageType.FlightProfileMetadata && currentMessageSize >= flightProfileMetadataMessageSize -> {
-                                //Log.d(TAG, "Flight profile metadata message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
-                                clearMessage()
-                            }
-                            messageType == MessageType.FlightProfileData && currentMessageSize >= flightProfileDataMessageSize -> {
-                                //Log.d(TAG, "Flight profile data message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
-                                clearMessage()
-                            }
-                            messageType == MessageType.DeploymentTest && currentMessageSize >= deploymentTestMessageSize -> {
-                                //Log.d(TAG, "Deployment test message detected, $currentMessageSize")
-                                _data.emit(inboundMessageBuffer.copyOfRange(0, deploymentTestMessageSize))
-                                clearMessage()
-                            }
 
-                            currentMessageSize > telemetryMessageSize -> {
-                                Log.d(TAG, "Overflow detected, $currentMessageSize")
-                                clearMessage()
+                                messageHeader.contentEquals(receiverConfigMessageHeader) && currentMessageSize >= receiverConfigMessageSize -> {
+                                    //Log.d(TAG, "Receiver config message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, receiverConfigMessageSize))
+                                    clearMessage()
+                                }
+
+                                messageHeader.contentEquals(flightProfileMetadataMessageHeader) && currentMessageSize >= flightProfileMetadataMessageSize -> {
+                                    //Log.d(TAG, "Flight profile metadata message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
+                                    clearMessage()
+                                }
+
+                                messageHeader.contentEquals(flightProfileDataMessageHeader) && currentMessageSize >= flightProfileDataMessageSize -> {
+                                    //Log.d(TAG, "Flight profile data message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
+                                    clearMessage()
+                                }
+
+                                messageHeader.contentEquals(deploymentTestMessageHeader) && currentMessageSize >= deploymentTestMessageSize -> {
+                                    //Log.d(TAG, "Deployment test message detected, $currentMessageSize")
+                                    _data.emit(inboundMessageBuffer.copyOfRange(0, deploymentTestMessageSize))
+                                    clearMessage()
+                                }
+
+                                currentMessageSize > telemetryMessageSize -> {
+                                    Log.d(TAG, "Overflow detected, $currentMessageSize")
+                                    clearMessage()
+                                }
                             }
                         }
                         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
                             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
                     } else {
                         clearMessage()
-                        if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Paired)
-                            connectLocator()
+                        maintainLocatorDevicePairing()
                     }
-                    delay(100)
-                    loopCount++
+                    delay(10)
                 }
             }
         }
@@ -289,7 +261,6 @@ class BluetoothService() : Service() {
 
     @SuppressLint("MissingPermission")
     suspend fun maintainLocatorDevicePairing() {
-        //if (bluetoothConnectionManager.receiverRegistered) {
         when (BluetoothManagerRepository.bluetoothConnectionState.value) {
             BluetoothConnectionState.Idle -> {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Starting)
@@ -301,19 +272,16 @@ class BluetoothService() : Service() {
             BluetoothConnectionState.AssociateStart -> {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.AssociateWait)
                 Log.d(TAG, "Changing state from AssociateStart to AssociateWait")
-//                serviceScope.launch {
-//                    while (bluetoothAdapter.isDiscovering != false) { delay(100) }
-//                    if (BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.AssociateWait) {
-//                        Log.d(TAG, "Changing state from SelectingDevices to PairingFailed")
-//                        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
-//                    }
-//                }
             }
             BluetoothConnectionState.Paired -> {
                 if (bluetoothAdapter.isEnabled == true) {
-                    if (BluetoothManagerRepository.locatorDevice.value!!.bondState != BluetoothDevice.BOND_BONDED) {
-                        Log.d(TAG, "Changing state from Paired to Enabled")
-                        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
+                    BluetoothManagerRepository.locatorDevice.value?.let { locatorDevice ->
+                        if (locatorDevice.bondState == BluetoothDevice.BOND_BONDED) {
+                            connectLocator()
+                        } else {
+                            Log.d(TAG, "Changing state from Paired to Enabled")
+                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
+                        }
                     }
                 }
                 else {
@@ -339,10 +307,6 @@ class BluetoothService() : Service() {
                 BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
             }
             else -> {}
-            //}
-            //else {
-            //    bluetoothConnectionManager.RegisterReceiver(context)
-            //}
         }
     }
 
