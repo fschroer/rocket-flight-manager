@@ -243,7 +243,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     else -> "side"
                                 },
                                 locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 72) - 3686.4) / 409.6 * 8).toInt(),
-                                receiverBatteryLevel = ((byteArrayToShort(locatorMessage, 75) - 3686.4) / 409.6 * 8).toInt(),
+                                receiverBatteryLevel = (byteArrayToShort(locatorMessage, 75) / 12.5).toInt(),
                             )
                         }
                         _remoteLocatorConfig.update { currentState ->
@@ -507,13 +507,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             for (i in 1..50) {
                 delay(100)
-                if (_flightProfileMetadataMessageState.value == LocatorMessageState.AckUpdated ||
-                    _flightProfileMetadataMessageState.value == LocatorMessageState.SendFailure)
+                if (_flightProfileDataMessageState.value == LocatorMessageState.AckUpdated ||
+                    _flightProfileDataMessageState.value == LocatorMessageState.SendFailure)
                     break
             }
-            if (_flightProfileMetadataMessageState.value == LocatorMessageState.SendRequested ||
-                _flightProfileMetadataMessageState.value == LocatorMessageState.Sent) {
-                _flightProfileMetadataMessageState.value = LocatorMessageState.NotAcknowledged
+            if (_flightProfileDataMessageState.value == LocatorMessageState.SendRequested ||
+                _flightProfileDataMessageState.value == LocatorMessageState.Sent) {
+                _flightProfileDataMessageState.value = LocatorMessageState.NotAcknowledged
             }
         }
     }

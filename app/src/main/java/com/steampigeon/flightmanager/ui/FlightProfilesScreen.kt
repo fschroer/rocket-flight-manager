@@ -5,8 +5,10 @@ package com.steampigeon.flightmanager.ui
 //import android.os.Build
 //import androidx.annotation.RequiresApi
 import android.text.TextPaint
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,8 +34,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 //import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
@@ -68,8 +73,8 @@ fun FlightProfilesScreen(
     val flightProfileAglData = viewModel.flightProfileAglData.collectAsState().value
     val flightProfileAccelerometerData = viewModel.flightProfileAccelerometerData.collectAsState().value
     val flightProfileArchivePosition = viewModel.flightProfileArchivePosition.collectAsState().value
-    val requestFlightProfileMetadata = viewModel.requestFlightProfileMetadata.collectAsState().value
-    var localRequestFlightProfileMetadata by remember { mutableStateOf(requestFlightProfileMetadata) }
+    //val requestFlightProfileMetadata = viewModel.requestFlightProfileMetadata.collectAsState().value
+    //var localRequestFlightProfileMetadata by remember { mutableStateOf(requestFlightProfileMetadata) }
 
 //    val context = LocalContext.current
 //    val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -93,10 +98,10 @@ fun FlightProfilesScreen(
 //    }
 //
 
-    LaunchedEffect(requestFlightProfileMetadata) {
-        if (localRequestFlightProfileMetadata) {
-            viewModel.updateRequestFlightProfileMetadata(false)
-            localRequestFlightProfileMetadata = false
+    LaunchedEffect(flightProfileMetadataMessageState) {
+        if (flightProfileMetadataMessageState == LocatorMessageState.Idle) {
+            //viewModel.updateRequestFlightProfileMetadata(false)
+            //localRequestFlightProfileMetadata = false
             //viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
             viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
             viewModel.clearFlightProfileMetadata()
@@ -108,12 +113,15 @@ fun FlightProfilesScreen(
             viewModel.updateFlightMetadataState()
         }
     }
-    Column (
-        modifier = modifier
-            .fillMaxHeight()
-            .padding(16.dp)
-    ) {
-        if (flightProfileDataMessageState != LocatorMessageState.AckUpdated) {
+    BackHandler(enabled = true) {
+        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+    }
+    if (flightProfileDataMessageState != LocatorMessageState.AckUpdated) {
+        Column (
+            modifier = modifier
+                .fillMaxHeight()
+                .padding(16.dp)
+        ) {
             Column(
                 modifier = modifier.weight(11f),
                 verticalArrangement = Arrangement.SpaceAround
@@ -127,19 +135,19 @@ fun FlightProfilesScreen(
                         )
                         Spacer(modifier = modifier.weight(1f))
                         Column(
-                        modifier = Modifier
-                            .weight(5f)
-                            .clickable {
-                                viewModel.updateFlightProfileArchivePosition(flightProfileMetadataItem.position)
-                                if (flightProfileDataMessageState == LocatorMessageState.Idle) {
-                                    viewModel.updateFlightProfileDataMessageState(LocatorMessageState.SendRequested)
-                                    if (service?.requestFlightProfileData(flightProfileMetadataItem.position) == true)
-                                        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Sent)
-                                    else
-                                        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
-                                    viewModel.updateFlightDataState()
-                                }
-                            },
+                            modifier = Modifier
+                                .weight(5f)
+                                .clickable {
+                                    viewModel.updateFlightProfileArchivePosition(flightProfileMetadataItem.position)
+                                    if (flightProfileDataMessageState == LocatorMessageState.Idle) {
+                                        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.SendRequested)
+                                        if (service?.requestFlightProfileData(flightProfileMetadataItem.position) == true)
+                                            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Sent)
+                                        else
+                                            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
+                                        viewModel.updateFlightDataState()
+                                    }
+                                },
                         ) {
                             Text(dateTimeFormat.format(flightProfileMetadataItem.date))
                             Text("Apogee: ${flightProfileMetadataItem.apogee.toBigDecimal().setScale(1, RoundingMode.UP).toFloat()}m")
@@ -148,7 +156,7 @@ fun FlightProfilesScreen(
                     Divider(modifier = modifier.weight(1f))
                 }
             }
-            Spacer (modifier = modifier.weight(1f))
+            Spacer(modifier = modifier.weight(1f))
             Row(
                 modifier = modifier,
                 //.fillMaxWidth()
@@ -164,35 +172,56 @@ fun FlightProfilesScreen(
                 }
             }
         }
-        else {
-            val maxAgl = flightProfileMetadata[flightProfileArchivePosition].apogee
-            var maxAccelerometer: Short = 0
-            var minAccelerometer: Short = 0
-            flightProfileAccelerometerData.forEach { accelerometerSample ->
-                if (accelerometerSample.x > maxAccelerometer)
-                    maxAccelerometer = accelerometerSample.x
-                if (accelerometerSample.x < minAccelerometer)
-                    minAccelerometer = accelerometerSample.x
-                if (accelerometerSample.y > maxAccelerometer)
-                    maxAccelerometer = accelerometerSample.y
-                if (accelerometerSample.y < minAccelerometer)
-                    minAccelerometer = accelerometerSample.y
-                if (accelerometerSample.z > maxAccelerometer)
-                    maxAccelerometer = accelerometerSample.z
-                if (accelerometerSample.z < minAccelerometer)
-                    minAccelerometer = accelerometerSample.z
-            }
-            val maxChartWidth = flightProfileMetadata[flightProfileArchivePosition].timeToDrogue + (
-                    if (flightProfileAglData.size > flightProfileMetadata[flightProfileArchivePosition].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND)
-                        flightProfileMetadata[flightProfileArchivePosition].timeToDrogue + (flightProfileAglData.size - flightProfileMetadata[flightProfileArchivePosition].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND)
-                    else 0f)
-            val gridColor = MaterialTheme.colorScheme.onPrimary
-            val aglColor = MaterialTheme.colorScheme.primary
-            val legendColor = MaterialTheme.colorScheme.secondaryContainer
-            val targetGrids = 5
+    }
+    else {
+        val maxAgl = flightProfileMetadata[flightProfileArchivePosition].apogee
+        var maxAccelerometer: Short = 0
+        var minAccelerometer: Short = 0
+        flightProfileAccelerometerData.forEach { accelerometerSample ->
+            if (accelerometerSample.x > maxAccelerometer)
+                maxAccelerometer = accelerometerSample.x
+            if (accelerometerSample.x < minAccelerometer)
+                minAccelerometer = accelerometerSample.x
+            if (accelerometerSample.y > maxAccelerometer)
+                maxAccelerometer = accelerometerSample.y
+            if (accelerometerSample.y < minAccelerometer)
+                minAccelerometer = accelerometerSample.y
+            if (accelerometerSample.z > maxAccelerometer)
+                maxAccelerometer = accelerometerSample.z
+            if (accelerometerSample.z < minAccelerometer)
+                minAccelerometer = accelerometerSample.z
+        }
+        val maxChartWidth = flightProfileMetadata[flightProfileArchivePosition].timeToDrogue + (
+                if (flightProfileAglData.size > flightProfileMetadata[flightProfileArchivePosition].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND)
+                    flightProfileMetadata[flightProfileArchivePosition].timeToDrogue + (flightProfileAglData.size - flightProfileMetadata[flightProfileArchivePosition].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND)
+                else 0f)
+        val gridColor = MaterialTheme.colorScheme.onPrimary
+        val aglColor = MaterialTheme.colorScheme.primary
+        val legendColor = MaterialTheme.colorScheme.secondaryContainer
+        val targetGrids = 5
+        Column (
+            modifier = modifier
+                .fillMaxHeight()
+                .padding(16.dp)
+        ) {
+            val scale = remember { mutableFloatStateOf(1f) }
+            val offset = remember { mutableStateOf(Offset.Zero) }
             Canvas (modifier = modifier
                 .weight(11f)
-                .fillMaxWidth()) {
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale.value *= zoom
+                        offset.value += pan
+                    }
+                }
+                .graphicsLayer(
+                    scaleX = scale.floatValue,
+                    scaleY = scale.floatValue,
+                    translationX = offset.value.x,
+                    translationY = offset.value.y
+                )
+            ) {
                 val chartMarginX = 64f
                 val chartMarginY = 32f
                 val canvasHeight = size.height - chartMarginY
@@ -223,7 +252,7 @@ fun FlightProfilesScreen(
                     }
                 }
                 // Draw horizontal grid lines
-                for (gridY in maxAgl.toInt() downTo maxAgl.toInt() - gridHeight * (maxAgl / gridHeight).toInt() step gridHeight) {
+                for (gridY in maxAgl.toInt() downTo 0 step gridHeight) {
                     drawLine(
                         color = gridColor,
                         strokeWidth = 1.dp.toPx(),
@@ -280,6 +309,21 @@ fun FlightProfilesScreen(
                     flightTime += if (sampleID < flightProfileMetadata[flightProfileArchivePosition].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND - 2) 0.05f else 1.0f
                 }
                 val scaleFactorAccY = canvasHeight / (maxAccelerometer - minAccelerometer)
+                // Draw accelerometer vertical axis
+                val accelerometerGridHeight = ((maxAccelerometer - minAccelerometer) / targetGrids).toInt()
+                for (gridY in maxAccelerometer downTo minAccelerometer step accelerometerGridHeight) {
+                    drawIntoCanvas { canvas ->
+                        val textHeight = chartMarginY
+                        val paint = TextPaint().apply {
+                            color = legendColor.toArgb()
+                            textSize = textHeight
+                        }
+                        val text = "${(gridY * 10 / RocketViewModel.ACCELEROMETER_SCALE).toFloat() / 10}"
+                        val x = canvasWidth
+                        val y = canvasHeight - ((gridY - minAccelerometer) * scaleFactorAccY - textHeight / 2) - 8
+                        canvas.nativeCanvas.drawText(text, x, y, paint)
+                    }
+                }
                 // Draw accelerometer X axis stats
                 flightTime = 0f
                 lastX = chartMarginX
@@ -329,7 +373,6 @@ fun FlightProfilesScreen(
                     flightTime += 0.05f
                 }
             }
-            Text("Samples received: ${flightProfileAglData.size}")
             Spacer (modifier = modifier.weight(1f))
             Row(
                 modifier = modifier,
@@ -346,7 +389,21 @@ fun FlightProfilesScreen(
                 }
             }
         }
-        Text(flightProfileDataMessageState.toString())
+        Row (
+
+        ) {
+            Spacer (modifier = modifier.weight(3f))
+            Column (
+                modifier = modifier
+                    .fillMaxHeight()
+                    .padding(16.dp)
+                    .weight(4f)
+            ) {
+                Text(flightProfileDataMessageState.toString())
+                Text("Samples received: ${flightProfileAglData.size}")
+            }
+            Spacer (modifier = modifier.weight(1f))
+        }
     }
 }
 

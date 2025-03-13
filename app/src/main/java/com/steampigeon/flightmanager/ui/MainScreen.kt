@@ -18,11 +18,6 @@ import android.location.Location
 import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.util.Log
-import androidx.activity.compose.ManagedActivityResultLauncher
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.ActivityResult
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
@@ -105,6 +100,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.MultiplePermissionsState
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -140,88 +136,24 @@ import kotlin.math.round
 import kotlinx.coroutines.launch
 import kotlin.toString
 
-private lateinit var launcher: ManagedActivityResultLauncher<IntentSenderRequest, ActivityResult>
 private const val messageTimeout = 2000
 private const val drogueVelocityThreshold = -25
 private const val mainVelocityThreshold = -8
 private const val landingAltitudeThreshold = 100
 private const val minimumSpokenAGLVelocity = 2 * 9.8
 
-@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
+@SuppressLint("MissingPermission")
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun HomeScreen(
     navController: NavHostController,
     viewModel: RocketViewModel = viewModel(),
+    permissionsState: MultiplePermissionsState,
     textToSpeech: TextToSpeech?,
     modifier: Modifier
 ) {
     val context = LocalContext.current
-    val permissionsState = rememberMultiplePermissionsState(
-        when (Build.VERSION.SDK_INT) {
-            in 1..27 -> {
-                listOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.BLUETOOTH,
-                    Manifest.permission.CAMERA,
-                )
-            }
-            in 28..30 -> {
-                listOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.BLUETOOTH,
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                )
-            }
-            in 31..33 -> {
-                listOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                )
-            }
-            else -> {
-                listOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.FOREGROUND_SERVICE,
-                    Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE,
-                )
-            }
-        }
-    )
-    val allPermissionsGranted = permissionsState.allPermissionsGranted
-    val bluetoothPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.BLUETOOTH }
-    val locationPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
-// Request permissions
-    LaunchedEffect(allPermissionsGranted) {
-        if (!allPermissionsGranted) 
-            permissionsState.launchMultiplePermissionRequest()
-    }
-    // Initialize Bluetooth Companion Device Manager. Needs time to set up or app crashes.
-    launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            // Handle successful pairing
-            BluetoothManagerRepository.updateLocatorDevice(result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_DEVICE))
-            BluetoothManagerRepository.locatorDevice.value!!.createBond()
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
-            Log.d("Pairing", "Changing state to Paired")
-        } else {
-            // Handle pairing failure
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
-            Log.d("Pairing", "Changing state to PairingFailed")
-        }
-    }
     val bluetoothConnectionState = BluetoothManagerRepository.bluetoothConnectionState.collectAsState().value
-    LaunchedEffect(bluetoothConnectionState) {
-        manageBlueToothState(context, bluetoothConnectionState, textToSpeech)
-    }
     var drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var isMapLoaded by remember { mutableStateOf(false) }
@@ -250,6 +182,8 @@ fun HomeScreen(
 
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
     var trackerLocation by remember { mutableStateOf<Location?>(null) }
+    val bluetoothPermissionState = permissionsState.permissions.find { it.permission == android.Manifest.permission.BLUETOOTH }
+    val locationPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
     LaunchedEffect(locationPermissionState?.hasPermission) {
         if (locationPermissionState?.hasPermission == true) {
             fusedLocationClient.lastLocation
@@ -273,6 +207,7 @@ fun HomeScreen(
     val ordinalToLocator = viewModel.locatorOrdinal.collectAsState().value
     val handheldDevicePitch = viewModel.handheldDevicePitch.collectAsState().value
     val locatorElevation = viewModel.locatorElevation.collectAsState().value
+    val locatorArmedMessageState = BluetoothManagerRepository.locatorArmedMessageState.collectAsState().value
 
     LaunchedEffect(rocketState.flightState) {
         if (armedState && rocketState.flightState != null) {
@@ -415,7 +350,7 @@ fun HomeScreen(
                             )
                         }
                         if (lastPreLaunchMessageAge < messageTimeout) {
-                            if (!BluetoothManagerRepository.armedState.value) {
+                            if (!armedState) {
                                 NavigationDrawerItem(
                                     label = {
                                         Text(
@@ -493,7 +428,7 @@ fun HomeScreen(
                     )
                 },
                 floatingActionButtonPosition = FabPosition.Start
-            ) {
+            ) { padding ->
                 val trackerLatLng = LatLng(trackerLocation?.latitude ?: 0.0, trackerLocation?.longitude ?: 0.0)
                 if (trackerLocation != null && trackerLocation?.longitude != 0.0) {
                     if (accelerometerState.isAvailable && magneticFieldState.isAvailable) {
@@ -509,7 +444,7 @@ fun HomeScreen(
                         val state = rememberUpdatedMarkerState(LatLng(rocketState.latitude, rocketState.longitude))
                         var showControls by remember { mutableStateOf(false) }
                         GoogleMap(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize(), //.padding(padding),
                             onMapLoaded = { isMapLoaded = true },
                             cameraPositionState = cameraPositionState,
                             properties = properties,
@@ -590,8 +525,8 @@ fun HomeScreen(
                                         if (showControls) {
                                             Button( //Arm/disarm
                                                 onClick = {
-                                                    if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                        || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated
+                                                    if (locatorArmedMessageState == LocatorArmedMessageState.Idle
+                                                        || locatorArmedMessageState == LocatorArmedMessageState.AckUpdated
                                                     )
                                                         BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendRequested)
                                                 },
@@ -601,16 +536,16 @@ fun HomeScreen(
                                                 val armedStateText = if (armedState) stringResource(R.string.armed_state_armed) else stringResource(R.string.armed_state_disarmed)
                                                 Text(
                                                     when {
-                                                        armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                            || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) ->
+                                                        armedState && (locatorArmedMessageState == LocatorArmedMessageState.Idle
+                                                            || locatorArmedMessageState == LocatorArmedMessageState.AckUpdated) ->
                                                                 stringResource(id = R.string.armed_state_armed)
-                                                        armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure ->
+                                                        armedState && locatorArmedMessageState == LocatorArmedMessageState.SendFailure ->
                                                             stringResource(id = R.string.bluetooth_state_disconnected)
                                                         armedState -> stringResource(id = R.string.armed_state_disarming)
-                                                        !armedState && (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Idle
-                                                                || BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.AckUpdated) ->
+                                                        !armedState && (locatorArmedMessageState == LocatorArmedMessageState.Idle
+                                                                || locatorArmedMessageState == LocatorArmedMessageState.AckUpdated) ->
                                                             stringResource(id = R.string.armed_state_disarmed)
-                                                        !armedState && BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendFailure ->
+                                                        !armedState && locatorArmedMessageState == LocatorArmedMessageState.SendFailure ->
                                                             stringResource(id = R.string.bluetooth_state_disconnected)
                                                         !armedState -> stringResource(id = R.string.armed_state_arming)
                                                         else -> "Unknown"
@@ -666,7 +601,7 @@ fun HomeScreen(
                             }
                         }
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
-                            LocatorStats(rocketState, distanceToLocator, locatorConfig, viewModel, scaffoldSize, textToSpeech, modifier)
+                            LocatorStats(rocketState, armedState, distanceToLocator, locatorConfig, viewModel, scaffoldSize, textToSpeech, modifier)
                         }
                     }
                 }
@@ -675,116 +610,8 @@ fun HomeScreen(
     }
 }
 
-fun manageBlueToothState(context: Context, bluetoothConnectionState: BluetoothConnectionState, textToSpeech: TextToSpeech?) {
-    val tag = "MainScreen"
-    when (bluetoothConnectionState) {
-        BluetoothConnectionState.Starting -> {
-            Log.d(tag, "Calling enableBluetooth")
-            enableBluetooth(context)
-        }
-        BluetoothConnectionState.Enabled, BluetoothConnectionState.NoDevicesAvailable -> {
-            if (BluetoothManagerRepository.locatorDevice.value == null) {
-                Log.d(tag, "Calling selectBluetoothDevice")
-                selectBluetoothDevice(context, bluetoothConnectionState)
-            } else {
-                if (BluetoothManagerRepository.locatorDevice.value?.bondState != BluetoothDevice.BOND_BONDED) {
-                    BluetoothManagerRepository.locatorDevice.value?.createBond()
-                    Log.d(tag, "Changing state from Enabled to Pairing")
-                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Pairing)
-                } else {
-                    Log.d(tag, "Changing state from Enabled to Paired")
-                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
-                }
-            }
-        }
-        //BluetoothConnectionState.Connected ->
-        //    textToSpeech?.speak("connected to receiver", TextToSpeech.QUEUE_FLUSH, null, null)
-        else -> {}
-    }
-}
-
-@SuppressLint("MissingPermission")
-fun enableBluetooth(context: Context) : Boolean? {
-    val tag = "enableBlueTooth"
-    val bluetoothManager= context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-    val bluetoothAdapter = bluetoothManager.adapter
-
-    when (bluetoothAdapter?.isEnabled) {
-        true -> {
-            Log.d(tag, "Changing state to Enabled")
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
-        }
-        false -> {
-            val enableBluetoothIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            context.startActivity(enableBluetoothIntent)
-            Log.d(tag, "Changing state to Enabling")
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabling)
-        }
-        null -> {
-            Log.d(tag, "Changing state to NotSupported")
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotSupported)
-        }
-    }
-    return bluetoothAdapter?.isEnabled
-}
-
-fun selectBluetoothDevice(context: Context, bluetoothConnectionState: BluetoothConnectionState) {
-    val tag = "selectBluetoothDevice"
-    val deviceManager = context.getSystemService(Context.COMPANION_DEVICE_SERVICE) as CompanionDeviceManager
-
-    // Create an association request
-    if (bluetoothConnectionState == BluetoothConnectionState.Enabled) {
-        val deviceFilter: BluetoothDeviceFilter = BluetoothDeviceFilter.Builder()
-            .setNamePattern(Pattern.compile("RocketReceiver"))
-            .build()
-        val pairingRequest = AssociationRequest.Builder()
-            .addDeviceFilter(deviceFilter)
-            .setSingleDevice(false)
-            .build()
-
-        // Start pairing
-        Log.d(tag, "Launch association")
-        deviceManager.associate(pairingRequest, object : CompanionDeviceManager.Callback() {
-            override fun onDeviceFound(chooserLauncher: IntentSender) {
-                launcher.launch(IntentSenderRequest.Builder(chooserLauncher).build())
-                Log.d(tag, "onDeviceFound: ${chooserLauncher.toString()}")
-            }
-
-            override fun onAssociationPending(intentSender: IntentSender) {
-                super.onAssociationPending(intentSender)
-                Log.d(tag, "onAssociationPending: ${intentSender.toString()}")
-            }
-
-            override fun onAssociationCreated(associationInfo: AssociationInfo) {
-                super.onAssociationCreated(associationInfo)
-                Log.d(tag, "onAssociationCreated: ${associationInfo.toString()}")
-            }
-
-            override fun onFailure(error: CharSequence?) {
-                // Handle no devices found or "don't allow" user selection
-                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.PairingFailed)
-                Log.d(tag, "onFailure: $error")
-            }
-        }, null)
-        BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.AssociateStart)
-    }
-}
-
-fun unpairBluetoothDevice() {
-    if (BluetoothManagerRepository.locatorDevice.value != null) {
-        try {
-            val removeBondMethod = BluetoothManagerRepository.locatorDevice.value!!.javaClass.getMethod("removeBond")
-            removeBondMethod.invoke(BluetoothManagerRepository.locatorDevice.value)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // Handle the exception, maybe log it or show a message to the user
-        }
-    }
-    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Idle)
-}
-
 @Composable
-fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig: LocatorConfig, viewModel: RocketViewModel, scaffoldSize: IntSize, textToSpeech: TextToSpeech?, modifier: Modifier) {
+fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocator: Int, locatorConfig: LocatorConfig, viewModel: RocketViewModel, scaffoldSize: IntSize, textToSpeech: TextToSpeech?, modifier: Modifier) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -798,7 +625,7 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
         modifier = modifier
             .offset { locatorStatisticsOffset }
             .clickable{
-                if (BluetoothManagerRepository.armedState.value && rocketState.flightState != null)
+                if (armedState && rocketState.flightState != null)
                     textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
             }
             .pointerInput(Unit) {
@@ -857,7 +684,7 @@ fun LocatorStats(rocketState: RocketState, distanceToLocator: Int, locatorConfig
             )
         }
         Text(text = "Dist: ${DecimalFormat("#,###").format(distanceToLocator)} m")
-        if (BluetoothManagerRepository.armedState.value) {
+        if (armedState) {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (rocketState.flightState) {

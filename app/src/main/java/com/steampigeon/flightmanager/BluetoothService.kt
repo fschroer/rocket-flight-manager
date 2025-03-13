@@ -409,6 +409,7 @@ class BluetoothService() : Service() {
 
         try {
             locatorOutputStream.write(message)
+            Log.d(TAG, "Sent Flight Profile Metadata request")
         } catch (e: IOException) {
             Log.e(TAG, "Error occurred when sending data", e)
             return false
@@ -462,7 +463,7 @@ class BluetoothService() : Service() {
 
     override fun onUnbind(intent: Intent): Boolean {
         // Stop the service when all clients have unbinded
-        //stopSelf()
+        stopSelf() // If this is not called, multiple service instances are retained
         return true
     }
 
