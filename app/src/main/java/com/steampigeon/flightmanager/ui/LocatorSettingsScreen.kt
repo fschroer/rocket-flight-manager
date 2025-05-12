@@ -193,7 +193,7 @@ fun LocatorSettingsScreen(
                 modifier = Modifier.weight(1f),
                 onClick = onCancelButtonClicked
             ) {
-                Text(stringResource(R.string.cancel))
+                Text(stringResource(R.string.return_to_main))
             }
             Button(
                 modifier = Modifier.weight(1f),

@@ -46,8 +46,7 @@ fun DeploymentTestScreen(
             modifier = modifier.padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
-            // Capture initial and updated receiver configuration data.
-            // Used for configuration screen and confirming receiver update acknowledgement.
+            // Perform remote deployment test
             EnumDropdown(
                 DeploymentTestOption::class,
                 deploymentTestOption,
@@ -59,11 +58,14 @@ fun DeploymentTestScreen(
             }
             Button(
                 onClick = {
-                    if (deploymentTestCountdown == 0)
+                    if (deploymentTestCountdown == 0) {
                         service?.deploymentTest(deploymentTestOption.ordinal)
+                        viewModel.updateDeploymentTestActive(true)
+                    }
                     else {
                         service?.deploymentTest(0)
                         viewModel.updateDeploymentTestCountdown(0)
+                        viewModel.updateDeploymentTestActive(false)
                     }
                 },
                 modifier = modifier,
