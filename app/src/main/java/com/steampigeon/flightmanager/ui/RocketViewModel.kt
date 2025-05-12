@@ -201,6 +201,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _flightProfileAccelerometerData = MutableStateFlow<List<Accelerometer>>(emptyList())
     val flightProfileAccelerometerData: StateFlow<List<Accelerometer>> = _flightProfileAccelerometerData.asStateFlow()
 
+    private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
+    val deploymentTestActive: StateFlow<Boolean> = _deploymentTestActive.asStateFlow()
+
+    fun updateDeploymentTestActive(newDeploymentTestActive: Boolean) {
+        _deploymentTestActive.value = newDeploymentTestActive
+    }
+
     private val _deploymentTestCountdown = MutableStateFlow<Int>(0)
     val deploymentTestCountdown: StateFlow<Int> = _deploymentTestCountdown.asStateFlow()
 
@@ -354,7 +361,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     }
                     locatorMessageHeader.contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
-                        _deploymentTestCountdown.value = locatorMessage[3].toInt()
+                        val deploymentTestCountdown = locatorMessage[3].toInt()
+                        if (_deploymentTestActive.value)
+                            _deploymentTestCountdown.value = deploymentTestCountdown
                     }
                 }
             }

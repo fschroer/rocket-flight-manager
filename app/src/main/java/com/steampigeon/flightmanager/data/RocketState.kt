@@ -27,7 +27,7 @@ data class RocketState(
     val velocity: Float = 0f,
     val locatorBatteryLevel: Int = 0,
     val receiverBatteryLevel: Int = 0,
-    val flightState: FlightStates? = null,
+    val flightState: FlightStates = FlightStates.WaitingForLaunch,
 )
 
 data class Accelerometer(
