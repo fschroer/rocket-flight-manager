@@ -208,22 +208,22 @@ fun HomeScreen(
                 FlightStates.Noseover ->
                     noseoverTime = System.currentTimeMillis()
                 FlightStates.DroguePrimaryDeployed ->
-                    if ((locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary) &&
-                        deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                    if (locatorConfig.deploymentChannel1Mode == DeployMode.DroguePrimary && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed ||
+                        locatorConfig.deploymentChannel2Mode == DeployMode.DroguePrimary && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
                         textToSpeech?.speak("Drogue charge.", TextToSpeech.QUEUE_ADD, null, null)
                 FlightStates.DrogueBackupDeployed ->
-                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed ||
-                        locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                    if (locatorConfig.deploymentChannel1Mode == DeployMode.DrogueBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed ||
+                        locatorConfig.deploymentChannel2Mode == DeployMode.DrogueBackup && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
                         textToSpeech?.speak("Drogue backup charge.", TextToSpeech.QUEUE_ADD, null, null)
                 FlightStates.MainPrimaryDeployed -> {
                     drogueVelocity = rocketState.velocity
-                    if (locatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed ||
-                        locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed)
+                    if (locatorConfig.deploymentChannel1Mode == DeployMode.MainPrimary && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed ||
+                        locatorConfig.deploymentChannel2Mode == DeployMode.MainPrimary && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
                         textToSpeech?.speak("Main charge.", TextToSpeech.QUEUE_ADD, null, null)
                     }
                 FlightStates.MainBackupDeployed ->
-                    if ((locatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || locatorConfig.deployMode == DeployMode.DrogueBackupMainBackup) &&
-                        deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
+                    if (locatorConfig.deploymentChannel1Mode == DeployMode.MainBackup && deployChannel1LaunchConnectivity && !rocketState.deployChannel1Armed ||
+                        locatorConfig.deploymentChannel2Mode == DeployMode.MainBackup && deployChannel2LaunchConnectivity && !rocketState.deployChannel2Armed)
                         textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
                 FlightStates.Landed -> {
                     deployChannel1LaunchConnectivity = false
@@ -722,18 +722,15 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
             //Spacer(modifier = Modifier.weight(1f))
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (locatorConfig.deployMode) {
-                    DeployMode.DroguePrimaryDrogueBackup, DeployMode.DroguePrimaryMainPrimary -> {
+                text = when (locatorConfig.deploymentChannel1Mode) {
+                    DeployMode.DroguePrimary ->
                         "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
-                    }
-
-                    DeployMode.MainPrimaryMainBackup -> {
-                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
-                    }
-
-                    DeployMode.DrogueBackupMainBackup -> {
+                    DeployMode.DrogueBackup ->
                         "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
-                    }
+                    DeployMode.MainPrimary ->
+                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                    DeployMode.MainBackup ->
+                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
@@ -741,18 +738,15 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
-                text = when (locatorConfig.deployMode) {
-                    DeployMode.DroguePrimaryDrogueBackup -> {
+                text = when (locatorConfig.deploymentChannel2Mode) {
+                    DeployMode.DroguePrimary ->
+                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                    DeployMode.DrogueBackup ->
                         "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
-                    }
-
-                    DeployMode.MainPrimaryMainBackup, DeployMode.DrogueBackupMainBackup -> {
-                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
-                    }
-
-                    DeployMode.DroguePrimaryMainPrimary -> {
+                    DeployMode.MainPrimary ->
                         "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
-                    }
+                    DeployMode.MainBackup ->
+                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
