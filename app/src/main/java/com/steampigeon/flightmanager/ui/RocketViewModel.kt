@@ -249,25 +249,26 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 72) - 3686.4) / 409.6 * 8).toInt(),
-                                receiverBatteryLevel = (byteArrayToShort(locatorMessage, 75) / 12.5).toInt(),
+                                locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 73) - 3686.4) / 409.6 * 8).toInt(),
+                                receiverBatteryLevel = (byteArrayToShort(locatorMessage, 76) / 12.5).toInt(),
                             )
                         }
                         _remoteLocatorConfig.update { currentState ->
                             currentState.copy(
-                                deployMode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
-                                launchDetectAltitude = byteArrayToUShort(locatorMessage, 50).toInt(),
-                                droguePrimaryDeployDelay = locatorMessage[52].toInt(),
-                                drogueBackupDeployDelay = locatorMessage[53].toInt(),
-                                mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 54).toInt(),
-                                mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 56).toInt(),
-                                deploySignalDuration = locatorMessage[58].toInt(),
-                                deviceName = String(locatorMessage.copyOfRange(59, 71), Charsets.UTF_8).trimEnd('\u0000'),
+                                deploymentChannel1Mode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
+                                deploymentChannel2Mode = DeployMode.fromUByte(locatorMessage[50].toUByte()),
+                                launchDetectAltitude = byteArrayToUShort(locatorMessage, 51).toInt(),
+                                droguePrimaryDeployDelay = locatorMessage[53].toInt(),
+                                drogueBackupDeployDelay = locatorMessage[54].toInt(),
+                                mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 55).toInt(),
+                                mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 57).toInt(),
+                                deploySignalDuration = locatorMessage[59].toInt(),
+                                deviceName = String(locatorMessage.copyOfRange(60, 72), Charsets.UTF_8).trimEnd('\u0000'),
                             )
                         }
                         _remoteReceiverConfig.update { currentState ->
                             currentState.copy(
-                                channel = locatorMessage[74].toInt(),
+                                channel = locatorMessage[75].toInt(),
                             )
                         }
                     }

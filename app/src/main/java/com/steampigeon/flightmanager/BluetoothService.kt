@@ -38,7 +38,7 @@ import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
-private const val prelaunchMessageSize = 77 // LoRa message size (74) + channel (1) + receiver battery level (2) = 77
+private const val prelaunchMessageSize = 78 // LoRa message size (75) + channel (1) + receiver battery level (2) = 78
 private const val telemetryMessageSize = 56 // Minimum size. Variable length depending on sample rate (20/s ascent vs 1/s descent)
 private const val receiverConfigMessageSize = 4
 private const val flightProfileMetadataMessageSize = 131
@@ -371,7 +371,9 @@ class BluetoothService() : Service() {
 
     fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean {
         val configMessage = "CFG".toByteArray() +
-                byteArrayOf((locatorConfig.deployMode ?: DeployMode.DroguePrimaryMainPrimary).deployMode.toByte(),
+                byteArrayOf(
+                    (locatorConfig.deploymentChannel1Mode ?: DeployMode.DroguePrimary).deployMode.toByte(),
+                    (locatorConfig.deploymentChannel2Mode ?: DeployMode.MainPrimary).deployMode.toByte(),
                     locatorConfig.launchDetectAltitude.toByte(),
                     (locatorConfig.launchDetectAltitude / 256).toByte(),
                     locatorConfig.droguePrimaryDeployDelay.toByte(),

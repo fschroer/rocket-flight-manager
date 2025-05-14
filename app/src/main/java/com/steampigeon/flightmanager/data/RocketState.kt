@@ -37,7 +37,8 @@ data class Accelerometer(
 )
 
 data class LocatorConfig(
-    val deployMode: DeployMode? = null,
+    val deploymentChannel1Mode: DeployMode? = null,
+    val deploymentChannel2Mode: DeployMode? = null,
     val launchDetectAltitude: Int = 0,
     val droguePrimaryDeployDelay: Int = 0,
     val drogueBackupDeployDelay: Int = 0,
@@ -59,10 +60,10 @@ data class FlightProfileMetadata(
 )
 
 enum class DeployMode (val deployMode: UByte) {
-    DroguePrimaryDrogueBackup(0u),
-    MainPrimaryMainBackup(1u),
-    DroguePrimaryMainPrimary(2u),
-    DrogueBackupMainBackup(3u);
+    DroguePrimary(0u),
+    DrogueBackup(1u),
+    MainPrimary(2u),
+    MainBackup(3u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.deployMode == value }

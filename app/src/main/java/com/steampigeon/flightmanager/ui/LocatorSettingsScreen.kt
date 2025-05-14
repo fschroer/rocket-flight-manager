@@ -92,62 +92,134 @@ fun LocatorSettingsScreen(
             // Used for configuration screen and confirming locator update acknowledgement.
             EnumDropdown(
                 DeployMode::class,
-                stagedLocatorConfig.deployMode ?: DeployMode.DroguePrimaryDrogueBackup,
+                stagedLocatorConfig.deploymentChannel1Mode ?: DeployMode.DroguePrimary,
                 enabled = locatorConfigMessageState == LocatorMessageState.Idle,
                 modifier = modifier
             )
             { newConfigValue ->
-                stagedLocatorConfig = stagedLocatorConfig.copy(deployMode = newConfigValue as DeployMode)
+                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel1Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary)
-                ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.drogue_primary_deploy_delay),
-                    initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
-                    minValue = 0.0,
-                    maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                    configMessageState = locatorConfigMessageState,
-                    modifier = modifier
-                ) { newConfigValue ->
-                    stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                    viewModel.updateLocatorConfigChanged(true)
+            EnumDropdown(
+                DeployMode::class,
+                stagedLocatorConfig.deploymentChannel2Mode ?: DeployMode.MainPrimary,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
+                modifier = modifier
+            )
+            { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel2Mode = newConfigValue as DeployMode)
+                viewModel.updateLocatorConfigChanged(true)
+            }
+            when (stagedLocatorConfig.deploymentChannel1Mode) {
+                DeployMode.DroguePrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
+                        minValue = 0.0,
+                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
                 }
-            if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryDrogueBackup || stagedLocatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
-                ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.drogue_backup_deploy_delay),
-                    initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
-                    minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
-                    maxValue = 3.0,
-                    configMessageState = locatorConfigMessageState,
-                    modifier = modifier
-                ) { newConfigValue ->
-                    stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                    viewModel.updateLocatorConfigChanged(true)
+                DeployMode.DrogueBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
+                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
+                        maxValue = 3.0,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
                 }
-            if (stagedLocatorConfig.deployMode == DeployMode.DroguePrimaryMainPrimary || stagedLocatorConfig.deployMode == DeployMode.MainPrimaryMainBackup)
-                ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.main_primary_deploy_altitude),
-                    initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
-                    minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
-                    maxValue = 500,
-                    configMessageState = locatorConfigMessageState,
-                    modifier = modifier
-                ) { newConfigValue ->
-                    stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                    viewModel.updateLocatorConfigChanged(true)
+                DeployMode.MainPrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
+                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
+                        maxValue = 500,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
                 }
-            if (stagedLocatorConfig.deployMode == DeployMode.MainPrimaryMainBackup || stagedLocatorConfig.deployMode == DeployMode.DrogueBackupMainBackup)
-                ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.main_backup_deploy_altitude),
-                    initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
-                    minValue = 0,
-                    maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                    configMessageState = locatorConfigMessageState,
-                    modifier = modifier
-                ) { newConfigValue ->
-                    stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                    viewModel.updateLocatorConfigChanged(true)
+                DeployMode.MainBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
+                        minValue = 0,
+                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
                 }
+                else -> {}
+            }
+            when (stagedLocatorConfig.deploymentChannel2Mode) {
+                DeployMode.DroguePrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
+                        minValue = 0.0,
+                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.DrogueBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
+                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
+                        maxValue = 3.0,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainPrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
+                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
+                        maxValue = 500,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
+                        minValue = 0,
+                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                else -> {}
+            }
             ConfigurationItemText(
                 configItemName = stringResource(R.string.device_name),
                 configItemValue = stagedLocatorConfig.deviceName,
@@ -173,7 +245,7 @@ fun LocatorSettingsScreen(
                 configItemName = stringResource(R.string.deploy_signal_duration),
                 initialConfigValue = stagedLocatorConfig.deploySignalDuration.toDouble() / 10,
                 minValue = 0.5,
-                maxValue = 2.0,
+                maxValue = 10.0,
                 configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
