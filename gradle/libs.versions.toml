@@ -1,6 +1,6 @@
 [versions]
 accompanistPermissions = "0.21.1-beta"
-agp = "8.7.3"
+agp = "8.10.1"
 bluetooth = "1.0.0-alpha02"
 cameraCore = "1.4.1"
 composesensors = "1.2.0"
@@ -32,6 +32,7 @@ uiTextGoogleFonts = "1.7.7"
 navigationRuntimeKtx = "2.8.6"
 navigationCompose = "2.8.6"
 appcompat = "1.7.0"
+coreI18n = "1.0.0"
 
 [libraries]
 accompanist-permissions = { module = "com.google.accompanist:accompanist-permissions", version.ref = "accompanistPermissions" }
@@ -78,6 +79,7 @@ protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "p
 protobuf-java-util = { module = "com.google.protobuf:protobuf-java-util", version.ref = "protobufJavaUtil" }
 protobuf-kotlin = { module = "com.google.protobuf:protobuf-kotlin", version.ref = "protobufKotlin" }
 ui = { module = "androidx.compose.ui:ui", version.ref = "ui" }
+androidx-core-i18n = { group = "androidx.core", name = "core-i18n", version.ref = "coreI18n" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

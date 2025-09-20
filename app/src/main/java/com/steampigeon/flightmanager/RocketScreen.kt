@@ -1,6 +1,5 @@
 package com.steampigeon.flightmanager
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
@@ -27,7 +26,9 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.ExperimentalMaterialApi
@@ -51,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
@@ -66,7 +68,6 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
-import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
@@ -103,15 +104,19 @@ fun RocketAppBar(
 ) {
     TopAppBar(
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(id = currentScreen.title))
                 Image(
                     modifier = Modifier
                         .size(dimensionResource(id = R.dimen.image_size))
-                        .padding(dimensionResource(id = R.dimen.padding_small)),
-                    painter = painterResource(R.drawable.rocket),
+                        .padding(dimensionResource(id = R.dimen.padding_small))
+                        .scale(2f),
+                    painter = painterResource(R.mipmap.steam_pigeon_foreground),
                     contentDescription = null
                 )
-                Text(stringResource(id = currentScreen.title))
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -140,7 +145,6 @@ fun RocketApp(
 ) {
     val context = LocalContext.current
     val viewModel: RocketViewModel = viewModel()
-    StartLocatorDataCollection(context, viewModel)
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentScreen = RocketScreen.valueOf(
         backStackEntry?.destination?.route ?: RocketScreen.Start.name
@@ -212,7 +216,11 @@ fun RocketApp(
     LaunchedEffect(allPermissionsGranted) {
         if (!allPermissionsGranted)
             permissionsState.launchMultiplePermissionRequest()
+        else
+            viewModel.startService()
     }
+    if (allPermissionsGranted)
+        StartLocatorDataCollection(context, viewModel)
     // Initialize Bluetooth Companion Device Manager. Needs time to set up or app crashes.
     launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()

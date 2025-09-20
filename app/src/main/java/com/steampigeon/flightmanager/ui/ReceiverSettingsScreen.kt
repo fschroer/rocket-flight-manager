@@ -50,7 +50,7 @@ fun ReceiverSettingsScreen(
             // Capture initial and updated receiver configuration data.
             // Used for configuration screen and confirming receiver update acknowledgement.
             ConfigurationItemNumeric(
-                configItemName = stringResource(R.string.lora_channel),
+                configItemName = stringResource(R.string.locator_channel),
                 initialConfigValue = stagedReceiverConfig.channel,
                 minValue = 0,
                 maxValue = 63,

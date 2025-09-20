@@ -2,9 +2,11 @@ package com.steampigeon.flightmanager.ui
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.hardware.SensorManager
 import android.util.Log
 import androidx.compose.ui.unit.IntOffset
+import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.dataStore
 import androidx.lifecycle.AndroidViewModel
@@ -15,8 +17,10 @@ import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.Accelerometer
+import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.FlightEventData
 import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,12 +36,17 @@ import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.ReceiverConfig
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import kotlinx.coroutines.delay
-import java.util.Date
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
 private const val TAG = "RocketViewModel"
+private var packetResendCount = 0
+private var packetsRemaining = true
+private var sampleIndex = 0
 
 val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
     fileName = "user_prefs.pb",
@@ -49,6 +58,11 @@ val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
  */
 
 class RocketViewModel(application: Application) : AndroidViewModel(application) {
+    override fun onCleared() {
+        super.onCleared()
+        stopService()
+    }
+
     companion object {
         const val SAMPLES_PER_SECOND = 20
         const val ALTIMETER_SCALE = 10
@@ -84,7 +98,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private val _voiceEnabled = MutableStateFlow<Boolean>(true)
+    private val _voiceEnabled = MutableStateFlow<Boolean>(false)
     val voiceEnabled: StateFlow<Boolean> = _voiceEnabled.asStateFlow()
 
     fun updateVoiceEnabled(newVoiceEnabled: Boolean) {
@@ -109,6 +123,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val handheldDeviceAzimuth: StateFlow<Float> = _handheldDeviceAzimuth.asStateFlow()
     private val _lastHandheldDeviceAzimuth = MutableStateFlow<Float>(0f)
     val lastHandheldDeviceAzimuth: StateFlow<Float> = _lastHandheldDeviceAzimuth.asStateFlow()
+    fun updateLastHandheldDeviceAzimuth(newLastHandheldDeviceAzimuth: Float) {
+        _lastHandheldDeviceAzimuth.value = newLastHandheldDeviceAzimuth
+    }
     private val _handheldDevicePitch = MutableStateFlow<Float>(0f)
     val handheldDevicePitch: StateFlow<Float> = _handheldDevicePitch.asStateFlow()
     private val _locatorDistance = MutableStateFlow<Int>(0)
@@ -195,6 +212,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _flightProfileDataMessageState.value = newFlightProfileDataMessageState
     }
 
+    private val _flightEventData = MutableStateFlow<FlightEventData>(FlightEventData())
+    val flightEventData: StateFlow<FlightEventData> = _flightEventData.asStateFlow()
+
     private val _flightProfileAglData = MutableStateFlow<List<UShort>>(emptyList())
     val flightProfileAglData: StateFlow<List<UShort>> = _flightProfileAglData.asStateFlow()
 
@@ -213,6 +233,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateDeploymentTestCountdown(newDeploymentTestCountdown: Int) {
         _deploymentTestCountdown.value = newDeploymentTestCountdown
+    }
+
+    fun startService() {
+        val context = getApplication<Application>().applicationContext
+        val intent = Intent(context, BluetoothService()::class.java)
+        ContextCompat.startForegroundService(context, intent)
+    }
+
+    fun stopService() {
+        val context = getApplication<Application>().applicationContext
+        val intent = Intent(context, BluetoothService()::class.java)
+        context.stopService(intent)
     }
 
     fun collectInboundMessageData(service: BluetoothService) {
@@ -275,9 +307,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
                     locatorMessageHeader.contentEquals(BluetoothService.telemetryMessageHeader) -> {
                         val accelerometer = Accelerometer(
-                            byteArrayToShort(locatorMessage, 43),
-                            byteArrayToShort(locatorMessage, 45),
-                            byteArrayToShort(locatorMessage, 47)
+                            byteArrayToShort(locatorMessage, 47),
+                            byteArrayToShort(locatorMessage, 49),
+                            byteArrayToShort(locatorMessage, 51)
                         )
                         val rawGForce = sqrt((accelerometer.x * accelerometer.x + accelerometer.y * accelerometer.y + accelerometer.z * accelerometer.z).toFloat())
                         _rocketState.update { currentState ->
@@ -292,7 +324,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 accelerometerStatus = (locatorMessage[40].and(4).toInt() ushr 2) == 1,
                                 deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
                                 deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
-                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
+                                channel1Fired = (byteArrayToInt(locatorMessage, 41).and(0x10) ushr 4) != 0,
+                                channel2Fired = (byteArrayToInt(locatorMessage, 41).and(0x20) ushr 5) != 0,
+                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 45).toFloat() / ALTIMETER_SCALE,
                                 accelerometer = accelerometer,
                                 gForce = rawGForce / ACCELEROMETER_SCALE,
                                 orientation =
@@ -301,9 +335,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                velocity = byteArrayToFloat(locatorMessage, 49),
-                                flightState = FlightStates.fromUByte(locatorMessage[53].toUByte()) ?: currentState.flightState,
-                                //altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 52).toFloat() / ALTIMETER_SCALE,
+                                velocity = byteArrayToFloat(locatorMessage, 53),
+                                flightState = FlightStates.fromUByte(locatorMessage[57].toUByte()) ?: currentState.flightState,
                             )
                         }
 //                        val inFlight = (_rocketState.value.flightState
@@ -323,43 +356,90 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
                         var archivePosition = 0
                         var messagePosition = locatorMessageHeader.size
-                        while (messagePosition < locatorMessage.size && !(locatorMessage[messagePosition] == 0.toByte() &&
-                                    locatorMessage[messagePosition + 1] == 0.toByte() && locatorMessage[messagePosition + 2] == 0.toByte())) {
+                        while (messagePosition < locatorMessage.size// && !(locatorMessage[messagePosition] == 0.toByte() &&
+                                    //locatorMessage[messagePosition + 1] == 0.toByte() && locatorMessage[messagePosition + 2] == 0.toByte())
+                            )
+                        {
                             val flightProfileMetadataItem = FlightProfileMetadata(
                                 archivePosition,
                                 byteArrayToDate(locatorMessage, messagePosition),
                                 byteArrayToFloat(locatorMessage, messagePosition + 8),
                                 byteArrayToFloat(locatorMessage, messagePosition + 12)
                             )
-                            _flightProfileMetadata.value += flightProfileMetadataItem
+                            if (flightProfileMetadataItem.date != null)
+                                _flightProfileMetadata.value += flightProfileMetadataItem
                             archivePosition++
                             messagePosition += 16
                         }
                     }
                     locatorMessageHeader.contentEquals(BluetoothService.flightProfileDataMessageHeader) -> {
-                        _flightProfileDataMessageState.value = LocatorMessageState.AckUpdated
                         var archiveSample = 0
-                        val packetIndex = locatorMessage[locatorMessageHeader.size]
+                        val packetIndex = locatorMessage[locatorMessageHeader.size].and(0x7f)
                         Log.d(TAG, "Received flight profile data packet $packetIndex")
-                        if (packetIndex == 0.toByte()) {
-                            _flightProfileAglData.value = emptyList()
-                            _flightProfileAccelerometerData.value = emptyList()
-                        }
-                        var messagePosition = locatorMessageHeader.size + 1
-                        while (messagePosition < locatorMessage.size && !(locatorMessage[messagePosition] == 0.toByte() && locatorMessage[messagePosition + 1] == 0.toByte())) {
-                            _flightProfileAglData.value += byteArrayToUShort(locatorMessage, messagePosition)
-                            messagePosition += 2
-                            if (packetIndex * FLIGHT_DATA_MESSAGE_SAMPLES + archiveSample < _flightProfileMetadata.value[_flightProfileArchivePosition.value].timeToDrogue * RocketViewModel.SAMPLES_PER_SECOND) {
-                                _flightProfileAccelerometerData.value +=
-                                    Accelerometer(
-                                    byteArrayToShort(locatorMessage, messagePosition),
-                                    byteArrayToShort(locatorMessage, messagePosition + 2),
-                                    byteArrayToShort(locatorMessage, messagePosition + 4)
-                                    )
-                                messagePosition += 6
+                        if (packetIndex == 0x7f.toByte()) {
+                            _flightEventData.update { currentState ->
+                                currentState.copy(
+                                launchDate = byteArrayToDate(locatorMessage, 4),
+                                maxAltitude = byteArrayToFloat(locatorMessage, 12),
+                                maxAltitudeSampleIndex = byteArrayToInt(locatorMessage, 16),
+                                launchDetectAltitude = byteArrayToFloat(locatorMessage, 20),
+                                launchDetectSampleIndex = byteArrayToInt(locatorMessage, 24),
+                                burnoutAltitude = byteArrayToFloat(locatorMessage, 28),
+                                burnoutSampleIndex = byteArrayToInt(locatorMessage, 32),
+                                noseOverAltitude = byteArrayToFloat(locatorMessage, 36),
+                                noseOverSampleIndex = byteArrayToInt(locatorMessage, 40),
+                                droguePrimaryDeployAltitude = byteArrayToFloat(locatorMessage, 44),
+                                droguePrimaryDeploySampleIndex = byteArrayToInt(locatorMessage, 48),
+                                drogueBackupDeployAltitude = byteArrayToFloat(locatorMessage, 52),
+                                drogueBackupDeploySampleIndex = byteArrayToInt(locatorMessage, 56),
+                                drogueVelocityThresholdAltitude = byteArrayToFloat(locatorMessage, 60),
+                                drogueVelocityThresholdSampleIndex = byteArrayToInt(locatorMessage, 64),
+                                mainPrimaryDeployAltitude = byteArrayToFloat(locatorMessage, 68),
+                                mainPrimaryDeploySampleIndex = byteArrayToInt(locatorMessage, 72),
+                                mainBackupDeployAltitude = byteArrayToFloat(locatorMessage, 76),
+                                mainBackupDeploySampleIndex = byteArrayToInt(locatorMessage, 80),
+                                mainVelocityThresholdAltitude = byteArrayToFloat(locatorMessage, 84),
+                                mainVelocityThresholdSampleIndex = byteArrayToInt(locatorMessage, 88),
+                                landingAltitude = byteArrayToFloat(locatorMessage, 92),
+                                landingSampleIndex = byteArrayToInt(locatorMessage, 96),
+                                channel1Mode = DeployMode.fromUByte(locatorMessage[100].and(0x03).toUByte()),
+                                channel2Mode = DeployMode.fromUByte((locatorMessage[100].and(0x0C).toInt() ushr 2).toUByte()),
+                                channel1Fired = (locatorMessage[100].and(0x10).toInt() ushr 4) != 0,
+                                channel2Fired = (locatorMessage[100].and(0x20).toInt() ushr 5) != 0,
+                                channel1PreFireContinuity = (locatorMessage[100].and(0x40).toInt() ushr 6) != 0,
+                                channel2PreFireContinuity = (locatorMessage[100].and(0x80.toByte()).toInt() ushr 7) != 0,
+                                channel1PostFireContinuity = (locatorMessage[101].and(0x01)) != 0.toByte(),
+                                channel2PostFireContinuity = (locatorMessage[101].and(0x02).toInt() ushr 1) != 0,
+                                gRangeScale = byteArrayToFloat(locatorMessage, 104),
+                                )
                             }
-                            archiveSample++
                         }
+                        else {
+                            if (packetIndex == 0.toByte()) {
+                                _flightProfileAglData.value = emptyList()
+                                _flightProfileAccelerometerData.value = emptyList()
+                                sampleIndex = 0
+                            }
+                            if (locatorMessage[locatorMessageHeader.size] < 0)
+                                packetsRemaining = false
+                            var messagePosition = locatorMessageHeader.size + 1
+                            while (messagePosition < locatorMessage.size && !(locatorMessage[messagePosition] == 0xff.toByte() && locatorMessage[messagePosition + 1] == 0xff.toByte())) {
+                                _flightProfileAglData.value += byteArrayToUShort(locatorMessage, messagePosition)
+                                messagePosition += 2
+                                if (sampleIndex <= _flightEventData.value.droguePrimaryDeploySampleIndex) {
+                                    _flightProfileAccelerometerData.value +=
+                                        Accelerometer(
+                                            byteArrayToShort(locatorMessage, messagePosition),
+                                            byteArrayToShort(locatorMessage, messagePosition + 2),
+                                            byteArrayToShort(locatorMessage, messagePosition + 4)
+                                        )
+                                    messagePosition += 6
+                                }
+                                archiveSample++
+                                sampleIndex++
+                            }
+                        }
+                        _flightProfileDataMessageState.value = LocatorMessageState.AckUpdated
                     }
                     locatorMessageHeader.contentEquals(BluetoothService.deploymentTestMessageHeader) -> {
                         val deploymentTestCountdown = locatorMessage[3].toInt()
@@ -371,33 +451,42 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun gpsCoord(byteArray: ByteArray, offset: Int): Double {
+    private fun gpsCoord(byteArray: ByteArray, offset: Int): Double {
         require(offset >= 0 && offset + 8 <= byteArray.size) { "Invalid offset or length" }
         val doubleByteArray = byteArray.copyOfRange(offset, offset + 8).reversedArray()
         val doubleValue = ByteBuffer.wrap(doubleByteArray).getDouble()
         return doubleValue.toInt() / 100 + (doubleValue - (doubleValue.toInt() / 100 * 100)) / 60
     }
 
-    fun byteArrayToFloat(byteArray: ByteArray, offset: Int): Float {
+    private fun byteArrayToFloat(byteArray: ByteArray, offset: Int): Float {
         require(offset >= 0 && offset + 4 <= byteArray.size) { "Invalid offset or length" }
         val floatByteArray = byteArray.copyOfRange(offset, offset + 4).reversedArray()
         return ByteBuffer.wrap(floatByteArray).getFloat()
     }
-    fun byteArrayToUShort(byteArray: ByteArray, offset: Int): UShort {
+    private fun byteArrayToUShort(byteArray: ByteArray, offset: Int): UShort {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u).toUShort()
     }
-    fun byteArrayToShort(byteArray: ByteArray, offset: Int): Short {
+    private fun byteArrayToShort(byteArray: ByteArray, offset: Int): Short {
         require(offset >= 0 && offset + 2 <= byteArray.size) { "Invalid offset or length" }
         return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u).toShort()
     }
-    fun byteArrayToDate(byteArray: ByteArray, offset: Int): Date {
+    private fun byteArrayToInt(byteArray: ByteArray, offset: Int): Int {
+        require(offset >= 0 && offset + 4 <= byteArray.size) { "Invalid offset or length" }
+        return (byteArray[offset].toUByte() + byteArray[offset + 1].toUByte() * 0x100u + byteArray[offset + 2].toUByte() * 0x10000u + byteArray[offset + 3].toUByte() * 0x1000000u).toInt()
+    }
+    private fun byteArrayToDate(byteArray: ByteArray, offset: Int): ZonedDateTime? {
         require(offset >= 0 && offset + 8 <= byteArray.size) { "Invalid offset or length" }
         val datePartByteArray = byteArray.copyOfRange(offset, offset + 4).reversedArray()
         val timePartByteArray = byteArray.copyOfRange(offset + 4, offset + 8).reversedArray()
         val datePart = ByteBuffer.wrap(datePartByteArray, 0, 4).int
         val timePart = ByteBuffer.wrap(timePartByteArray, 0, 4).int
-        return Date(100 + (datePart % 100), (datePart / 100) % 100 - 1, datePart / 10000, timePart / 10000, (timePart / 100) % 100, timePart % 100)
+        return try {
+            ZonedDateTime.of(LocalDateTime.of(2000 + (datePart % 100), (datePart / 100) % 100, datePart / 10000,
+                timePart / 10000, (timePart / 100) % 100, timePart % 100), ZoneId.of("America/Los_Angeles"))
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, landscapeOrientation: Boolean) {
@@ -419,7 +508,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
         else
             SensorManager.getOrientation(rotationMatrix, orientation)
-        _lastHandheldDeviceAzimuth.value = _handheldDeviceAzimuth.value
+        //_lastHandheldDeviceAzimuth.value = _handheldDeviceAzimuth.value
         _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
         _handheldDevicePitch.value = ((Math.toDegrees(-orientation[1].toDouble()) + 360) % 360).toFloat()
     }
@@ -452,6 +541,23 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             else -> ""
         }
         _locatorElevation.value = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, _locatorDistance.value.toFloat()).toDouble()) + 360) % 360).toFloat()
+    }
+
+    fun updateArmedState() {
+        viewModelScope.launch {
+            for (i in 1..50) {
+                delay(100)
+                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.AckUpdated ||
+                    BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendFailure)
+                    break
+            }
+            if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendRequested ||
+                BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.Sent) {
+                BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.NotAcknowledged)
+            }
+            delay(2000)
+            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.Idle)
+        }
     }
 
     fun updateReceiverConfigState(stagedReceiverConfig: ReceiverConfig) {
@@ -513,17 +619,29 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun updateFlightDataState() {
+    fun getFlightProfileData(service: BluetoothService) {
+        packetsRemaining = true
+        _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
         viewModelScope.launch {
-            for (i in 1..50) {
-                delay(100)
-                if (_flightProfileDataMessageState.value == LocatorMessageState.AckUpdated ||
-                    _flightProfileDataMessageState.value == LocatorMessageState.SendFailure)
-                    break
-            }
-            if (_flightProfileDataMessageState.value == LocatorMessageState.SendRequested ||
-                _flightProfileDataMessageState.value == LocatorMessageState.Sent) {
-                _flightProfileDataMessageState.value = LocatorMessageState.NotAcknowledged
+            var packet : Byte = 0xff.toByte()
+            while (packetsRemaining && packetResendCount < 3 && _flightProfileDataMessageState.value != LocatorMessageState.SendFailure) {
+                Log.d(TAG, "Sending flight profile request, packet $packet")
+                if (service.requestFlightProfileData(_flightProfileArchivePosition.value, packet)) {
+                    updateFlightProfileDataMessageState(LocatorMessageState.Sent)
+                    for (i in 1..50) {
+                        delay(100)
+                        if (_flightProfileDataMessageState.value == LocatorMessageState.AckUpdated) {
+                            packetResendCount = 0
+                            packet++
+                            break
+                        }
+                        else
+                            packetResendCount++
+                    }
+                }
+                else
+                    updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
+                Log.d(TAG, "Sent flight profile message. Packets remaining: $packetsRemaining, packetResendCount: $packetResendCount, messageState: ${_flightProfileDataMessageState.value}")
             }
         }
     }

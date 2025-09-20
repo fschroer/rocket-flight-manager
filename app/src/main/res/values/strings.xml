@@ -29,9 +29,9 @@
     <string name="flight_profiles">Flight Profiles</string>
     <string name="increment">Increment</string>
     <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
+    <string name="locator_channel">Locator Channel to Receive</string>
     <string name="locator_satellites">Locator Satellites</string>
     <string name="locator_settings">Locator Settings</string>
-    <string name="lora_channel">LoRa Channel</string>
     <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>
     <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
     <string name="next">Next</string>

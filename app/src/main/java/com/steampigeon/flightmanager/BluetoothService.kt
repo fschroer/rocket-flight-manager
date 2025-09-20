@@ -20,7 +20,7 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.LocatorArmedMessageState
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.ReceiverConfig
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +39,7 @@ import java.io.OutputStream
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
 private const val prelaunchMessageSize = 78 // LoRa message size (75) + channel (1) + receiver battery level (2) = 78
-private const val telemetryMessageSize = 56 // Minimum size. Variable length depending on sample rate (20/s ascent vs 1/s descent)
+private const val telemetryMessageSize = 60 // Minimum size. Variable length depending on sample rate (20/s ascent vs 1/s descent)
 private const val receiverConfigMessageSize = 4
 private const val flightProfileMetadataMessageSize = 131
 private const val flightProfileDataMessageSize = 244
@@ -78,10 +78,9 @@ class BluetoothService() : Service() {
     private val _data = MutableSharedFlow<ByteArray>()
     val data: SharedFlow<ByteArray> = _data.asSharedFlow()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var locatorSocket: BluetoothSocket? = null
+    private lateinit var locatorSocket: BluetoothSocket
     private lateinit var locatorInputStream: InputStream
     private lateinit var locatorOutputStream: OutputStream
-    private var armedStateChangeWaitCount = 0
     private val inboundMessageBuffer = ByteArray(messageBufferSize) // buffer store for the stream
     private var numBytes = 0 // bytes returned from read()
     private var messageReceived = false
@@ -133,21 +132,11 @@ class BluetoothService() : Service() {
                                 messageHeader.contentEquals(prelaunchMessageHeader) && currentMessageSize >= prelaunchMessageSize -> {
                                     //Log.d(TAG, "Prelaunch message detected, $currentMessageSize")
                                     _data.emit(inboundMessageBuffer.copyOfRange(0, prelaunchMessageSize))
-                                    if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator
+                                    if (BluetoothManagerRepository.armedState.value) { //Disarm request acknowledged by locator, by transitioning to prelaunch messages
                                         BluetoothManagerRepository.updateArmedState(false)
                                         BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                            LocatorArmedMessageState.Idle
+                                            LocatorMessageState.AckUpdated
                                         )
-                                        armedStateChangeWaitCount = 0
-                                    } else {
-                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of arm request
-                                            armedStateChangeWaitCount++
-                                            if (armedStateChangeWaitCount >= 5) {
-                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                                    LocatorArmedMessageState.Idle
-                                                )
-                                            }
-                                        }
                                     }
                                     clearMessage()
                                 }
@@ -155,21 +144,11 @@ class BluetoothService() : Service() {
                                 messageHeader.contentEquals(telemetryMessageHeader) && currentMessageSize >= telemetryMessageSize -> {
                                     //Log.d(TAG, "Telemetry message detected, $currentMessageSize")
                                     _data.emit(inboundMessageBuffer.copyOfRange(0, telemetryMessageSize))
-                                    if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator
+                                    if (!BluetoothManagerRepository.armedState.value) { //Arm request acknowledged by locator, by transitioning to telemetry messages
                                         BluetoothManagerRepository.updateArmedState(true)
                                         BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                            LocatorArmedMessageState.Idle
+                                            LocatorMessageState.AckUpdated
                                         )
-                                        armedStateChangeWaitCount = 0
-                                    } else {
-                                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.Sent) { //Waiting for locator acknowledgement of disarm request
-                                            armedStateChangeWaitCount++
-                                            if (armedStateChangeWaitCount >= 5) {
-                                                BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                                    LocatorArmedMessageState.Idle
-                                                )
-                                            }
-                                        }
                                     }
                                     clearMessage()
                                 }
@@ -186,7 +165,8 @@ class BluetoothService() : Service() {
                                     clearMessage()
                                 }
 
-                                messageHeader.contentEquals(flightProfileDataMessageHeader) && currentMessageSize >= flightProfileDataMessageSize -> {
+                                messageHeader.contentEquals(flightProfileDataMessageHeader)// && currentMessageSize >= flightProfileDataMessageSize
+                                    -> {
                                     //Log.d(TAG, "Flight profile data message detected, $currentMessageSize")
                                     _data.emit(inboundMessageBuffer.copyOfRange(0, currentMessageSize))
                                     clearMessage()
@@ -204,8 +184,10 @@ class BluetoothService() : Service() {
                                 }
                             }
                         }
-                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorArmedMessageState.SendRequested)
+                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendRequested)
                             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
+                        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.NotAcknowledged)
+                            changeLocatorArmedState(BluetoothManagerRepository.armedState.value)
                     } else {
                         clearMessage()
                         maintainLocatorDevicePairing()
@@ -274,7 +256,7 @@ class BluetoothService() : Service() {
                 Log.d(TAG, "Changing state from AssociateStart to AssociateWait")
             }
             BluetoothConnectionState.Paired -> {
-                if (bluetoothAdapter.isEnabled == true) {
+                if (bluetoothAdapter.isEnabled) {
                     BluetoothManagerRepository.locatorDevice.value?.let { locatorDevice ->
                         if (locatorDevice.bondState == BluetoothDevice.BOND_BONDED) {
                             connectLocator()
@@ -290,7 +272,7 @@ class BluetoothService() : Service() {
                 }
             }
             BluetoothConnectionState.PairingFailed -> {
-                if (bluetoothAdapter.isDiscovering == true)
+                if (bluetoothAdapter.isDiscovering)
                     bluetoothAdapter.cancelDiscovery()
                 Log.d(TAG, "PairingFailed delay start")
                 delay(500)
@@ -312,24 +294,26 @@ class BluetoothService() : Service() {
 
     @SuppressLint("MissingPermission")
     fun connectLocator() {
-        if (BluetoothManagerRepository.locatorDevice.value != null && BluetoothManagerRepository.locatorDevice.value!!.uuids != null) {
-            locatorSocket = BluetoothManagerRepository.locatorDevice.value!!.createRfcommSocketToServiceRecord(BluetoothManagerRepository.locatorDevice.value!!.uuids[0].uuid)
-            locatorInputStream = locatorSocket!!.inputStream
-            locatorOutputStream = locatorSocket!!.outputStream
-            // Cancel device discovery since locator has been selected.
-            if (bluetoothAdapter.isDiscovering == true)
-                bluetoothAdapter.cancelDiscovery()
-            // Attempt to connect to locator
-            try {
-                locatorSocket?.connect()
-                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Connected)
-                BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Idle)
-            } catch (e: IOException) {
-                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Disconnected)
+        BluetoothManagerRepository.locatorDevice.value.let {
+            if (it != null && it.uuids != null) {
+                locatorSocket = it.createRfcommSocketToServiceRecord(it.uuids[0].uuid)
+                // Cancel device discovery since locator has been selected.
+                if (bluetoothAdapter.isDiscovering)
+                    bluetoothAdapter.cancelDiscovery()
+                // Attempt to connect to locator
+                try {
+                    locatorSocket.connect()
+                    locatorInputStream = locatorSocket.inputStream
+                    locatorOutputStream = locatorSocket.outputStream
+                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Connected)
+                    BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.Idle)
+                } catch (e: IOException) {
+                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Disconnected)
+                }
             }
-        }
-        else {
-            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NoDevicesAvailable)
+            else {
+                BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NoDevicesAvailable)
+            }
         }
     }
 
@@ -345,7 +329,7 @@ class BluetoothService() : Service() {
     fun logByteArrayAsChars(byteArray: ByteArray, numChars: Int): String {
         var message = ""
         byteArray.take(numChars).forEach { byte ->
-            if (byte >= 32 && byte <127)
+            if (byte in 32..126)
                 message += byte.toInt().toChar()
             else
                 message = "$message?"
@@ -353,7 +337,7 @@ class BluetoothService() : Service() {
         return message
     }
 
-    fun changeLocatorArmedState(armedState: Boolean) {
+    private fun changeLocatorArmedState(armedState: Boolean) {
         val armCommand = "Run".toByteArray() + EOT
         val disarmCommand = "Stop".toByteArray() + EOT
         try {
@@ -363,10 +347,10 @@ class BluetoothService() : Service() {
             } )
         } catch (e: IOException) {
             Log.e(TAG, "Error occurred when sending data", e)
-            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.SendFailure)
+            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.SendFailure)
             return
         }
-        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorArmedMessageState.Sent)
+        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.Sent)
     }
 
     fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean {
@@ -419,8 +403,8 @@ class BluetoothService() : Service() {
         return true
     }
 
-    fun requestFlightProfileData(archivePosition: Int): Boolean {
-        val message = "FPD".toByteArray() + byteArrayOf(archivePosition.toByte()) + EOT
+    fun requestFlightProfileData(archivePosition: Int, packet: Byte): Boolean {
+        val message = "FPD".toByteArray() + byteArrayOf(archivePosition.toByte()) + byteArrayOf(packet) + EOT
 
         try {
             locatorOutputStream.write(message)
@@ -444,7 +428,7 @@ class BluetoothService() : Service() {
     }
 
     // Call this method from the main activity to shut down the connection.
-    fun cancelLocatorBluetoothSocket(locatorSocket: BluetoothSocket?) {
+    private fun cancelLocatorBluetoothSocket(locatorSocket: BluetoothSocket?) {
         if (locatorSocket != null) {
         try {
             locatorSocket.close()
@@ -469,7 +453,7 @@ class BluetoothService() : Service() {
         return true
     }
 
-    fun registerReceiver() {
+    private fun registerReceiver() {
         // Register the receiver
         val filter = IntentFilter("CONFIRM_RECEIVER_REGISTERED")
         filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
@@ -486,7 +470,7 @@ class BluetoothService() : Service() {
         )
     }
 
-    fun unregisterReceiver(){
+    private fun unregisterReceiver(){
         unregisterReceiver(bondStateReceiver)
     }
 
@@ -498,7 +482,7 @@ class BluetoothService() : Service() {
                 "CONFIRM_RECEIVER_REGISTERED" ->
                     receiverRegistered = true
                 BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                    BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Connected)
+                    //BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Connected)
                 }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                     Log.d(TAG, "Bluetooth device disconnected")
@@ -518,7 +502,8 @@ class BluetoothService() : Service() {
                     when (bondState) {
                         BluetoothDevice.BOND_BONDED -> {
                             // Bonding succeeded
-                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
+                            //connectLocator()
+                            //BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Paired)
                         }
 
                         BluetoothDevice.BOND_BONDING -> {

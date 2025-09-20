@@ -87,6 +87,7 @@ dependencies {
     //implementation ("com.google.maps.android:places-ktx:3.2.0")
     implementation (libs.play.services.location)
     implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.core.i18n)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
