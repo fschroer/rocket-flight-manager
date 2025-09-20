@@ -15,7 +15,6 @@ class MainActivity : ComponentActivity() {
                 RocketApp()
             }
         }
-        startForegroundService(Intent(this, BluetoothService()::class.java))
     }
 
     override fun onStart() {
@@ -36,7 +35,5 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (!isChangingConfigurations)
-            stopService(Intent(this, BluetoothService::class.java))
     }
 }

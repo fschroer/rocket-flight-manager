@@ -4,7 +4,7 @@ import android.bluetooth.BluetoothDevice
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.Date
+import java.time.ZonedDateTime
 
 /**
  * Data class that represents the current rocket locator state]
@@ -20,6 +20,8 @@ data class RocketState(
     val accelerometerStatus: Boolean = false,
     val deployChannel1Armed: Boolean = false,
     val deployChannel2Armed: Boolean = false,
+    val channel1Fired: Boolean = false,
+    val channel2Fired: Boolean = false,
     val altitudeAboveGroundLevel: Float = 0f,
     val accelerometer: Accelerometer = Accelerometer(0, 0, 0),
     val gForce: Float = 0f,
@@ -54,9 +56,45 @@ data class ReceiverConfig(
 
 data class FlightProfileMetadata(
     val position: Int,
-    val date: Date,
+    val date: ZonedDateTime?,
     val apogee: Float,
     val timeToDrogue: Float, // AGL + accelerometer data expected prior to this time, AGL only afterwards
+)
+
+data class FlightEventData(
+    val launchDate: ZonedDateTime? = null,
+    val launchTime: Int = 0,
+    val maxAltitude: Float = 0f,
+    val maxAltitudeSampleIndex: Int = 0,
+    val launchDetectAltitude: Float = 0f,
+    val launchDetectSampleIndex: Int = 0,
+    val burnoutAltitude: Float = 0f,
+    val burnoutSampleIndex: Int = 0,
+    val noseOverAltitude: Float = 0f,
+    val noseOverSampleIndex: Int = 0,
+    val droguePrimaryDeployAltitude: Float = 0f,
+    val droguePrimaryDeploySampleIndex: Int = 0,
+    val drogueBackupDeployAltitude: Float = 0f,
+    val drogueBackupDeploySampleIndex: Int = 0,
+    val drogueVelocityThresholdAltitude: Float = 0f,
+    val drogueVelocityThresholdSampleIndex: Int = 0,
+    val mainPrimaryDeployAltitude: Float = 0f,
+    val mainPrimaryDeploySampleIndex: Int = 0,
+    val mainBackupDeployAltitude: Float = 0f,
+    val mainBackupDeploySampleIndex: Int = 0,
+    val mainVelocityThresholdAltitude: Float = 0f,
+    val mainVelocityThresholdSampleIndex: Int = 0,
+    val landingAltitude: Float = 0f,
+    val landingSampleIndex: Int = 0,
+    val channel1Mode: DeployMode? = DeployMode.DroguePrimary,
+    val channel2Mode: DeployMode? = DeployMode.MainPrimary,
+    val channel1Fired: Boolean = false,
+    val channel2Fired: Boolean = false,
+    val channel1PreFireContinuity: Boolean = false,
+    val channel2PreFireContinuity: Boolean = false,
+    val channel1PostFireContinuity: Boolean = false,
+    val channel2PostFireContinuity: Boolean = false,
+    val gRangeScale: Float = 0f,
 )
 
 enum class DeployMode (val deployMode: UByte) {
@@ -119,19 +157,6 @@ enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
 
 }
 
-enum class LocatorArmedMessageState (val locatorArmedMessageState: UByte) {
-    Idle(0u),
-    SendRequested(1u),
-    Sent(2u),
-    AckUpdated(3u),
-    SendFailure(4u);
-
-    companion object {
-        fun fromUByte(value: UByte) = entries.firstOrNull { it.locatorArmedMessageState == value } ?: throw IllegalArgumentException("Invalid type: $value")
-    }
-
-}
-
 enum class LocatorMessageState (val locatorMessageState: UByte) {
     Idle(0u),
     SendRequested(1u),
@@ -156,8 +181,8 @@ object BluetoothManagerRepository {
     private val _armedState = MutableStateFlow<Boolean>(false)
     val armedState: StateFlow<Boolean> = _armedState.asStateFlow()
 
-    private val _locatorArmedMessageState = MutableStateFlow<LocatorArmedMessageState>(LocatorArmedMessageState.Idle)
-    val locatorArmedMessageState: StateFlow<LocatorArmedMessageState> = _locatorArmedMessageState.asStateFlow()
+    private val _locatorArmedMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
+    val locatorArmedMessageState: StateFlow<LocatorMessageState> = _locatorArmedMessageState.asStateFlow()
 
     fun updateBluetoothConnectionState(newBluetoothConnectionState: BluetoothConnectionState) {
         _bluetoothConnectionState.value = newBluetoothConnectionState
@@ -171,7 +196,7 @@ object BluetoothManagerRepository {
         _armedState.value = newArmedState
     }
 
-    fun updateLocatorArmedMessageState(newArmedMessageState: LocatorArmedMessageState) {
+    fun updateLocatorArmedMessageState(newArmedMessageState: LocatorMessageState) {
         _locatorArmedMessageState.value = newArmedMessageState
     }
 }

@@ -41,6 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
@@ -100,16 +104,6 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel1Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            EnumDropdown(
-                DeployMode::class,
-                stagedLocatorConfig.deploymentChannel2Mode ?: DeployMode.MainPrimary,
-                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
-                modifier = modifier
-            )
-            { newConfigValue ->
-                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel2Mode = newConfigValue as DeployMode)
-                viewModel.updateLocatorConfigChanged(true)
-            }
             when (stagedLocatorConfig.deploymentChannel1Mode) {
                 DeployMode.DroguePrimary -> {
                     ConfigurationItemNumeric(
@@ -164,6 +158,16 @@ fun LocatorSettingsScreen(
                     }
                 }
                 else -> {}
+            }
+            EnumDropdown(
+                DeployMode::class,
+                stagedLocatorConfig.deploymentChannel2Mode ?: DeployMode.MainPrimary,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
+                modifier = modifier
+            )
+            { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel2Mode = newConfigValue as DeployMode)
+                viewModel.updateLocatorConfigChanged(true)
             }
             when (stagedLocatorConfig.deploymentChannel2Mode) {
                 DeployMode.DroguePrimary -> {
@@ -232,7 +236,7 @@ fun LocatorSettingsScreen(
             ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.launch_detect_altitude),
                 initialConfigValue = stagedLocatorConfig.launchDetectAltitude,
-                minValue = 0,
+                minValue = 10,
                 maxValue = 100,
                 configMessageState = locatorConfigMessageState,
                 modifier = modifier
@@ -345,16 +349,17 @@ fun ConfigurationItemNumeric(configItemName: String,
                              modifier: Modifier = Modifier,
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
+    var lastKeyPressed by remember { mutableStateOf("") }
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start
     ) {
         OutlinedTextField(
-            value = if (currentValue != 0)
-                        (currentValue).toString()
+            value = if (currentValue == 0 && lastKeyPressed == "Key code: 287762808832")
+                        ""
                     else
-                        "",
+                        (currentValue).toString(),
             onValueChange = { newValue ->
                 currentValue = (newValue.filter { it.isDigit() }.toIntOrNull() ?: 0)
                 onConfigUpdate(currentValue)
@@ -365,7 +370,11 @@ fun ConfigurationItemNumeric(configItemName: String,
                     onConfigUpdate(currentValue)
                 }
             }
-                .weight(configItemWidth),
+                .weight(configItemWidth)
+                .onKeyEvent { keyEvent: KeyEvent ->
+                    lastKeyPressed = keyEvent.key.toString() // Capture the last key pressed
+                    false // Return false to allow further processing of the event
+                },
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
