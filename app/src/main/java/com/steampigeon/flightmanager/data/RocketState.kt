@@ -13,7 +13,6 @@ data class RocketState(
     val lastPreLaunchMessageTime: Long = 0,
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
-    val qInd: UByte = 0.toUByte(),
     val satellites: UByte = 0.toUByte(),
     val hdop: Float = 0f,
     val altimeterStatus: Boolean = false,

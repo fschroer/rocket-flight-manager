@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.location.Location
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.camera.core.Camera
@@ -12,6 +13,13 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,6 +49,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MaterialTheme.typography
 import androidx.compose.material3.ModalDrawerSheet
@@ -63,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -76,6 +86,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
@@ -119,6 +130,7 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.RocketState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import kotlin.math.abs
@@ -162,6 +174,7 @@ fun HomeScreen(
     val armedState = BluetoothManagerRepository.armedState.collectAsState().value
     var previousAGL by remember { mutableIntStateOf(0) }
     var apogeeSpoken by remember { mutableStateOf(false)}
+    var launchedState by remember { mutableStateOf(false)}
     var droguePrimaryState by remember { mutableStateOf(false)}
     var drogueBackupState by remember { mutableStateOf(false)}
     var mainPrimaryState by remember { mutableStateOf(false)}
@@ -173,15 +186,13 @@ fun HomeScreen(
     val orientation = LocalConfiguration.current.orientation
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-    var trackerLocation by remember { mutableStateOf(LatLng(0.0, 0.0)) }
+    var trackerLocation by remember { mutableStateOf<Location?>(null) }
     val bluetoothPermissionState = permissionsState.permissions.find { it.permission == android.Manifest.permission.BLUETOOTH }
     val locationPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
     if (locationPermissionState?.hasPermission == true) {
         fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                location?.let {
-                    trackerLocation = LatLng(it.latitude, it.longitude)
-                }
-            }
+            trackerLocation = location
+        }
     }
     val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
     val hasCompass = context.packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS)
@@ -189,13 +200,17 @@ fun HomeScreen(
     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
     LaunchedEffect(accelerometerState) {
         if (accelerometerState.isAvailable)
-            viewModel.handheldDeviceOrientation(accelerometerState, magneticFieldState, orientation == Configuration.ORIENTATION_LANDSCAPE)
+            viewModel.handheldDeviceOrientation(accelerometerState, magneticFieldState, trackerLocation, orientation == Configuration.ORIENTATION_LANDSCAPE)
     }
     LaunchedEffect(trackerLocation, locatorLatLng) {
-        if (trackerLocation.longitude != 0.0)
-            viewModel.locatorVector(LatLng(trackerLocation.latitude, trackerLocation.longitude), locatorLatLng)
+        trackerLocation?.let {
+            val vector = viewModel.locatorVector(LatLng(it.latitude, it.longitude), locatorLatLng)
+            viewModel.updateLocatorVector(vector)
+        }
     }
     val distanceToLocator = viewModel.locatorDistance.collectAsState().value
+    var launchLocation by remember { mutableStateOf(LatLng(0.0, 0.0))}
+    val vectorFromLaunch = viewModel.locatorVector(launchLocation, locatorLatLng)
     val azimuthToLocator = viewModel.locatorAzimuth.collectAsState().value
     val ordinalToLocator = viewModel.locatorOrdinal.collectAsState().value
     val handheldDevicePitch = viewModel.handheldDevicePitch.collectAsState().value
@@ -208,6 +223,10 @@ fun HomeScreen(
     LaunchedEffect(rocketState.flightState) {
         if (armedState && rocketState.flightState > receivedState) {
             receivedState = rocketState.flightState
+            if (rocketState.flightState >= FlightStates.Launched && !launchedState) {
+                launchedState = true
+                launchLocation = LatLng(rocketState.latitude, rocketState.longitude)
+            }
 //                FlightStates.Burnout ->
 //                    textToSpeech?.speak(locatorConfig.deviceName + "," + rocketState.flightState.toString() + "," + rocketState.altitudeAboveGroundLevel + "meters", TextToSpeech.QUEUE_FLUSH, null, null)
             if (rocketState.flightState >= FlightStates.Noseover && noseoverTime == 0L) {
@@ -217,18 +236,11 @@ fun HomeScreen(
                     textToSpeech?.speak("Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters.", TextToSpeech.QUEUE_ADD, null, null)
                 }
             }
-            if (rocketState.flightState >= FlightStates.DroguePrimaryDeployed) {
-                if (!droguePrimaryState) {
-                    droguePrimaryState = true
-                    if (locatorConfig.deploymentChannel1Mode == DeployMode.DroguePrimary && rocketState.channel1Fired ||
-                        locatorConfig.deploymentChannel2Mode == DeployMode.DroguePrimary && rocketState.channel2Fired)
-                        textToSpeech?.speak("Drogue charge.", TextToSpeech.QUEUE_ADD, null, null)
-                }
-                if (!drogueDeploySpoken && noseoverTime > 0 && System.currentTimeMillis() - noseoverTime > 2000 && rocketState.velocity > drogueVelocityThreshold) {
-                    drogueVelocity = rocketState.velocity
-                    drogueDeploySpoken = true
-                    textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
-                }
+            if (rocketState.flightState >= FlightStates.DroguePrimaryDeployed && !droguePrimaryState) {
+                droguePrimaryState = true
+                if (locatorConfig.deploymentChannel1Mode == DeployMode.DroguePrimary && rocketState.channel1Fired ||
+                    locatorConfig.deploymentChannel2Mode == DeployMode.DroguePrimary && rocketState.channel2Fired)
+                    textToSpeech?.speak("Drogue charge.", TextToSpeech.QUEUE_ADD, null, null)
             }
             if (rocketState.flightState >= FlightStates.DrogueBackupDeployed && !drogueBackupState) {
                 drogueBackupState = true
@@ -236,18 +248,11 @@ fun HomeScreen(
                     locatorConfig.deploymentChannel2Mode == DeployMode.DrogueBackup && rocketState.channel2Fired)
                     textToSpeech?.speak("Drogue backup charge.", TextToSpeech.QUEUE_ADD, null, null)
             }
-            if (rocketState.flightState >= FlightStates.MainPrimaryDeployed) {
-                if (!mainPrimaryState) {
-                    mainPrimaryState = true
-                    if (locatorConfig.deploymentChannel1Mode == DeployMode.MainPrimary && rocketState.channel1Fired ||
-                        locatorConfig.deploymentChannel2Mode == DeployMode.MainPrimary && rocketState.channel2Fired)
-                        textToSpeech?.speak("Main charge.", TextToSpeech.QUEUE_ADD, null, null)
-                }
-                if (!mainDeploySpoken && rocketState.velocity > drogueVelocity + 5) {
-                    mainDeploySpoken = true
-                    drogueDeploySpoken = true
-                    textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
-                }
+            if (rocketState.flightState >= FlightStates.MainPrimaryDeployed && !mainPrimaryState) {
+                mainPrimaryState = true
+                if (locatorConfig.deploymentChannel1Mode == DeployMode.MainPrimary && rocketState.channel1Fired ||
+                    locatorConfig.deploymentChannel2Mode == DeployMode.MainPrimary && rocketState.channel2Fired)
+                    textToSpeech?.speak("Main charge.", TextToSpeech.QUEUE_ADD, null, null)
             }
             if (rocketState.flightState >= FlightStates.MainBackupDeployed && !mainBackupState) {
                 mainBackupState = true
@@ -256,6 +261,8 @@ fun HomeScreen(
                     textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
             }
             if (rocketState.flightState >= FlightStates.Landed) {
+                previousAGL = 0
+                launchedState = false
                 apogeeSpoken = false
                 droguePrimaryState = false
                 drogueBackupState = false
@@ -264,29 +271,45 @@ fun HomeScreen(
                 drogueDeploySpoken = false
                 mainDeploySpoken = false
                 landingSpoken = false
+                receivedState = FlightStates.WaitingForLaunch
+                noseoverTime = 0
+                drogueVelocity = 0f
+                launchLocation = LatLng(0.0, 0.0)
             }
         }
     }
     LaunchedEffect(rocketState.altitudeAboveGroundLevel) {
         if (armedState) {
-            if (rocketState.flightState == FlightStates.Burnout) {
-                val roundedAGL = (rocketState.altitudeAboveGroundLevel / 100).toInt() * 100
-                if (roundedAGL > previousAGL) {
-                    textToSpeech?.isSpeaking?.let { isSpeaking ->
+            textToSpeech?.isSpeaking?.let { isSpeaking ->
+                if (rocketState.flightState == FlightStates.Burnout) {
+                    val roundedAGL = (rocketState.altitudeAboveGroundLevel / 100).toInt() * 100
+                    if (roundedAGL > previousAGL) {
                         if (!isSpeaking && rocketState.velocity > minimumSpokenAGLVelocity)
                             textToSpeech.speak("$roundedAGL meters. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                        previousAGL = roundedAGL
                     }
-                    previousAGL = roundedAGL
                 }
-            }
-            textToSpeech?.isSpeaking?.let { isSpeaking ->
                 if (rocketState.flightState > FlightStates.Noseover) {
                     if (lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken)
-                        textToSpeech.speak("Descent warning, ${-rocketState.velocity.toInt()} meters per second, $distanceToLocator meters $ordinalToLocator of launch point. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                        textToSpeech.speak("Descent warning, ${-rocketState.velocity.toInt()} meters per second, ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
                     if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
                         landingSpoken = true
-                        textToSpeech.speak("Landing $distanceToLocator meters $ordinalToLocator of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                        textToSpeech.speak("Landing ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point.", TextToSpeech.QUEUE_ADD, null, null)
                     }
+                }
+            }
+            if (rocketState.flightState >= FlightStates.DroguePrimaryDeployed) {
+                if (!drogueDeploySpoken && noseoverTime > 0 && System.currentTimeMillis() - noseoverTime > 2000 && rocketState.velocity > drogueVelocityThreshold) {
+                    drogueVelocity = rocketState.velocity
+                    drogueDeploySpoken = true
+                    textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
+                }
+            }
+            if (rocketState.flightState >= FlightStates.MainPrimaryDeployed) {
+                if (!mainDeploySpoken && rocketState.velocity > drogueVelocity + 5) {
+                    mainDeploySpoken = true
+                    drogueDeploySpoken = true
+                    textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
                 }
             }
         }
@@ -433,7 +456,7 @@ fun HomeScreen(
                 },
                 floatingActionButtonPosition = FabPosition.Start
             ) { padding ->
-                if (trackerLocation.longitude != 0.0) {
+                trackerLocation?.let {
                     //if (accelerometerState.isAvailable) {
                         var previousDistanceToLocator by remember { mutableIntStateOf(0) }
                         var autoTargetMode by remember { mutableStateOf(true) }
@@ -446,7 +469,7 @@ fun HomeScreen(
                         var showControls by remember { mutableStateOf(false) }
                         var cameraPositionStateZoom by remember { mutableFloatStateOf(12f) }
                         val cameraPositionState = rememberCameraPositionState() {
-                            position = CameraPosition.Builder().target(trackerLocation)
+                            position = CameraPosition.Builder().target(LatLng(it.latitude, it.longitude))
                                 .zoom(cameraPositionStateZoom).bearing(azimuth).build()
                         }
                         var userGesture by remember { mutableStateOf(false)}
@@ -557,7 +580,7 @@ fun HomeScreen(
                             if (System.currentTimeMillis() - lastUserGestureTime > 5000) {
                                 if (abs(azimuthChange) > 0.5)
                                     viewModel.updateLastHandheldDeviceAzimuth((lastAzimuth + azimuthChange + 360) % 360)
-                                val newTarget = LatLng(trackerLocation.latitude, trackerLocation.longitude)
+                                val newTarget = LatLng(it.latitude, it.longitude)
                                 val newZoom = if (distanceToLocator > 1) 23 - log(distanceToLocator.toFloat(), 2.3f) else 23f
                                 cameraPositionStateTarget = if (autoTargetMode)
                                     LatLng(
@@ -674,9 +697,22 @@ fun HomeScreen(
                                             else -> "Undefined state"
                                         },
                                     style = typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.error
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = modifier)
+                            }
+                            if (!armedState) {
+                                Row(
+                                    modifier = modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    PulsingText(
+                                        text = "Disarmed",
+                                        color = Color.White,
+                                        textAlign = TextAlign.Center,
+                                        style = typography.displayLarge,
+                                    )
+                                }
                             }
                         }
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
@@ -962,6 +998,71 @@ fun CameraPreviewScreen(handheldDeviceAzimuth: Float, locatorAzimuth: Float, han
     LaunchedEffect(zoomRatio) {
         camera?.cameraControl?.setZoomRatio(zoomRatio)
     }
+}
+
+@Composable
+fun PulsingText(
+    text: String,
+    color: Color = MaterialTheme.colorScheme.primary,
+    textAlign: TextAlign = TextAlign.Unspecified,
+    style: TextStyle = LocalTextStyle.current,
+    minAlpha: Float = 0f,
+    maxAlpha: Float = 1f,
+    durationMillis: Int = 500
+) {
+    val transition = rememberInfiniteTransition(label = "PulseTransition")
+
+    val alpha by transition.animateFloat(
+        initialValue = minAlpha,
+        targetValue = maxAlpha,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = durationMillis, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "AlphaPulse"
+    )
+
+    Text(
+        text = text,
+        color = color,
+        textAlign = textAlign,
+        style = style,
+        modifier = Modifier.alpha(alpha)
+    )
+}
+
+@Composable
+fun BlinkingText(
+    text: String,
+    color: Color = MaterialTheme.colorScheme.primary,
+    textAlign: TextAlign = TextAlign.Unspecified,
+    style: TextStyle = LocalTextStyle.current,
+    intervalMillis: Long = 500,
+) {
+    var visible by remember { mutableStateOf(true) }
+
+    // Animate opacity between 0f and 1f
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 300),
+        label = "BlinkAlpha"
+    )
+
+    // Toggle visibility on a timer
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(intervalMillis)
+            visible = !visible
+        }
+    }
+
+    Text(
+        text = text,
+        color = color,
+        textAlign = textAlign,
+        style = style,
+        modifier = Modifier.alpha(alpha)
+    )
 }
 
 @Composable
