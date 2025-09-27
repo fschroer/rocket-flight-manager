@@ -105,7 +105,7 @@ fun FlightProfilesScreen(
 //    }
 //
 
-    LaunchedEffect(flightProfileMetadataMessageState) {
+    LaunchedEffect(Unit) {
         if (flightProfileMetadataMessageState == LocatorMessageState.Idle) {
             //viewModel.updateRequestFlightProfileMetadata(false)
             //localRequestFlightProfileMetadata = false
@@ -122,6 +122,8 @@ fun FlightProfilesScreen(
     }
     BackHandler(enabled = true) {
         viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+        onCancelButtonClicked()
     }
     if (flightProfileDataMessageState == LocatorMessageState.Idle) { // Add check for existence of flight data. Also need to clear flight data lists when exiting chart.
         Column (
@@ -266,6 +268,8 @@ fun FlightProfilesScreen(
             ) {
                 val chartMarginX = 64f
                 val chartMarginY = 32f
+                val chartAxisTextSize = 32f
+                val chartBodyTextSize = 16f
                 val canvasHeight = size.height - chartMarginY
                 val canvasWidth = size.width - chartMarginX
                 val scaleFactorX = canvasWidth / maxChartWidth
@@ -284,11 +288,11 @@ fun FlightProfilesScreen(
                     drawIntoCanvas { canvas ->
                         val paint = TextPaint().apply {
                             color = legendColor.toArgb()
-                            textSize = chartMarginY
+                            textSize = chartAxisTextSize
                         }
                         val text = "$gridX"
                         val x = gridX * scaleFactorX + chartMarginX - paint.measureText(text) / 2
-                        val y = canvasHeight + chartMarginY
+                        val y = canvasHeight + chartAxisTextSize
                         canvas.nativeCanvas.drawText(text, x, y, paint)
                     }
                 }
@@ -304,11 +308,11 @@ fun FlightProfilesScreen(
                         drawIntoCanvas { canvas ->
                             val paint = TextPaint().apply {
                                 color = legendColor.toArgb()
-                                textSize = chartMarginY
+                                textSize = chartAxisTextSize
                             }
                             val text = "$gridY"
                             val x = chartMarginX - paint.measureText(text) - 8
-                            val y = canvasHeight - (gridY * scaleFactorY - chartMarginY / 2) - 8
+                            val y = canvasHeight - (gridY * scaleFactorY - chartAxisTextSize / 2) - 8
                             canvas.nativeCanvas.drawText(text, x, y, paint)
                         }
                     }
@@ -324,29 +328,29 @@ fun FlightProfilesScreen(
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
                                     color = legendColor.toArgb()
-                                    textSize = chartMarginY
+                                    textSize = chartBodyTextSize
                                 }
                                 val text = "Ch 1"
-                                canvas.nativeCanvas.drawText(text, newX + 48, newY - 32, paint)
+                                canvas.nativeCanvas.drawText(text, newX + 60, newY - 10, paint)
                             }
                             drawCircle(
                                 color = Color(0xFF808080),
                                 radius = 4.dp.toPx(),
-                                center = Offset(newX + 128, newY - 40),
+                                center = Offset(newX + 48, newY - 16),
                                 style = if (flightEventData.channel1PreFireContinuity) Fill else Stroke(width = 1f),
                             )
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
                                     color = legendColor.toArgb()
-                                    textSize = chartMarginY
+                                    textSize = chartBodyTextSize
                                 }
                                 val text = "Ch 2"
-                                canvas.nativeCanvas.drawText(text, newX + 48, newY, paint)
+                                canvas.nativeCanvas.drawText(text, newX + 60, newY + 6, paint)
                             }
                             drawCircle(
                                 color = Color(0xFF808080),
                                 radius = 4.dp.toPx(),
-                                center = Offset(newX + 128, newY - 8),
+                                center = Offset(newX + 48, newY),
                                 style = if (flightEventData.channel2PreFireContinuity) Fill else Stroke(width = 1f),
                             )
                         }
@@ -354,7 +358,7 @@ fun FlightProfilesScreen(
 //                            drawIntoCanvas { canvas ->
 //                                val paint = TextPaint().apply {
 //                                    color = legendColor.toArgb()
-//                                    textSize = chartMarginY
+//                                    textSize = chartBodyTextSize
 //                                }
 //                                val text = "Burnout"
 //                                canvas.nativeCanvas.drawText(text, newX + 10, newY - 5, paint)
@@ -369,14 +373,14 @@ fun FlightProfilesScreen(
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
                                     color = legendColor.toArgb()
-                                    textSize = chartMarginY
+                                    textSize = chartBodyTextSize
                                 }
                                 val text = "${aglSample.toFloat() / RocketViewModel.ALTIMETER_SCALE}"
-                                canvas.nativeCanvas.drawText(text, newX, newY, paint)
+                                canvas.nativeCanvas.drawText(text, newX - 24, newY - 16, paint)
                             }
                             drawCircle(
                                 color = Color(0xFFFF0000),
-                                radius = 2.dp.toPx(),
+                                radius = 4.dp.toPx(),
                                 center = Offset(newX, newY)
                             )
                         }
@@ -385,15 +389,15 @@ fun FlightProfilesScreen(
                                 drawIntoCanvas { canvas ->
                                     val paint = TextPaint().apply {
                                         color = legendColor.toArgb()
-                                        textSize = chartMarginY
+                                        textSize = chartBodyTextSize
                                     }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Drogue Primary Ch 1" else "Drogue Primary Ch 2"
-                                    canvas.nativeCanvas.drawText(text, newX + 48, newY + 10, paint)
+                                    val text = if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Ch 1 Drogue Primary Event" else "Ch 2 Drogue Primary Event"
+                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
                                 }
                                 drawCircle(
                                     color = Color(0xFF808080),
                                     radius = 4.dp.toPx(),
-                                    center = Offset(newX, newY),
+                                    center = Offset(newX + 8, newY),
                                     style = if (flightEventData.channel1Mode == DeployMode.DroguePrimary)
                                         if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
                                     else
@@ -415,15 +419,15 @@ fun FlightProfilesScreen(
                                 drawIntoCanvas { canvas ->
                                     val paint = TextPaint().apply {
                                         color = legendColor.toArgb()
-                                        textSize = chartMarginY
+                                        textSize = chartBodyTextSize
                                     }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Drogue Backup Ch 1" else "Drogue Backup Ch 2"
-                                    canvas.nativeCanvas.drawText(text, newX + 48, newY + 10, paint)
+                                    val text = if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Ch 1 Drogue Backup Event" else "Ch 2 Drogue Backup Event"
+                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
                                 }
                                 drawCircle(
                                     color = Color(0xFF808080),
                                     radius = 4.dp.toPx(),
-                                    center = Offset(newX, newY),
+                                    center = Offset(newX + 8, newY),
                                     style = if (flightEventData.channel1Mode == DeployMode.DrogueBackup)
                                         if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
                                     else
@@ -445,15 +449,15 @@ fun FlightProfilesScreen(
                                 drawIntoCanvas { canvas ->
                                     val paint = TextPaint().apply {
                                         color = legendColor.toArgb()
-                                        textSize = chartMarginY
+                                        textSize = chartBodyTextSize
                                     }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Main Primary Ch 1" else "Main Primary Ch 2"
-                                    canvas.nativeCanvas.drawText(text, newX + 48, newY + 10, paint)
+                                    val text = if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Ch 1 Main Primary Event" else "Ch 2 Main Primary Event"
+                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
                                 }
                                 drawCircle(
                                     color = Color(0xFF808080),
                                     radius = 4.dp.toPx(),
-                                    center = Offset(newX, newY),
+                                    center = Offset(newX + 8, newY),
                                     style = if (flightEventData.channel1Mode == DeployMode.MainPrimary)
                                         if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
                                     else
@@ -475,15 +479,15 @@ fun FlightProfilesScreen(
                                 drawIntoCanvas { canvas ->
                                     val paint = TextPaint().apply {
                                         color = legendColor.toArgb()
-                                        textSize = chartMarginY
+                                        textSize = chartBodyTextSize
                                     }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainBackup) "Main Backup Ch 1" else "Main Backup Ch 2"
-                                    canvas.nativeCanvas.drawText(text, newX + 48, newY + 10, paint)
+                                    val text = if (flightEventData.channel1Mode == DeployMode.MainBackup) "Ch 1 Main Backup Event" else "Ch 2 Main Backup Event"
+                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
                                 }
                                 drawCircle(
                                     color = Color(0xFF808080),
                                     radius = 4.dp.toPx(),
-                                    center = Offset(newX, newY),
+                                    center = Offset(newX + 8, newY),
                                     style = if (flightEventData.channel1Mode == DeployMode.MainBackup)
                                         if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
                                     else
@@ -498,6 +502,54 @@ fun FlightProfilesScreen(
                                     else
                                         if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
                                 )
+                            }
+                        }
+                        if (sampleID == flightEventData.droguePrimaryDeploySampleIndex) {
+                            if (flightEventData.channel1Mode == DeployMode.DroguePrimary || flightEventData.channel2Mode == DeployMode.DroguePrimary) {
+                                drawIntoCanvas { canvas ->
+                                    val paint = TextPaint().apply {
+                                        color = legendColor.toArgb()
+                                        textSize = chartBodyTextSize
+                                    }
+                                    val text = if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Ch 1 Drogue Primary Deploy" else "Ch 2 Drogue Primary Deploy"
+                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
+                                }
+                            }
+                        }
+                        if (sampleID == flightEventData.drogueBackupDeploySampleIndex) {
+                            if (flightEventData.channel1Mode == DeployMode.DrogueBackup || flightEventData.channel2Mode == DeployMode.DrogueBackup) {
+                                drawIntoCanvas { canvas ->
+                                    val paint = TextPaint().apply {
+                                        color = legendColor.toArgb()
+                                        textSize = chartBodyTextSize
+                                    }
+                                    val text = if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Ch 1 Drogue Backup Deploy" else "Ch 2 Drogue Backup Deploy"
+                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
+                                }
+                            }
+                        }
+                        if (sampleID == flightEventData.mainPrimaryDeploySampleIndex) {
+                            if (flightEventData.channel1Mode == DeployMode.MainPrimary || flightEventData.channel2Mode == DeployMode.MainPrimary) {
+                                drawIntoCanvas { canvas ->
+                                    val paint = TextPaint().apply {
+                                        color = legendColor.toArgb()
+                                        textSize = chartBodyTextSize
+                                    }
+                                    val text = if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Ch 1 Main Primary Deploy" else "Ch 2 Main Primary Deploy"
+                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
+                                }
+                            }
+                        }
+                        if (sampleID == flightEventData.mainBackupDeploySampleIndex) {
+                            if (flightEventData.channel1Mode == DeployMode.MainBackup || flightEventData.channel2Mode == DeployMode.MainBackup) {
+                                drawIntoCanvas { canvas ->
+                                    val paint = TextPaint().apply {
+                                        color = legendColor.toArgb()
+                                        textSize = chartBodyTextSize
+                                    }
+                                    val text = if (flightEventData.channel1Mode == DeployMode.MainBackup) "Ch 1 Main Backup Deploy" else "Ch 2 Main Backup Deploy"
+                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
+                                }
                             }
                         }
                         drawLine(
@@ -520,10 +572,10 @@ fun FlightProfilesScreen(
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
                                     color = legendColor.toArgb()
-                                    textSize = chartMarginY
+                                    textSize = chartAxisTextSize
                                 }
                                 val text = "${(gridY * 10 / RocketViewModel.ACCELEROMETER_SCALE).toFloat() / 10}"
-                                val y = canvasHeight - ((gridY - minAccelerometer) * scaleFactorAccY - chartMarginY / 2) - 8
+                                val y = canvasHeight - ((gridY - minAccelerometer) * scaleFactorAccY - chartAxisTextSize / 2) - 8
                                 canvas.nativeCanvas.drawText(text, canvasWidth, y, paint)
                             }
                         }

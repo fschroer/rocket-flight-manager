@@ -3,7 +3,9 @@ package com.steampigeon.flightmanager.ui
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.hardware.GeomagneticField
 import android.hardware.SensorManager
+import android.location.Location
 import android.util.Log
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
@@ -48,6 +50,8 @@ private var packetResendCount = 0
 private var packetsRemaining = true
 private var sampleIndex = 0
 
+data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
+
 val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
     fileName = "user_prefs.pb",
     serializer = UserPreferencesSerializer
@@ -65,6 +69,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     companion object {
         const val SAMPLES_PER_SECOND = 20
+            const val HDOP_SCALE = 10
         const val ALTIMETER_SCALE = 10
         const val ACCELEROMETER_SCALE = 2048
         private const val BATTERY_SCALE = 8.0 / 4096
@@ -136,6 +141,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val locatorOrdinal: StateFlow<String> = _locatorOrdinal.asStateFlow()
     private val _locatorElevation = MutableStateFlow<Float>(0f)
     val locatorElevation: StateFlow<Float> = _locatorElevation.asStateFlow()
+    fun updateLocatorVector(newLocatorVector: Vector) {
+        _locatorDistance.value = newLocatorVector.distance
+        _locatorAzimuth.value = newLocatorVector.azimuth
+        _locatorOrdinal.value = newLocatorVector.ordinal
+        _locatorElevation.value = newLocatorVector.elevation
+    }
 
     /**
      * Display state
@@ -255,24 +266,23 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 when {
                     locatorMessageHeader.contentEquals(BluetoothService.prelaunchMessageHeader) -> {
                         val accelerometer = Accelerometer(
-                            byteArrayToShort(locatorMessage, 43),
-                            byteArrayToShort(locatorMessage, 45),
-                            byteArrayToShort(locatorMessage, 47)
+                            byteArrayToShort(locatorMessage, 24),
+                            byteArrayToShort(locatorMessage, 26),
+                            byteArrayToShort(locatorMessage, 28)
                         )
                         val rawGForce = sqrt((accelerometer.x * accelerometer.x + accelerometer.y * accelerometer.y + accelerometer.z * accelerometer.z).toFloat())
                         _rocketState.update { currentState ->
                             currentState.copy(
                                 lastPreLaunchMessageTime = currentTime,
-                                latitude = gpsCoord(locatorMessage, 11),
-                                longitude = gpsCoord(locatorMessage, 19),
-                                qInd = (locatorMessage[27] - 48).toUByte(),
-                                satellites = locatorMessage[28].toUByte(),
-                                hdop = byteArrayToFloat(locatorMessage, 29),
-                                altimeterStatus = (locatorMessage[40].and(8).toInt() ushr 3) == 1,
-                                accelerometerStatus = (locatorMessage[40].and(4).toInt() ushr 2) == 1,
-                                deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
-                                deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
-                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 41).toFloat() / ALTIMETER_SCALE,
+                                latitude = gpsCoord(locatorMessage, 3),
+                                longitude = gpsCoord(locatorMessage, 11),
+                                satellites = locatorMessage[19].toUByte(),
+                                hdop = (locatorMessage[20].toUByte().toFloat() / HDOP_SCALE),
+                                altimeterStatus = (locatorMessage[21].and(8).toInt() ushr 3) == 1,
+                                accelerometerStatus = (locatorMessage[21].and(4).toInt() ushr 2) == 1,
+                                deployChannel1Armed = (locatorMessage[21].and(2).toInt() ushr 1) == 1,
+                                deployChannel2Armed = (locatorMessage[21].and(1).toInt()) == 1,
+                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 22).toFloat() / ALTIMETER_SCALE,
                                 accelerometer = accelerometer,
                                 gForce = rawGForce / ACCELEROMETER_SCALE,
                                 orientation =
@@ -281,52 +291,51 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 73) - 3686.4) / 409.6 * 8).toInt(),
-                                receiverBatteryLevel = (byteArrayToShort(locatorMessage, 76) / 12.5).toInt(),
+                                locatorBatteryLevel = ((byteArrayToShort(locatorMessage, 54) - 3686.4) / 409.6 * 8).toInt(),
+                                receiverBatteryLevel = (byteArrayToShort(locatorMessage, 57) / 12.5).toInt(),
                             )
                         }
                         _remoteLocatorConfig.update { currentState ->
                             currentState.copy(
-                                deploymentChannel1Mode = DeployMode.fromUByte(locatorMessage[49].toUByte()),
-                                deploymentChannel2Mode = DeployMode.fromUByte(locatorMessage[50].toUByte()),
-                                launchDetectAltitude = byteArrayToUShort(locatorMessage, 51).toInt(),
-                                droguePrimaryDeployDelay = locatorMessage[53].toInt(),
-                                drogueBackupDeployDelay = locatorMessage[54].toInt(),
-                                mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 55).toInt(),
-                                mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 57).toInt(),
-                                deploySignalDuration = locatorMessage[59].toInt(),
-                                deviceName = String(locatorMessage.copyOfRange(60, 72), Charsets.UTF_8).trimEnd('\u0000'),
+                                deploymentChannel1Mode = DeployMode.fromUByte(locatorMessage[30].toUByte()),
+                                deploymentChannel2Mode = DeployMode.fromUByte(locatorMessage[31].toUByte()),
+                                launchDetectAltitude = byteArrayToUShort(locatorMessage, 32).toInt(),
+                                droguePrimaryDeployDelay = locatorMessage[34].toInt(),
+                                drogueBackupDeployDelay = locatorMessage[35].toInt(),
+                                mainPrimaryDeployAltitude = byteArrayToUShort(locatorMessage, 36).toInt(),
+                                mainBackupDeployAltitude = byteArrayToUShort(locatorMessage, 38).toInt(),
+                                deploySignalDuration = locatorMessage[40].toInt(),
+                                deviceName = String(locatorMessage.copyOfRange(41, 53), Charsets.UTF_8).trimEnd('\u0000'),
                             )
                         }
                         _remoteReceiverConfig.update { currentState ->
                             currentState.copy(
-                                channel = locatorMessage[75].toInt(),
+                                channel = locatorMessage[56].toInt(),
                             )
                         }
                     }
 
                     locatorMessageHeader.contentEquals(BluetoothService.telemetryMessageHeader) -> {
                         val accelerometer = Accelerometer(
-                            byteArrayToShort(locatorMessage, 47),
-                            byteArrayToShort(locatorMessage, 49),
-                            byteArrayToShort(locatorMessage, 51)
+                            byteArrayToShort(locatorMessage, 26),
+                            byteArrayToShort(locatorMessage, 28),
+                            byteArrayToShort(locatorMessage, 30)
                         )
                         val rawGForce = sqrt((accelerometer.x * accelerometer.x + accelerometer.y * accelerometer.y + accelerometer.z * accelerometer.z).toFloat())
                         _rocketState.update { currentState ->
                             currentState.copy(
                                 lastPreLaunchMessageTime = currentTime,
-                                latitude = gpsCoord(locatorMessage, 11),
-                                longitude = gpsCoord(locatorMessage, 19),
-                                qInd = locatorMessage[27].toUByte(),
-                                satellites = locatorMessage[28].toUByte(),
-                                hdop = byteArrayToFloat(locatorMessage, 29),
-                                altimeterStatus = (locatorMessage[40].and(8).toInt() ushr 3) == 1,
-                                accelerometerStatus = (locatorMessage[40].and(4).toInt() ushr 2) == 1,
-                                deployChannel1Armed = (locatorMessage[40].and(2).toInt() ushr 1) == 1,
-                                deployChannel2Armed = (locatorMessage[40].and(1).toInt()) == 1,
-                                channel1Fired = (byteArrayToInt(locatorMessage, 41).and(0x10) ushr 4) != 0,
-                                channel2Fired = (byteArrayToInt(locatorMessage, 41).and(0x20) ushr 5) != 0,
-                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 45).toFloat() / ALTIMETER_SCALE,
+                                latitude = gpsCoord(locatorMessage, 3),
+                                longitude = gpsCoord(locatorMessage, 11),
+                                satellites = locatorMessage[19].toUByte(),
+                                hdop = (locatorMessage[20].toUByte().toFloat() / HDOP_SCALE),
+                                altimeterStatus = (locatorMessage[21].and(8).toInt() ushr 3) == 1,
+                                accelerometerStatus = (locatorMessage[21].and(4).toInt() ushr 2) == 1,
+                                deployChannel1Armed = (locatorMessage[21].and(2).toInt() ushr 1) == 1,
+                                deployChannel2Armed = (locatorMessage[21].and(1).toInt()) == 1,
+                                channel1Fired = (byteArrayToInt(locatorMessage, 22).and(0x10) ushr 4) != 0,
+                                channel2Fired = (byteArrayToInt(locatorMessage, 22).and(0x20) ushr 5) != 0,
+                                altitudeAboveGroundLevel = byteArrayToUShort(locatorMessage, 24).toFloat() / ALTIMETER_SCALE,
                                 accelerometer = accelerometer,
                                 gForce = rawGForce / ACCELEROMETER_SCALE,
                                 orientation =
@@ -335,8 +344,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     _rocketState.value.accelerometer.x.toFloat() / rawGForce > 0.5 -> "down"
                                     else -> "side"
                                 },
-                                velocity = byteArrayToFloat(locatorMessage, 53),
-                                flightState = FlightStates.fromUByte(locatorMessage[57].toUByte()) ?: currentState.flightState,
+                                velocity = byteArrayToFloat(locatorMessage, 32),
+                                flightState = FlightStates.fromUByte(locatorMessage[36].toUByte()) ?: currentState.flightState,
                             )
                         }
 //                        val inFlight = (_rocketState.value.flightState
@@ -404,12 +413,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 landingSampleIndex = byteArrayToInt(locatorMessage, 96),
                                 channel1Mode = DeployMode.fromUByte(locatorMessage[100].and(0x03).toUByte()),
                                 channel2Mode = DeployMode.fromUByte((locatorMessage[100].and(0x0C).toInt() ushr 2).toUByte()),
-                                channel1Fired = (locatorMessage[100].and(0x10).toInt() ushr 4) != 0,
-                                channel2Fired = (locatorMessage[100].and(0x20).toInt() ushr 5) != 0,
-                                channel1PreFireContinuity = (locatorMessage[100].and(0x40).toInt() ushr 6) != 0,
-                                channel2PreFireContinuity = (locatorMessage[100].and(0x80.toByte()).toInt() ushr 7) != 0,
-                                channel1PostFireContinuity = (locatorMessage[101].and(0x01)) != 0.toByte(),
-                                channel2PostFireContinuity = (locatorMessage[101].and(0x02).toInt() ushr 1) != 0,
+                                channel1Fired = locatorMessage[100].and(0x10).toInt() != 0,
+                                channel2Fired = locatorMessage[100].and(0x20).toInt() != 0,
+                                channel1PreFireContinuity = locatorMessage[100].and(0x40).toInt() != 0,
+                                channel2PreFireContinuity = locatorMessage[100].and(0x80.toByte()).toInt() != 0,
+                                channel1PostFireContinuity = locatorMessage[101].and(0x01).toInt() != 0,
+                                channel2PostFireContinuity = locatorMessage[101].and(0x02).toInt() != 0,
                                 gRangeScale = byteArrayToFloat(locatorMessage, 104),
                                 )
                             }
@@ -489,7 +498,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, landscapeOrientation: Boolean) {
+    fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, location: Location?, landscapeOrientation: Boolean) {
         val lastAccelerometer = FloatArray(3)
         lastAccelerometer[0] = accelerometerState.xForce
         lastAccelerometer[1] = accelerometerState.yForce
@@ -509,11 +518,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         else
             SensorManager.getOrientation(rotationMatrix, orientation)
         //_lastHandheldDeviceAzimuth.value = _handheldDeviceAzimuth.value
-        _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
+        location?.let {
+            val geoField = GeomagneticField(it.latitude.toFloat(), it.longitude.toFloat(), it.altitude.toFloat(), System.currentTimeMillis())
+            val declination = geoField.declination  // in degrees
+            _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + declination + 360) % 360).toFloat()
+        } ?: run {
+            _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
+        }
         _handheldDevicePitch.value = ((Math.toDegrees(-orientation[1].toDouble()) + 360) % 360).toFloat()
     }
 
-    fun locatorVector(latLng1: LatLng, latLng2: LatLng) {
+    fun locatorVector(latLng1: LatLng, latLng2: LatLng): Vector {
         val earthRadius = 6371000 // in meters
 
         val lat1Rad = Math.toRadians(latLng1.latitude)
@@ -523,24 +538,25 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
         val a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2) * sin(dLon / 2)
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        _locatorDistance.value = (earthRadius * c).toInt()
+        val distance = (earthRadius * c).toInt()
 
         val y = sin(dLon) * cos(lat2Rad)
         val x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLon)
-        _locatorAzimuth.value = ((Math.toDegrees(atan2(y, x)) + 360) % 360).toFloat()
-        _locatorOrdinal.value = when {
-            _locatorAzimuth.value.toInt() in (0..22) -> "north"
-            _locatorAzimuth.value.toInt() in (23..67) -> "northeast"
-            _locatorAzimuth.value.toInt() in (68..112) -> "east"
-            _locatorAzimuth.value.toInt() in (113..157) -> "southeast"
-            _locatorAzimuth.value.toInt() in (158..202) -> "south"
-            _locatorAzimuth.value.toInt() in (203..247) -> "southwest"
-            _locatorAzimuth.value.toInt() in (248..292) -> "west"
-            _locatorAzimuth.value.toInt() in (293..337) -> "northwest"
-            _locatorAzimuth.value.toInt() in (338..359) -> "north"
+        val azimuth = ((Math.toDegrees(atan2(y, x)) + 360) % 360).toFloat()
+        val ordinal = when {
+            azimuth.toInt() in (0..22) -> "north"
+            azimuth.toInt() in (23..67) -> "northeast"
+            azimuth.toInt() in (68..112) -> "east"
+            azimuth.toInt() in (113..157) -> "southeast"
+            azimuth.toInt() in (158..202) -> "south"
+            azimuth.toInt() in (203..247) -> "southwest"
+            azimuth.toInt() in (248..292) -> "west"
+            azimuth.toInt() in (293..337) -> "northwest"
+            azimuth.toInt() in (338..359) -> "north"
             else -> ""
         }
-        _locatorElevation.value = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, _locatorDistance.value.toFloat()).toDouble()) + 360) % 360).toFloat()
+        val elevation = ((Math.toDegrees(atan2(_rocketState.value.altitudeAboveGroundLevel, distance.toFloat()).toDouble()) + 360) % 360).toFloat()
+        return Vector(distance, azimuth, ordinal, elevation)
     }
 
     fun updateArmedState() {

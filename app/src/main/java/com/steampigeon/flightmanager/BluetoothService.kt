@@ -38,8 +38,8 @@ import java.io.OutputStream
 
 private const val TAG = "BluetoothService"
 private const val messageBufferSize = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
-private const val prelaunchMessageSize = 78 // LoRa message size (75) + channel (1) + receiver battery level (2) = 78
-private const val telemetryMessageSize = 60 // Minimum size. Variable length depending on sample rate (20/s ascent vs 1/s descent)
+private const val prelaunchMessageSize = 59 // LoRa message size (56) + channel (1) + receiver battery level (2) = 59
+private const val telemetryMessageSize = 37 // LoRa message size (37)
 private const val receiverConfigMessageSize = 4
 private const val flightProfileMetadataMessageSize = 131
 private const val flightProfileDataMessageSize = 244

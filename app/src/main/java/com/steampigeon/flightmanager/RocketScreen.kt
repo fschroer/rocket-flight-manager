@@ -68,6 +68,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
@@ -247,7 +248,13 @@ fun RocketApp(
                 RocketAppBar(
                     currentScreen = currentScreen,
                     canNavigateBack = navController.previousBackStackEntry != null,
-                    navigateUp = { navController.navigateUp() },
+                    navigateUp = {
+                        if (currentScreen == RocketScreen.FlightProfiles) {
+                            viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+                            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+                        }
+                        navController.navigateUp()
+                    },
                     modifier = modifier
                 )
             }
@@ -301,6 +308,8 @@ fun RocketApp(
                     service,
                     onCancelButtonClicked = {
                         navigateToStart(navController)
+                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
+                        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
                     },
                     modifier = modifier
                 )
