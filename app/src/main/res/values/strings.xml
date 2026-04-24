@@ -38,6 +38,7 @@
     <string name="receiver_settings">Receiver Settings</string>
     <string name="refresh">Refresh</string>
     <string name="return_to_main">Return</string>
+    <string name="unknown">Unknown</string>
     <string name="update">Update</string>
     <string name="update_failed">Send Failed</string>
     <string name="update_not_acknowledged">Not Received</string>

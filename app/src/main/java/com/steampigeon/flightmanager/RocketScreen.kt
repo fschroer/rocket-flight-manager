@@ -154,6 +154,7 @@ fun RocketApp(
     var textToSpeech: TextToSpeech? by remember { mutableStateOf(null) }
     val voiceName = viewModel.voiceName.collectAsState().value
     val voiceEnabled = viewModel.voiceEnabled.collectAsState().value
+    val flightProfileDataDisplayState = viewModel.flightProfileDataDisplayState.collectAsState().value
     LaunchedEffect(voiceEnabled, voiceName) {
         if (voiceEnabled) {
             textToSpeech = TextToSpeech(context) { status ->
@@ -250,10 +251,14 @@ fun RocketApp(
                     canNavigateBack = navController.previousBackStackEntry != null,
                     navigateUp = {
                         if (currentScreen == RocketScreen.FlightProfiles) {
-                            viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
-                            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+                            if (flightProfileDataDisplayState) {
+                                viewModel.clearFlightProfileData()
+                                viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+                                viewModel.updateFlightProfileDataDisplayState(false)
+                            }
+                            else
+                                navController.navigateUp()
                         }
-                        navController.navigateUp()
                     },
                     modifier = modifier
                 )
@@ -266,6 +271,7 @@ fun RocketApp(
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(route = RocketScreen.Start.name) {
+                viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
                 HomeScreen(
                     navController,
                     viewModel,
@@ -308,8 +314,6 @@ fun RocketApp(
                     service,
                     onCancelButtonClicked = {
                         navigateToStart(navController)
-                        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
-                        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
                     },
                     modifier = modifier
                 )
@@ -410,7 +414,7 @@ fun selectBluetoothDevice(context: Context, bluetoothConnectionState: BluetoothC
     // Create an association request
     if (bluetoothConnectionState == BluetoothConnectionState.Enabled) {
         val deviceFilter: BluetoothDeviceFilter = BluetoothDeviceFilter.Builder()
-            .setNamePattern(Pattern.compile("RocketReceiver"))
+            .setNamePattern(Pattern.compile("Receiver"))
             .build()
         val pairingRequest = AssociationRequest.Builder()
             .addDeviceFilter(deviceFilter)

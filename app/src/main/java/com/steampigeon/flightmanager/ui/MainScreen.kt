@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.hardware.Sensor
 import android.location.Location
 import android.speech.tts.TextToSpeech
 import android.util.Log
@@ -21,6 +22,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -74,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -103,7 +106,6 @@ import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.MultiplePermissionsState
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
@@ -129,11 +131,16 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.Protocol
 import com.steampigeon.flightmanager.data.RocketState
+import com.steampigeon.flightmanager.data.SensorHealth
+import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.G_FORCE_MS2
+import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.RAD2DEG
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.DecimalFormat
-import kotlin.math.abs
 import kotlin.math.log
 import kotlin.math.round
 
@@ -186,6 +193,7 @@ fun HomeScreen(
     val orientation = LocalConfiguration.current.orientation
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val fusedOrientationClient = remember { LocationServices.getFusedOrientationProviderClient(context) }
     var trackerLocation by remember { mutableStateOf<Location?>(null) }
     val bluetoothPermissionState = permissionsState.permissions.find { it.permission == android.Manifest.permission.BLUETOOTH }
     val locationPermissionState = permissionsState.permissions.find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
@@ -197,6 +205,7 @@ fun HomeScreen(
     val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
     val hasCompass = context.packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS)
     val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
+    val locatorGPSLock = remember { mutableStateOf(false) }
     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
     LaunchedEffect(accelerometerState) {
         if (accelerometerState.isAvailable)
@@ -207,6 +216,7 @@ fun HomeScreen(
             val vector = viewModel.locatorVector(LatLng(it.latitude, it.longitude), locatorLatLng)
             viewModel.updateLocatorVector(vector)
         }
+        locatorGPSLock.value = locatorLatLng.latitude != 0.0 && locatorLatLng.longitude != 0.0
     }
     val distanceToLocator = viewModel.locatorDistance.collectAsState().value
     var launchLocation by remember { mutableStateOf(LatLng(0.0, 0.0))}
@@ -218,7 +228,6 @@ fun HomeScreen(
     val locatorArmedMessageState = BluetoothManagerRepository.locatorArmedMessageState.collectAsState().value
     var receivedState by remember { mutableStateOf(FlightStates.WaitingForLaunch)}
     var noseoverTime by remember { mutableLongStateOf(0) }
-    var drogueVelocity by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(rocketState.flightState) {
         if (armedState && rocketState.flightState > receivedState) {
@@ -273,7 +282,6 @@ fun HomeScreen(
                 landingSpoken = false
                 receivedState = FlightStates.WaitingForLaunch
                 noseoverTime = 0
-                drogueVelocity = 0f
                 launchLocation = LatLng(0.0, 0.0)
             }
         }
@@ -290,23 +298,31 @@ fun HomeScreen(
                     }
                 }
                 if (rocketState.flightState > FlightStates.Noseover) {
-                    if (lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken)
-                        textToSpeech.speak("Descent warning, ${-rocketState.velocity.toInt()} meters per second, ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point. . . . . .", TextToSpeech.QUEUE_ADD, null, null)
+                    if (lastPreLaunchMessageAge < messageTimeout && rocketState.velocity <= drogueVelocityThreshold && !isSpeaking && !landingSpoken) {
+                        textToSpeech.speak(
+                            "Descent warning, ${-rocketState.velocity.toInt()} meters per second ${
+                                if (rocketState.gpsStatus == SensorHealth.Ok)
+                                    "${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point. . . . . ." else ""}",
+                            TextToSpeech.QUEUE_ADD, null, null
+                        )
+                    }
                     if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
                         landingSpoken = true
-                        textToSpeech.speak("Landing ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point.", TextToSpeech.QUEUE_ADD, null, null)
+                            textToSpeech.speak(
+                                "Landing${if (rocketState.gpsStatus == SensorHealth.Ok)
+                                " ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point." else ", location unknown."},",
+                                TextToSpeech.QUEUE_ADD, null, null)
                     }
                 }
             }
             if (rocketState.flightState >= FlightStates.DroguePrimaryDeployed) {
-                if (!drogueDeploySpoken && noseoverTime > 0 && System.currentTimeMillis() - noseoverTime > 2000 && rocketState.velocity > drogueVelocityThreshold) {
-                    drogueVelocity = rocketState.velocity
+                if (!drogueDeploySpoken && rocketState.drogueDeployDetected) {
                     drogueDeploySpoken = true
                     textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
                 }
             }
             if (rocketState.flightState >= FlightStates.MainPrimaryDeployed) {
-                if (!mainDeploySpoken && rocketState.velocity > drogueVelocity + 5) {
+                if (!mainDeploySpoken && rocketState.mainDeployDetected) {
                     mainDeploySpoken = true
                     drogueDeploySpoken = true
                     textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
@@ -527,17 +543,28 @@ fun HomeScreen(
                                 strokeWidth = 1f,
                             )
                         }
-                        ScaleBar(
-                            modifier = modifier
-                                //.align(Alignment.BottomStart)
-                                .padding(16.dp),
-                            width = 192.dp,
-                            height = 64.dp,
-                            cameraPositionState = cameraPositionState,
-                            textColor = MaterialTheme.colorScheme.secondary,
-                            lineColor = MaterialTheme.colorScheme.primary,
-                            shadowColor = MaterialTheme.colorScheme.primary,
-                        )
+                        Row(
+                            modifier = modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                        ) {
+                            //Spacer(modifier = modifier)
+                            Image(
+                                painter = painterResource(id = R.drawable.compass),
+                                contentDescription = "Compass",
+                                modifier = Modifier.rotate(360 - lastAzimuth),
+                            )
+                            ScaleBar(
+                                modifier = modifier,
+                                    //.align(Alignment.BottomStart)
+                                    //.padding(16.dp),
+                                width = 192.dp,
+                                height = 64.dp,
+                                cameraPositionState = cameraPositionState,
+                                textColor = MaterialTheme.colorScheme.secondary,
+                                lineColor = MaterialTheme.colorScheme.primary,
+                                shadowColor = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                         if (isMapLoaded) {
 //                            // Update camera position when markerPosition changes
 //                            val coroutineScope = rememberCoroutineScope()
@@ -578,7 +605,7 @@ fun HomeScreen(
 //                                //}
 //                            }
                             if (System.currentTimeMillis() - lastUserGestureTime > 5000) {
-                                if (abs(azimuthChange) > 0.5)
+//                                if (abs(azimuthChange) > 0.5)
                                     viewModel.updateLastHandheldDeviceAzimuth((lastAzimuth + azimuthChange + 360) % 360)
                                 val newTarget = LatLng(it.latitude, it.longitude)
                                 val newZoom = if (distanceToLocator > 1) 23 - log(distanceToLocator.toFloat(), 2.3f) else 23f
@@ -691,7 +718,7 @@ fun HomeScreen(
                                             BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
                                             BluetoothConnectionState.Pairing -> "Pairing with receiver"
                                             BluetoothConnectionState.Paired,
-                                            BluetoothConnectionState.NoDevicesAvailable -> "Waiting for locator"
+                                            BluetoothConnectionState.NoDevicesAvailable -> "Waiting for receiver"
                                             BluetoothConnectionState.Connected -> ""
                                             BluetoothConnectionState.Disconnected -> "Receiver disconnected"
                                             else -> "Undefined state"
@@ -701,19 +728,34 @@ fun HomeScreen(
                                 )
                                 Spacer(modifier = modifier)
                             }
-                            if (!armedState) {
+                            if (lastPreLaunchMessageAge < messageTimeout) {
                                 Row(
                                     modifier = modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.Center,
                                 ) {
                                     PulsingText(
-                                        text = "Disarmed",
+                                        text = (if (!armedState) "Disarmed" else "")
+                                                + (if (!armedState && !locatorGPSLock.value) "\n" else "")
+                                                + (if (!locatorGPSLock.value) "No GPS" else ""),
                                         color = Color.White,
                                         textAlign = TextAlign.Center,
                                         style = typography.displayLarge,
                                     )
                                 }
                             }
+                            else {
+                                Row(
+                                    modifier = modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                ) {
+                                    PulsingText(
+                                        text = "No Locator",
+                                        color = Color.White,
+                                        textAlign = TextAlign.Center,
+                                        style = typography.displayLarge,
+                                    )
+                                }
+                                }
                         }
                         if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
                             LocatorStats(rocketState, armedState, distanceToLocator, locatorConfig, viewModel, scaffoldSize, textToSpeech, modifier)
@@ -775,7 +817,7 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
     ) {
         Row {
             Text(text = locatorConfig.deviceName)
-            Text(text = " ".repeat(RocketViewModel.DEVICE_NAME_LENGTH).take(RocketViewModel.DEVICE_NAME_LENGTH - locatorConfig.deviceName.length))
+            Text(text = " ".repeat(Protocol.DEVICE_NAME_LENGTH).take(Protocol.DEVICE_NAME_LENGTH - locatorConfig.deviceName.length))
             Icon(
                 painter = painterResource(R.drawable.rocket_md),
                 contentDescription = stringResource(id = R.string.locator_satellites)
@@ -790,27 +832,54 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                     append(rocketState.satellites.toString())
                 }
             })
-            //Text(text = " ")
-            val locatorBatteryLevel = rocketState.locatorBatteryLevel.coerceIn(0..7)
-            val locatorBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "drawable", context.packageName)
-            val locatorBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "string", context.packageName)
-            Icon(
-                painter = painterResource(locatorBatteryLevelDrawableResourceID),
-                contentDescription = stringResource(locatorBatteryLevelStringResourceID)
-            )
-            val receiverBatteryLevel = rocketState.receiverBatteryLevel.coerceIn(0..7)
-            val receiverBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "drawable", context.packageName)
-            val receiverBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "string", context.packageName)
-            Icon(
-                painter = painterResource(R.drawable.radio),
-                contentDescription = null
-            )
-            Icon(
-                painter = painterResource(receiverBatteryLevelDrawableResourceID),
-                contentDescription = stringResource(receiverBatteryLevelStringResourceID)
-            )
+            if (!armedState) {
+                //Text(text = " ")
+                val locatorBatteryLevel = rocketState.locatorBatteryLevel.coerceIn(0..7)
+                val locatorBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "drawable", context.packageName)
+                val locatorBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${locatorBatteryLevel}_bar", "string", context.packageName)
+                Icon(
+                    painter = painterResource(locatorBatteryLevelDrawableResourceID),
+                    contentDescription = stringResource(locatorBatteryLevelStringResourceID)
+                )
+                val receiverBatteryLevel = rocketState.receiverBatteryLevel.coerceIn(0..7)
+                val receiverBatteryLevelDrawableResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "drawable", context.packageName)
+                val receiverBatteryLevelStringResourceID = context.resources.getIdentifier("battery_${receiverBatteryLevel}_bar", "string", context.packageName)
+                Icon(
+                    painter = painterResource(R.drawable.radio),
+                    contentDescription = null
+                )
+                Icon(
+                    painter = painterResource(receiverBatteryLevelDrawableResourceID),
+                    contentDescription = stringResource(receiverBatteryLevelStringResourceID)
+                )
+            }
         }
-        Text(text = "Dist: ${DecimalFormat("#,###").format(distanceToLocator)} m")
+        Text(
+            text = "Dist: ${if (rocketState.latitude != 0.0) DecimalFormat("#,###").format(distanceToLocator) + " m" else stringResource(R.string.unknown)}",
+            color = if (rocketState.gpsStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = "AGL: ${DecimalFormat("#0.0").format(round(rocketState.altitudeAboveGroundLevel * 100) / 100)}m",
+            style = typography.bodyLarge,
+            color = if (rocketState.baroStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = "Acc: ${DecimalFormat("#0.0").format(round(rocketState.accelerometer.x / G_FORCE_MS2 * 10) / 10)}, " +
+                    "${DecimalFormat("#0.0").format(round(rocketState.accelerometer.y / G_FORCE_MS2 * 10) / 10)}, " +
+                    DecimalFormat("#0.0").format(round(rocketState.accelerometer.z / G_FORCE_MS2 * 10) / 10),
+            style = typography.bodyLarge,
+            color = if (rocketState.imuStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
+        Text(
+            //modifier = modifier.padding(start = 4.dp),
+            text = "Gyro: ${DecimalFormat("#0.0").format(round(rocketState.gyro.x * RAD2DEG * 10) / 10)}, " +
+                    "${DecimalFormat("#0.0").format(round(rocketState.gyro.y * RAD2DEG * 10) / 10)}, " +
+                    DecimalFormat("#0.0").format(round(rocketState.gyro.z * RAD2DEG * 10) / 10),
+            style = typography.bodyLarge,
+            color = if (rocketState.imuStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+        )
         if (armedState) {
             Text(
                 //modifier = modifier.padding(start = 4.dp),
@@ -828,25 +897,8 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                 },
                 style = typography.bodyLarge,
             )
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${rocketState.altitudeAboveGroundLevel}m",
-                style = typography.bodyLarge,
-            )
         }
         else {
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = "AGL: ${rocketState.altitudeAboveGroundLevel}m",
-                style = typography.bodyLarge,
-                color = if (rocketState.altimeterStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
-            Text(
-                //modifier = modifier.padding(start = 4.dp),
-                text = "Acc: ${DecimalFormat("#0.00").format(round(rocketState.gForce * 100) / 100)} ${rocketState.orientation}",
-                style = typography.bodyLarge,
-                color = if (rocketState.accelerometerStatus) Color.Unspecified else MaterialTheme.colorScheme.error,
-            )
             //Spacer(modifier = Modifier.weight(1f))
             Text(
                 //modifier = modifier.padding(start = 4.dp),
@@ -880,7 +932,45 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                 style = typography.bodyLarge,
                 color = if (rocketState.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
             )
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = when (locatorConfig.deploymentChannel3Mode) {
+                    DeployMode.DroguePrimary ->
+                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                    DeployMode.DrogueBackup ->
+                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                    DeployMode.MainPrimary ->
+                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                    DeployMode.MainBackup ->
+                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                    else -> ""
+                },
+                style = typography.bodyLarge,
+                color = if (rocketState.deployChannel3Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+            Text(
+                //modifier = modifier.padding(start = 4.dp),
+                text = when (locatorConfig.deploymentChannel4Mode) {
+                    DeployMode.DroguePrimary ->
+                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                    DeployMode.DrogueBackup ->
+                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                    DeployMode.MainPrimary ->
+                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                    DeployMode.MainBackup ->
+                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                    else -> ""
+                },
+                style = typography.bodyLarge,
+                color = if (rocketState.deployChannel4Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
         }
+        if (rocketState.latitude != 0.0 && rocketState.longitude != 0.0)
+            Text(
+                modifier = modifier,
+                text = BigDecimal(rocketState.latitude).setScale(6, RoundingMode.HALF_UP).toString() + "," +
+                        BigDecimal(rocketState.longitude).setScale(6, RoundingMode.HALF_UP).toString()
+            )
     }
     LaunchedEffect(locatorStatisticsOffset) {
         viewModel.updateLocatorStatisticsOffset(locatorStatisticsOffset)

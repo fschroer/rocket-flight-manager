@@ -54,6 +54,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.Protocol
 import kotlinx.coroutines.delay
 import java.math.RoundingMode
 import kotlin.math.max
@@ -230,7 +231,7 @@ fun LocatorSettingsScreen(
                 configMessageState = locatorConfigMessageState,
                 modifier = modifier
             ) { newConfigValue ->
-                stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue.take(RocketViewModel.DEVICE_NAME_LENGTH))
+                stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue.take(Protocol.DEVICE_NAME_LENGTH))
                 viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(
