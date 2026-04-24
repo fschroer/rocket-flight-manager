@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material.Checkbox
 import androidx.compose.material.CheckboxDefaults
 import androidx.compose.material.Divider
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -43,12 +46,14 @@ import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 //import com.hoho.android.usbserial.driver.UsbSerialPort
 //import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.FlightEventData
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import java.math.RoundingMode
 import java.text.DateFormat
@@ -56,7 +61,6 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
-import kotlin.math.round
 
 //private const val WRITE_WAIT_MILLIS = 2000
 //private const val ACTION_USB_PERMISSION = "com.steampigeon.flightmanager.USB_PERMISSION"
@@ -76,10 +80,12 @@ fun FlightProfilesScreen(
     val flightProfileMetadataMessageState = viewModel.flightProfileMetadataMessageState.collectAsState().value
     val flightProfileMetadata = viewModel.flightProfileMetadata.collectAsState().value
     val flightProfileDataMessageState = viewModel.flightProfileDataMessageState.collectAsState().value
+    val flightProfileDataDisplayState = viewModel.flightProfileDataDisplayState.collectAsState().value
     val flightEventData = viewModel.flightEventData.collectAsState().value
     val flightProfileAglData = viewModel.flightProfileAglData.collectAsState().value
     val flightProfileAccelerometerData = viewModel.flightProfileAccelerometerData.collectAsState().value
     val flightProfileArchivePosition = viewModel.flightProfileArchivePosition.collectAsState().value
+    val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
     //val requestFlightProfileMetadata = viewModel.requestFlightProfileMetadata.collectAsState().value
     //var localRequestFlightProfileMetadata by remember { mutableStateOf(requestFlightProfileMetadata) }
 
@@ -121,11 +127,15 @@ fun FlightProfilesScreen(
         }
     }
     BackHandler(enabled = true) {
-        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
-        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
-        onCancelButtonClicked()
+        if (flightProfileDataDisplayState) {
+            viewModel.clearFlightProfileData()
+            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+            viewModel.updateFlightProfileDataDisplayState(false)
+        }
+        else
+            onCancelButtonClicked()
     }
-    if (flightProfileDataMessageState == LocatorMessageState.Idle) { // Add check for existence of flight data. Also need to clear flight data lists when exiting chart.
+    if (!flightProfileDataDisplayState) { // To do: Add check for existence of flight data.
         Column (
             modifier = modifier
                 .fillMaxHeight()
@@ -136,40 +146,43 @@ fun FlightProfilesScreen(
                 verticalArrangement = Arrangement.SpaceAround
             ) {
                 val dateTimeFormat = DateFormat.getDateTimeInstance(DateFormat.LONG, DateFormat.LONG)
-                flightProfileMetadata.forEach { flightProfileMetadataItem ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painter = painterResource(R.drawable.u_turn_right),
-                            contentDescription = stringResource(R.string.flight_profiles)
-                        )
-                        Text("${flightProfileMetadataItem.position}")
-                        Spacer(modifier = modifier.weight(1f))
-                        Column(
-                            modifier = Modifier
-                                .weight(5f)
-                                .clickable {
-                                    if (flightProfileMetadataItem.apogee > 0) {
-                                        viewModel.updateFlightProfileArchivePosition(flightProfileMetadataItem.position)
-                                        if (flightProfileDataMessageState == LocatorMessageState.Idle) {
+                if (flightProfileMetadataMessageState != LocatorMessageState.AckUpdated)
+                    Text("Fetching flight data from locator ${locatorConfig.deviceName}")
+                else if (flightProfileMetadata.isEmpty())
+                    Text("No flights recorded on locator ${locatorConfig.deviceName}")
+                else
+                    flightProfileMetadata.forEach { flightProfileMetadataItem ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                painter = painterResource(R.drawable.u_turn_right),
+                                contentDescription = stringResource(R.string.flight_profiles)
+                            )
+                            Text("${flightProfileMetadataItem.position}")
+                            Spacer(modifier = modifier.weight(1f))
+                            Column(
+                                modifier = Modifier
+                                    .weight(5f)
+                                    .clickable {
+                                        if (flightProfileMetadataItem.apogee > 0) {
+                                            viewModel.updateFlightProfileArchivePosition(flightProfileMetadataItem.position)
                                             if (service != null) {
                                                 viewModel.getFlightProfileData(service)
                                             }
                                         }
-                                    }
-                                },
-                        ) {
-                            if (flightProfileMetadataItem.apogee > 0) {
-                                flightProfileMetadataItem.date?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))?.let { Text(it) }
-                                Text("Apogee: ${flightProfileMetadataItem.apogee.toBigDecimal().setScale(1, RoundingMode.UP).toFloat()}m")
-                            }
-                            else {
-                                Text("No flight data")
-                                Text("")
+                                    },
+                            ) {
+                                if (flightProfileMetadataItem.apogee > 0) {
+                                    flightProfileMetadataItem.date?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))?.let { Text(it) }
+                                    Text("Apogee: ${flightProfileMetadataItem.apogee.toBigDecimal().setScale(1, RoundingMode.UP).toFloat()}m")
+                                }
+                                else {
+                                    Text("No flight data")
+                                    Text("")
+                                }
                             }
                         }
+                        Divider(modifier = modifier.weight(1f))
                     }
-                    Divider(modifier = modifier.weight(1f))
-                }
             }
             Spacer(modifier = modifier.weight(1f))
             Row(
@@ -203,8 +216,8 @@ fun FlightProfilesScreen(
         val targetGrids = ceil(flightProfileMetadata[flightProfileArchivePosition].apogee / interval).toInt()
 
         val maxAgl = (interval * targetGrids).toFloat()
-        var maxAccelerometer: Short = 0
-        var minAccelerometer: Short = 0
+        var maxAccelerometer: Float = 0f
+        var minAccelerometer: Float = 0f
         flightProfileAccelerometerData.forEach { accelerometerSample ->
             if (accelerometerSample.x > maxAccelerometer)
                 maxAccelerometer = accelerometerSample.x
@@ -234,6 +247,9 @@ fun FlightProfilesScreen(
         val gridColor = MaterialTheme.colorScheme.onPrimary
         val aglColor = MaterialTheme.colorScheme.primary
         val legendColor = MaterialTheme.colorScheme.secondaryContainer
+        val chartBodyColor = MaterialTheme.colorScheme.secondaryContainer
+        val drogueColor = Color(0x80808000)
+        val mainColor = Color(0x80008000)
         var displayAltitude by remember { mutableStateOf(true) }
         var displayAccelX by remember { mutableStateOf(true) }
         var displayAccelY by remember { mutableStateOf(true) }
@@ -269,7 +285,7 @@ fun FlightProfilesScreen(
                 val chartMarginX = 64f
                 val chartMarginY = 32f
                 val chartAxisTextSize = 32f
-                val chartBodyTextSize = 16f
+                val chartBodyTextSize = 24f
                 val canvasHeight = size.height - chartMarginY
                 val canvasWidth = size.width - chartMarginX
                 val scaleFactorX = canvasWidth / maxChartWidth
@@ -324,233 +340,105 @@ fun FlightProfilesScreen(
                     flightProfileAglData.take(displaySamples).forEachIndexed { sampleID, aglSample ->
                         val newX = flightTime * scaleFactorX + chartMarginX
                         val newY = (maxAgl - aglSample.toFloat() / RocketViewModel.ALTIMETER_SCALE) * scaleFactorY
-                        if (sampleID == flightEventData.launchDetectSampleIndex) {
-                            drawIntoCanvas { canvas ->
-                                val paint = TextPaint().apply {
-                                    color = legendColor.toArgb()
-                                    textSize = chartBodyTextSize
-                                }
-                                val text = "Ch 1"
-                                canvas.nativeCanvas.drawText(text, newX + 60, newY - 10, paint)
-                            }
-                            drawCircle(
-                                color = Color(0xFF808080),
-                                radius = 4.dp.toPx(),
-                                center = Offset(newX + 48, newY - 16),
-                                style = if (flightEventData.channel1PreFireContinuity) Fill else Stroke(width = 1f),
-                            )
-                            drawIntoCanvas { canvas ->
-                                val paint = TextPaint().apply {
-                                    color = legendColor.toArgb()
-                                    textSize = chartBodyTextSize
-                                }
-                                val text = "Ch 2"
-                                canvas.nativeCanvas.drawText(text, newX + 60, newY + 6, paint)
-                            }
-                            drawCircle(
-                                color = Color(0xFF808080),
-                                radius = 4.dp.toPx(),
-                                center = Offset(newX + 48, newY),
-                                style = if (flightEventData.channel2PreFireContinuity) Fill else Stroke(width = 1f),
+                        if (sampleID == flightEventData.burnoutSampleIndex) {
+                            chartEvent(chartBodyColor,
+                                chartBodyTextSize,
+                                "Burnout: ${aglSample.toFloat() / RocketViewModel.ALTIMETER_SCALE}",
+                                flightEventData.burnoutAltitude - flightEventData.launchDetectAltitude,
+                                maxAgl,
+                                newX,
+                                newY,
+                                canvasWidth
                             )
                         }
-//                        if (sampleID == flightEventData.burnoutSampleIndex) {
-//                            drawIntoCanvas { canvas ->
-//                                val paint = TextPaint().apply {
-//                                    color = legendColor.toArgb()
-//                                    textSize = chartBodyTextSize
-//                                }
-//                                val text = "Burnout"
-//                                canvas.nativeCanvas.drawText(text, newX + 10, newY - 5, paint)
-//                            }
-//                            drawCircle(
-//                                color = Color(0xFFFFFF00),
-//                                radius = 2.dp.toPx(),
-//                                center = Offset(newX, newY)
-//                            )
-//                        }
                         if (sampleID == flightEventData.maxAltitudeSampleIndex) {
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
-                                    color = legendColor.toArgb()
+                                    color = chartBodyColor.toArgb()
                                     textSize = chartBodyTextSize
                                 }
                                 val text = "${aglSample.toFloat() / RocketViewModel.ALTIMETER_SCALE}"
                                 canvas.nativeCanvas.drawText(text, newX - 24, newY - 16, paint)
                             }
                             drawCircle(
-                                color = Color(0xFFFF0000),
+                                color = Color(0xFF0000FF),
                                 radius = 4.dp.toPx(),
                                 center = Offset(newX, newY)
                             )
                         }
                         if (sampleID == flightEventData.droguePrimaryDeploySampleIndex) {
                             if (flightEventData.channel1Mode == DeployMode.DroguePrimary || flightEventData.channel2Mode == DeployMode.DroguePrimary) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Ch 1 Drogue Primary Event" else "Ch 2 Drogue Primary Event"
-                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
-                                }
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 8, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.DroguePrimary)
-                                        if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2Fired) Fill else Stroke(width = 1f),
-                                )
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 24, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.DroguePrimary)
-                                        if (flightEventData.channel1PostFireContinuity) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
+                                chartDeploymentEvent(chartBodyColor,
+                                    chartBodyTextSize,
+                                    if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Ch 1 Drogue Primary Event" else "Ch 2 Drogue Primary Event",
+                                    flightEventData,
+                                    DeployMode.DroguePrimary,
+                                    newX,
+                                    newY,
+                                    canvasWidth
                                 )
                             }
                         }
                         if (sampleID == flightEventData.drogueBackupDeploySampleIndex) {
                             if (flightEventData.channel1Mode == DeployMode.DrogueBackup || flightEventData.channel2Mode == DeployMode.DrogueBackup) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Ch 1 Drogue Backup Event" else "Ch 2 Drogue Backup Event"
-                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
-                                }
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 8, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.DrogueBackup)
-                                        if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2Fired) Fill else Stroke(width = 1f),
-                                )
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 24, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.DrogueBackup)
-                                        if (flightEventData.channel1PostFireContinuity) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
+                                chartDeploymentEvent(chartBodyColor,
+                                    chartBodyTextSize,
+                                    if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Ch 1 Drogue Backup Event" else "Ch 2 Drogue Backup Event",
+                                    flightEventData,
+                                    DeployMode.DrogueBackup,
+                                    newX,
+                                    newY,
+                                    canvasWidth
                                 )
                             }
                         }
                         if (sampleID == flightEventData.mainPrimaryDeploySampleIndex) {
                             if (flightEventData.channel1Mode == DeployMode.MainPrimary || flightEventData.channel2Mode == DeployMode.MainPrimary) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Ch 1 Main Primary Event" else "Ch 2 Main Primary Event"
-                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
-                                }
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 8, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.MainPrimary)
-                                        if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2Fired) Fill else Stroke(width = 1f),
-                                )
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 24, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.MainPrimary)
-                                        if (flightEventData.channel1PostFireContinuity) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
+                                chartDeploymentEvent(chartBodyColor,
+                                    chartBodyTextSize,
+                                    if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Ch 1 Main Primary Event" else "Ch 2 Main Primary Event",
+                                    flightEventData,
+                                    DeployMode.MainPrimary,
+                                    newX,
+                                    newY,
+                                    canvasWidth
                                 )
                             }
                         }
                         if (sampleID == flightEventData.mainBackupDeploySampleIndex) {
                             if (flightEventData.channel1Mode == DeployMode.MainBackup || flightEventData.channel2Mode == DeployMode.MainBackup) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainBackup) "Ch 1 Main Backup Event" else "Ch 2 Main Backup Event"
-                                    canvas.nativeCanvas.drawText(text, newX + 40, newY + 6, paint)
-                                }
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 8, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.MainBackup)
-                                        if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2Fired) Fill else Stroke(width = 1f),
-                                )
-                                drawCircle(
-                                    color = Color(0xFF808080),
-                                    radius = 4.dp.toPx(),
-                                    center = Offset(newX + 24, newY),
-                                    style = if (flightEventData.channel1Mode == DeployMode.MainBackup)
-                                        if (flightEventData.channel1PostFireContinuity) Fill else Stroke(width = 1f)
-                                    else
-                                        if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
+                                chartDeploymentEvent(chartBodyColor,
+                                    chartBodyTextSize,
+                                    if (flightEventData.channel1Mode == DeployMode.MainBackup) "Ch 1 Main Backup Event" else "Ch 2 Main Backup Event",
+                                    flightEventData,
+                                    DeployMode.MainBackup,
+                                    newX,
+                                    newY,
+                                    canvasWidth
                                 )
                             }
                         }
-                        if (sampleID == flightEventData.droguePrimaryDeploySampleIndex) {
-                            if (flightEventData.channel1Mode == DeployMode.DroguePrimary || flightEventData.channel2Mode == DeployMode.DroguePrimary) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DroguePrimary) "Ch 1 Drogue Primary Deploy" else "Ch 2 Drogue Primary Deploy"
-                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
-                                }
-                            }
+                        if (sampleID == flightEventData.drogueVelocityThresholdSampleIndex) {
+                            chartEvent(drogueColor,
+                                chartBodyTextSize,
+                                "Drogue Deploy",
+                                flightEventData.droguePrimaryDeployAltitude - flightEventData.drogueVelocityThresholdAltitude,
+                                maxAgl,
+                                newX,
+                                newY,
+                                canvasWidth
+                            )
                         }
-                        if (sampleID == flightEventData.drogueBackupDeploySampleIndex) {
-                            if (flightEventData.channel1Mode == DeployMode.DrogueBackup || flightEventData.channel2Mode == DeployMode.DrogueBackup) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.DrogueBackup) "Ch 1 Drogue Backup Deploy" else "Ch 2 Drogue Backup Deploy"
-                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
-                                }
-                            }
-                        }
-                        if (sampleID == flightEventData.mainPrimaryDeploySampleIndex) {
-                            if (flightEventData.channel1Mode == DeployMode.MainPrimary || flightEventData.channel2Mode == DeployMode.MainPrimary) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainPrimary) "Ch 1 Main Primary Deploy" else "Ch 2 Main Primary Deploy"
-                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
-                                }
-                            }
-                        }
-                        if (sampleID == flightEventData.mainBackupDeploySampleIndex) {
-                            if (flightEventData.channel1Mode == DeployMode.MainBackup || flightEventData.channel2Mode == DeployMode.MainBackup) {
-                                drawIntoCanvas { canvas ->
-                                    val paint = TextPaint().apply {
-                                        color = legendColor.toArgb()
-                                        textSize = chartBodyTextSize
-                                    }
-                                    val text = if (flightEventData.channel1Mode == DeployMode.MainBackup) "Ch 1 Main Backup Deploy" else "Ch 2 Main Backup Deploy"
-                                    canvas.nativeCanvas.drawText(text, newX + 8, newY + 6, paint)
-                                }
-                            }
+                        if (sampleID == flightEventData.mainVelocityThresholdSampleIndex) {
+                            chartEvent(mainColor,
+                                chartBodyTextSize,
+                                "Main Deploy",
+                                flightEventData.mainPrimaryDeployAltitude - flightEventData.mainVelocityThresholdAltitude,
+                                maxAgl,
+                                newX,
+                                newY,
+                                canvasWidth
+                            )
                         }
                         drawLine(
                             color = aglColor,
@@ -563,12 +451,13 @@ fun FlightProfilesScreen(
                         flightTime += if (sampleID <= apogeeSample) 0.05f else 1.0f
                     }
                 }
-                if (maxAccelerometer != 0.toShort() || minAccelerometer != 0.toShort()) {
+                if (maxAccelerometer != 0f || minAccelerometer != 0f) {
                     val scaleFactorAccY = canvasHeight / (maxAccelerometer - minAccelerometer)
                     // Draw accelerometer vertical axis
                     if (displayAccelX || displayAccelY || displayAccelZ) {
-                        val accelerometerGridHeight = ((maxAccelerometer - minAccelerometer) / targetGrids).toInt()
-                        for (gridY in maxAccelerometer downTo minAccelerometer step accelerometerGridHeight) {
+                        val accelerometerGridHeight = ((maxAccelerometer - minAccelerometer) / targetGrids)
+                        floatDownTo(maxAccelerometer, minAccelerometer, accelerometerGridHeight) { gridY ->
+//                        for (gridY in maxAccelerometer downTo minAccelerometer step accelerometerGridHeight) {
                             drawIntoCanvas { canvas ->
                                 val paint = TextPaint().apply {
                                     color = legendColor.toArgb()
@@ -648,95 +537,196 @@ fun FlightProfilesScreen(
                 OutlinedButton(
                     modifier = Modifier.weight(1f),
                     onClick = {
+                        viewModel.clearFlightProfileData()
                         viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+                        viewModel.updateFlightProfileDataDisplayState(false)
                     }
                 ) {
                     Text(stringResource(R.string.return_to_main))
                 }
             }
         }
-        Row (
-
-        ) {
-            Spacer (modifier = modifier.weight(5f))
-            Column (
-                modifier = modifier
-                    .fillMaxHeight()
-                    .padding(16.dp)
-                    .weight(4f),
-                horizontalAlignment = Alignment.End
+        Column() {
+            Spacer(modifier = modifier.weight(2f))
+            Row(
             ) {
-                //Text(flightProfileDataMessageState.toString())
-                //Text("Samples received: ${flightProfileAglData.size}")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Descent")
-                    Checkbox(
-                        checked = showRecovery,
-                        onCheckedChange = { showRecovery = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
-                            uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
-                            checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                Spacer(modifier = modifier.weight(2f))
+                Column(
+                    modifier = modifier
+                        .wrapContentHeight()
+                        .weight(4f),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    val textSize = 12.sp
+                    val textPadding = 4.dp
+                    val checkBoxSize = 28.dp
+                    //Text(flightProfileDataMessageState.toString())
+                    //Text("Samples received: ${flightProfileAglData.size}")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Descent",
+                            fontSize = textSize,
+                            modifier = modifier.padding(start = textPadding)
                         )
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Altitude")
-                    Checkbox(
-                        checked = displayAltitude,
-                        onCheckedChange = { displayAltitude = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
-                            uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
-                            checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                        Checkbox(
+                            checked = showRecovery,
+                            onCheckedChange = { showRecovery = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
+                                uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
+                                checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                            ),
+                            modifier = Modifier.size(checkBoxSize) // smaller box
                         )
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(" Accel X",
-                        color = Color(0xffff0000)
-                    )
-                    Checkbox(
-                        checked = displayAccelX,
-                        onCheckedChange = { displayAccelX = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
-                            uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
-                            checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Altitude",
+                            fontSize = textSize,
+                            modifier = modifier.padding(start = textPadding)
                         )
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(" Accel Y",
-                        color = Color(0xffffff00)
-                    )
-                    Checkbox(
-                        checked = displayAccelY,
-                        onCheckedChange = { displayAccelY = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
-                            uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
-                            checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                        Checkbox(
+                            checked = displayAltitude,
+                            onCheckedChange = { displayAltitude = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
+                                uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
+                                checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                            ),
+                            modifier = Modifier.size(checkBoxSize) // smaller box
+
                         )
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(" Accel Z",
-                        color = Color(0xff00ff00)
-                    )
-                    Checkbox(
-                        checked = displayAccelZ,
-                        onCheckedChange = { displayAccelZ = it },
-                        colors = CheckboxDefaults.colors(
-                            checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
-                            uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
-                            checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            " Accel X",
+                            color = Color(0xffff0000),
+                            fontSize = textSize,
+                            modifier = modifier.padding(start = textPadding)
                         )
-                    )
+                        Checkbox(
+                            checked = displayAccelX,
+                            onCheckedChange = { displayAccelX = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
+                                uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
+                                checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                            ),
+                            modifier = Modifier.size(checkBoxSize) // smaller box
+
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            " Accel Y",
+                            color = Color(0xffffff00),
+                            fontSize = textSize,
+                            modifier = modifier.padding(start = textPadding)
+                        )
+                        Checkbox(
+                            checked = displayAccelY,
+                            onCheckedChange = { displayAccelY = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
+                                uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
+                                checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                            ),
+                            modifier = Modifier.size(checkBoxSize) // smaller box
+
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            " Accel Z",
+                            color = Color(0xff00ff00),
+                            fontSize = textSize,
+                            modifier = modifier.padding(start = textPadding)
+                        )
+                        Checkbox(
+                            checked = displayAccelZ,
+                            onCheckedChange = { displayAccelZ = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = MaterialTheme.colorScheme.primary, // Background when checked
+                                uncheckedColor = MaterialTheme.colorScheme.primary, // Background when unchecked
+                                checkmarkColor = MaterialTheme.colorScheme.onPrimary // Checkmark color
+                            ),
+                            modifier = Modifier.size(checkBoxSize) // smaller box
+
+                        )
+                    }
                 }
+                Spacer(modifier = modifier.weight(1f))
             }
-            Spacer (modifier = modifier.weight(1f))
+            Spacer(modifier = modifier.weight(3f))
         }
+    }
+}
+
+fun DrawScope.chartDeploymentEvent(chartTextColor: Color, chartTextSize: Float, chartText: String, flightEventData: FlightEventData, deployMode: DeployMode, x: Float, y: Float, canvasWidth: Float)
+{
+    drawIntoCanvas { canvas ->
+        val paint = TextPaint().apply {
+            color = chartTextColor.toArgb()
+            textSize = chartTextSize
+        }
+        val xOffset = if (x + paint.measureText(chartText) < canvasWidth) 0
+        else -paint.measureText(chartText).toInt() - 48
+        canvas.nativeCanvas.drawText(chartText, x + 48 + xOffset, y + 6, paint)
+    }
+    drawCircle(
+        color = Color(0xFF808080),
+        radius = 4.dp.toPx(),
+        center = Offset(x + 8, y),
+        style = if (flightEventData.channel1Mode == deployMode)
+            if (flightEventData.channel1PreFireContinuity) Fill else Stroke(width = 1f)
+        else
+            if (flightEventData.channel2PreFireContinuity) Fill else Stroke(width = 1f),
+    )
+    drawCircle(
+        color = Color(0xFF808080),
+        radius = 4.dp.toPx(),
+        center = Offset(x + 24, y),
+        style = if (flightEventData.channel1Mode == deployMode)
+            if (flightEventData.channel1Fired) Fill else Stroke(width = 1f)
+        else
+            if (flightEventData.channel2Fired) Fill else Stroke(width = 1f),
+    )
+    drawCircle(
+        color = Color(0xFF808080),
+        radius = 4.dp.toPx(),
+        center = Offset(x + 40, y),
+        style = if (flightEventData.channel1Mode == deployMode)
+            if (flightEventData.channel1PostFireContinuity) Fill else Stroke(width = 1f)
+        else
+            if (flightEventData.channel2PostFireContinuity) Fill else Stroke(width = 1f),
+    )
+}
+
+fun DrawScope.chartEvent(chartColor: Color, chartTextSize: Float, chartText: String, delta: Float, maxAgl: Float, x: Float, y: Float, canvasWidth: Float)
+{
+    val yOffset = if (delta < maxAgl / 20) 24 else 0
+    drawIntoCanvas { canvas ->
+        val paint = TextPaint().apply {
+            color = chartColor.toArgb()
+            textSize = chartTextSize
+        }
+        val xOffset = if (x + paint.measureText(chartText) < canvasWidth) 0
+            else -paint.measureText(chartText).toInt() - 32
+        canvas.nativeCanvas.drawText(chartText, x + 32 + xOffset, y + 6 + yOffset, paint)
+    }
+    drawCircle(
+        color = chartColor,
+        radius = 4.dp.toPx(),
+        center = Offset(x, y)
+    )
+}
+
+fun floatDownTo(start: Float, end: Float, step: Float, block: (Float) -> Unit) {
+    var v = start
+    while (v >= end) {
+        block(v)
+        v -= step
     }
 }
 
