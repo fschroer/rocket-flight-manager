@@ -50,6 +50,7 @@ import java.time.ZonedDateTime
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.abs
 
 private const val TAG = "RocketViewModel"
 private var packetResendCount = 0
@@ -316,7 +317,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                             else -> "side"
                                         },
                                     gyro = parsed.msg.gyro,
-                                    locatorBatteryLevel = ((parsed.msg.locatorBatteryMv - 3900) / 250.0f * 8).toInt(),
+                                    locatorBatteryLevel = ((parsed.msg.locatorBatteryMv - 3700) / 400.0f * 8).toInt(),
                                     receiverBatteryLevel = ((parsed.msg.receiverBatteryMv) / 12.5).toInt(),
                                 )
                             }
@@ -527,6 +528,40 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             null
         }
+    }
+
+    fun updateOrientation(values: FloatArray) {
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+
+        SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
+        SensorManager.getOrientation(rotationMatrix, orientation)
+
+        val azimuthDeg = Math.toDegrees(orientation[0].toDouble()).toFloat()
+        val pitchDeg   = Math.toDegrees(orientation[1].toDouble()).toFloat()
+
+        // Normalize
+        val az = (azimuthDeg + 360f) % 360f
+
+        // Apply Google‑Maps‑style smoothing
+        val delta = ((az - _lastHandheldDeviceAzimuth.value + 540f) % 360f) - 180f
+        val eased = easeAngle(delta)
+        val smoothed = (_lastHandheldDeviceAzimuth.value + eased + 360f) % 360f
+
+        _lastHandheldDeviceAzimuth.value = smoothed
+        _handheldDeviceAzimuth.value = smoothed
+        _handheldDevicePitch.value = pitchDeg
+    }
+
+    private fun easeAngle(delta: Float): Float {
+        val absDelta = abs(delta)
+        val factor = when {
+            absDelta < 2f  -> 0.1f
+            absDelta < 10f -> 0.2f
+            absDelta < 45f -> 0.35f
+            else           -> 0.55f
+        }
+        return delta * factor
     }
 
     fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, location: Location?, landscapeOrientation: Boolean) {

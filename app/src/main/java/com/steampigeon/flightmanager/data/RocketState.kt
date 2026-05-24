@@ -295,12 +295,14 @@ enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
     Enabled(5u),
     AssociateStart(6u),
     AssociateWait(7u),
-    NoDevicesAvailable(8u),
-    Pairing(9u),
-    PairingFailed(10u),
-    Paired(11u),
-    Connected(12u),
-    Disconnected(13u);
+    DevicesFound(8u),
+    Ready(9u),
+    NoDevicesAvailable(10u),
+    Pairing(11u),
+    PairingFailed(12u),
+    Paired(13u),
+    Connected(14u),
+    Disconnected(15u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.bluetoothConnectionState == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -326,6 +328,9 @@ object BluetoothManagerRepository {
     private val _bluetoothConnectionState = MutableStateFlow<BluetoothConnectionState>(BluetoothConnectionState.Idle)
     val bluetoothConnectionState: StateFlow<BluetoothConnectionState> = _bluetoothConnectionState.asStateFlow()
 
+    private val _scannedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
+    val scannedDevices: StateFlow<List<BluetoothDevice>> = _scannedDevices.asStateFlow()
+
     private val _locatorDevice = MutableStateFlow<BluetoothDevice?>(null)
     val locatorDevice: StateFlow<BluetoothDevice?> = _locatorDevice.asStateFlow()
 
@@ -337,6 +342,10 @@ object BluetoothManagerRepository {
 
     fun updateBluetoothConnectionState(newBluetoothConnectionState: BluetoothConnectionState) {
         _bluetoothConnectionState.value = newBluetoothConnectionState
+    }
+
+    fun updateScannedDevices(devices: List<BluetoothDevice>) {
+        _scannedDevices.value = devices
     }
 
     fun updateLocatorDevice(newLocatorDevice: BluetoothDevice?) {
