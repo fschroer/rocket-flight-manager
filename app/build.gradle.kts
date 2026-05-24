@@ -1,5 +1,3 @@
-import org.gradle.kotlin.dsl.libs
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -98,8 +96,8 @@ dependencies {
     implementation(libs.composesensors)
     implementation(libs.accompanist.permissions)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.ui)
-    implementation(libs.androidx.material)
+//    implementation(libs.ui)
+//    implementation(libs.androidx.material)
     implementation(libs.androidx.core.ktx.v190)
     implementation(libs.play.services.nearby)
     implementation(libs.androidx.activity.compose)
@@ -116,7 +114,8 @@ dependencies {
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
     implementation(libs.jserialcomm)
-    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
+    implementation(libs.usb.serial.for1.android)
+    implementation(libs.androidx.material.icons.extended)
 }
 
 protobuf {

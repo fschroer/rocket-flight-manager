@@ -91,6 +91,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
@@ -106,12 +107,16 @@ import androidx.navigation.NavHostController
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.MultiplePermissionsState
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapEffect
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapType
 import com.google.maps.android.compose.MapUiSettings
@@ -141,6 +146,7 @@ import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.DecimalFormat
+import java.util.Locale
 import kotlin.math.log
 import kotlin.math.round
 
@@ -207,10 +213,10 @@ fun HomeScreen(
     val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
     val locatorGPSLock = remember { mutableStateOf(false) }
     val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
-    LaunchedEffect(accelerometerState) {
-        if (accelerometerState.isAvailable)
-            viewModel.handheldDeviceOrientation(accelerometerState, magneticFieldState, trackerLocation, orientation == Configuration.ORIENTATION_LANDSCAPE)
-    }
+//    LaunchedEffect(accelerometerState) {
+//        if (accelerometerState.isAvailable)
+//            viewModel.updateOrientation(accelerometerState, magneticFieldState, trackerLocation, orientation == Configuration.ORIENTATION_LANDSCAPE)
+//    }
     LaunchedEffect(trackerLocation, locatorLatLng) {
         trackerLocation?.let {
             val vector = viewModel.locatorVector(LatLng(it.latitude, it.longitude), locatorLatLng)
@@ -308,10 +314,10 @@ fun HomeScreen(
                     }
                     if (!landingSpoken && rocketState.altitudeAboveGroundLevel < landingAltitudeThreshold) {
                         landingSpoken = true
-                            textToSpeech.speak(
-                                "Landing${if (rocketState.gpsStatus == SensorHealth.Ok)
-                                " ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point." else ", location unknown."},",
-                                TextToSpeech.QUEUE_ADD, null, null)
+                        textToSpeech.speak(
+                            "Landing${if (rocketState.gpsStatus == SensorHealth.Ok)
+                            " ${vectorFromLaunch.distance} meters ${vectorFromLaunch.ordinal} of launch point." else ", location unknown."},",
+                            TextToSpeech.QUEUE_ADD, null, null)
                     }
                 }
             }
@@ -333,7 +339,7 @@ fun HomeScreen(
 
     val kalmanGainTarget = 0.1f
     val kalmanGainZoom = 0.05f
-    val kalmanGainBearing = 0.05f
+    val kalmanGainBearing = 0.01f
     val azimuth = viewModel.handheldDeviceAzimuth.collectAsState().value
     val lastAzimuth = viewModel.lastHandheldDeviceAzimuth.collectAsState().value
     val azimuthChange = (((azimuth - lastAzimuth + 540) % 360) - 180) * kalmanGainBearing
@@ -373,7 +379,7 @@ fun HomeScreen(
                                 contentDescription = stringResource(R.string.application_settings)
                             ) }
                         )
-                        if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
+                        if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
                             NavigationDrawerItem(
                                 label = {
                                     Text(
@@ -511,6 +517,7 @@ fun HomeScreen(
                                     }
                                 }
                         }
+                        var googleMap by remember { mutableStateOf<GoogleMap?>(null) }
                         GoogleMap(
                             modifier = Modifier.fillMaxSize(), //.padding(padding),
                             onMapLoaded = { isMapLoaded = true },
@@ -521,6 +528,9 @@ fun HomeScreen(
                         ) {
 //                            val rocket_green = BitmapFactory.decodeResource(context.resources, R.drawable.landed_rocket_located).scale(96, 96, false)
 //                            val rocket_red = BitmapFactory.decodeResource(context.resources, R.drawable.landed_rocket_lost).scale(96, 96, false)
+                            MapEffect(Unit) { map ->
+                                googleMap = map
+                            }
                             Marker(
                                 state = state,
                                 //anchor = Offset(0.5f, 0.5f),
@@ -605,20 +615,65 @@ fun HomeScreen(
 //                                //}
 //                            }
                             if (System.currentTimeMillis() - lastUserGestureTime > 5000) {
-//                                if (abs(azimuthChange) > 0.5)
-                                    viewModel.updateLastHandheldDeviceAzimuth((lastAzimuth + azimuthChange + 360) % 360)
-                                val newTarget = LatLng(it.latitude, it.longitude)
-                                val newZoom = if (distanceToLocator > 1) 23 - log(distanceToLocator.toFloat(), 2.3f) else 23f
-                                cameraPositionStateTarget = if (autoTargetMode)
-                                    LatLng(
-                                        cameraPositionStateTarget.latitude + (newTarget.latitude - cameraPositionStateTarget.latitude) * kalmanGainTarget,
-                                        cameraPositionStateTarget.longitude + (newTarget.longitude - cameraPositionStateTarget.longitude) * kalmanGainTarget
-                                    )
-                                else cameraPositionState.position.target
-                                cameraPositionStateZoom = if (autoZoomMode && (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0))
-                                    cameraPositionStateZoom + (newZoom - cameraPositionStateZoom) * kalmanGainZoom else cameraPositionState.position.zoom
-                                val cameraPositionStateAzimuth = if (hasCompass) lastAzimuth else cameraPositionState.position.bearing
-                                cameraPositionState.position = CameraPosition(cameraPositionStateTarget, cameraPositionStateZoom, 0f, cameraPositionStateAzimuth)
+////                                if (abs(azimuthChange) > 0.5)
+//                                    viewModel.updateLastHandheldDeviceAzimuth((lastAzimuth + azimuthChange + 360) % 360)
+//                                val newTarget = LatLng(it.latitude, it.longitude)
+//                                val newZoom = if (distanceToLocator > 1) 23 - log(distanceToLocator.toFloat(), 3f) else 23f
+//                                cameraPositionStateTarget = if (autoTargetMode)
+//                                    LatLng(
+//                                        cameraPositionStateTarget.latitude + (newTarget.latitude - cameraPositionStateTarget.latitude) * kalmanGainTarget,
+//                                        cameraPositionStateTarget.longitude + (newTarget.longitude - cameraPositionStateTarget.longitude) * kalmanGainTarget
+//                                    )
+//                                else cameraPositionState.position.target
+//                                cameraPositionStateZoom = if (autoZoomMode && (rocketState.latitude.toInt() != 0 || rocketState.longitude.toInt() != 0))
+//                                    cameraPositionStateZoom + (newZoom - cameraPositionStateZoom) * kalmanGainZoom else cameraPositionState.position.zoom
+//                                val cameraPositionStateAzimuth = if (hasCompass) lastAzimuth else cameraPositionState.position.bearing
+//                                cameraPositionState.position = CameraPosition(cameraPositionStateTarget, cameraPositionStateZoom, 0f, cameraPositionStateAzimuth)
+// 1. Build LatLngBounds from phone + rocket
+                                val bounds = LatLngBounds.builder()
+                                    .include(LatLng(it.latitude, it.longitude))
+                                    .include(LatLng(rocketState.latitude, rocketState.longitude))
+                                    .build()
+
+// 2. Compute the camera position that fits both points
+                                val viewPadding = 100 // px
+                                val update = CameraUpdateFactory.newLatLngBounds(bounds, viewPadding)
+                                googleMap?.moveCamera(update) // Apply the update to the underlying GoogleMap
+                                val boundsCameraPosition = googleMap?.cameraPosition // Now read the resulting camera position
+                                val newTarget = boundsCameraPosition?.target // Extract the bounds-derived target + zoom
+                                val newZoom = boundsCameraPosition?.zoom
+
+// 3. Apply Kalman smoothing to target
+                                cameraPositionStateTarget =
+                                    if (autoTargetMode && newTarget != null)
+                                        LatLng(
+                                            cameraPositionStateTarget.latitude +
+                                                    (newTarget.latitude - cameraPositionStateTarget.latitude) * kalmanGainTarget,
+                                            cameraPositionStateTarget.longitude +
+                                                    (newTarget.longitude - cameraPositionStateTarget.longitude) * kalmanGainTarget
+                                        )
+                                    else cameraPositionState.position.target
+
+// 4. Apply Kalman smoothing to zoom
+                                cameraPositionStateZoom =
+                                    if (autoZoomMode && newZoom != null)
+                                        cameraPositionStateZoom + (newZoom - cameraPositionStateZoom) * kalmanGainZoom
+                                    else cameraPositionState.position.zoom
+
+// 5. Determine azimuth (compass or previous)
+                                if (hasCompass) {
+                                    val delta = ((azimuth - lastAzimuth + 540f) % 360f) - 180f
+                                    viewModel.updateLastHandheldDeviceAzimuth((lastAzimuth + delta * kalmanGainBearing + 360f) % 360f)
+                                }
+                                val cameraPositionStateAzimuth =
+                                    if (hasCompass) lastAzimuth else cameraPositionState.position.bearing
+// 6. Update final camera position
+                                cameraPositionState.position = CameraPosition(
+                                    cameraPositionStateTarget,
+                                    cameraPositionStateZoom,
+                                    0f,
+                                    cameraPositionStateAzimuth
+                                )
                             }
                             else {
                                 cameraPositionStateTarget = cameraPositionState.position.target
@@ -712,14 +767,16 @@ fun HomeScreen(
                                             BluetoothConnectionState.Enabling -> "Enabling bluetooth"
                                             BluetoothConnectionState.NotEnabled -> "Bluetooth not enabled"
                                             BluetoothConnectionState.NotSupported -> "Bluetooth not supported"
-                                            BluetoothConnectionState.Enabled,
-                                            BluetoothConnectionState.AssociateStart,
+                                            BluetoothConnectionState.Enabled -> "Bluetooth enabled"
+                                            BluetoothConnectionState.AssociateStart -> "Scanning for devices"
                                             BluetoothConnectionState.AssociateWait,
                                             BluetoothConnectionState.PairingFailed -> "Waiting for receiver"
                                             BluetoothConnectionState.Pairing -> "Pairing with receiver"
                                             BluetoothConnectionState.Paired,
                                             BluetoothConnectionState.NoDevicesAvailable -> "Waiting for receiver"
-                                            BluetoothConnectionState.Connected -> ""
+                                            BluetoothConnectionState.DevicesFound -> "Bluetooth devices found"
+                                            BluetoothConnectionState.Connected -> "Bluetooth connected"
+                                            BluetoothConnectionState.Ready -> ""
                                             BluetoothConnectionState.Disconnected -> "Receiver disconnected"
                                             else -> "Undefined state"
                                         },
@@ -757,7 +814,7 @@ fun HomeScreen(
                                 }
                                 }
                         }
-                        if (bluetoothConnectionState == BluetoothConnectionState.Connected) {
+                        if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
                             LocatorStats(rocketState, armedState, distanceToLocator, locatorConfig, viewModel, scaffoldSize, textToSpeech, modifier)
                         }
                     //}
@@ -817,7 +874,8 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
     ) {
         Row {
             Text(text = locatorConfig.deviceName)
-            Text(text = " ".repeat(Protocol.DEVICE_NAME_LENGTH).take(Protocol.DEVICE_NAME_LENGTH - locatorConfig.deviceName.length))
+            Text(text = " ".repeat(Protocol.DEVICE_NAME_LENGTH + 3).take(Protocol.DEVICE_NAME_LENGTH + 3 - locatorConfig.deviceName.length),
+                fontFamily = FontFamily.Monospace)
             Icon(
                 painter = painterResource(R.drawable.rocket_md),
                 contentDescription = stringResource(id = R.string.locator_satellites)
@@ -854,31 +912,39 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                 )
             }
         }
+        val dst = if (rocketState.latitude != 0.0) String.format(Locale.US, "%15d", distanceToLocator) + " m" else stringResource(R.string.unknown)
         Text(
-            text = "Dist: ${if (rocketState.latitude != 0.0) DecimalFormat("#,###").format(distanceToLocator) + " m" else stringResource(R.string.unknown)}",
+            text = "Dist: $dst",
             color = if (rocketState.gpsStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+            fontFamily = FontFamily.Monospace,
         )
+        val agl = String.format(Locale.US, "%15.1f", rocketState.altitudeAboveGroundLevel)
         Text(
             //modifier = modifier.padding(start = 4.dp),
-            text = "AGL: ${DecimalFormat("#0.0").format(round(rocketState.altitudeAboveGroundLevel * 100) / 100)}m",
+            text = "AGL : $agl m",
             style = typography.bodyLarge,
             color = if (rocketState.baroStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+            fontFamily = FontFamily.Monospace,
         )
+        val accx = String.format(Locale.US, "%5.1f", rocketState.accelerometer.x / G_FORCE_MS2)
+        val accy = String.format(Locale.US, "%5.1f", rocketState.accelerometer.y / G_FORCE_MS2)
+        val accz = String.format(Locale.US, "%5.1f", rocketState.accelerometer.z / G_FORCE_MS2)
         Text(
             //modifier = modifier.padding(start = 4.dp),
-            text = "Acc: ${DecimalFormat("#0.0").format(round(rocketState.accelerometer.x / G_FORCE_MS2 * 10) / 10)}, " +
-                    "${DecimalFormat("#0.0").format(round(rocketState.accelerometer.y / G_FORCE_MS2 * 10) / 10)}, " +
-                    DecimalFormat("#0.0").format(round(rocketState.accelerometer.z / G_FORCE_MS2 * 10) / 10),
+            text = "Accl: $accx $accy $accz",
             style = typography.bodyLarge,
             color = if (rocketState.imuStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+            fontFamily = FontFamily.Monospace,
         )
+        val gyrox = String.format(Locale.US, "%5.0f", rocketState.gyro.x * RAD2DEG)
+        val gyroy = String.format(Locale.US, "%5.0f", rocketState.gyro.y * RAD2DEG)
+        val gyroz = String.format(Locale.US, "%5.0f", rocketState.gyro.z * RAD2DEG)
         Text(
             //modifier = modifier.padding(start = 4.dp),
-            text = "Gyro: ${DecimalFormat("#0.0").format(round(rocketState.gyro.x * RAD2DEG * 10) / 10)}, " +
-                    "${DecimalFormat("#0.0").format(round(rocketState.gyro.y * RAD2DEG * 10) / 10)}, " +
-                    DecimalFormat("#0.0").format(round(rocketState.gyro.z * RAD2DEG * 10) / 10),
+            text = "Gyro: $gyrox $gyroy $gyroz",
             style = typography.bodyLarge,
             color = if (rocketState.imuStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
+            fontFamily = FontFamily.Monospace,
         )
         if (armedState) {
             Text(
@@ -896,6 +962,7 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                     else -> ""
                 },
                 style = typography.bodyLarge,
+                fontFamily = FontFamily.Monospace,
             )
         }
         else {
@@ -904,72 +971,77 @@ fun LocatorStats(rocketState: RocketState, armedState: Boolean, distanceToLocato
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deploymentChannel1Mode) {
                     DeployMode.DroguePrimary ->
-                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                        "Drogue Primary:   " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + " s"
                     DeployMode.DrogueBackup ->
-                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                        "Drogue Backup :   " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + " s"
                     DeployMode.MainPrimary ->
-                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary  :   " + locatorConfig.mainPrimaryDeployAltitude.toString() + " m"
                     DeployMode.MainBackup ->
-                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                        "Main Backup   :   " + locatorConfig.mainBackupDeployAltitude.toString() + " m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
                 color = if (rocketState.deployChannel1Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                fontFamily = FontFamily.Monospace,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deploymentChannel2Mode) {
                     DeployMode.DroguePrimary ->
-                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                        "Drogue Primary:   " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + " s"
                     DeployMode.DrogueBackup ->
-                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                        "Drogue Backup :   " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + " s"
                     DeployMode.MainPrimary ->
-                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary  :   " + locatorConfig.mainPrimaryDeployAltitude.toString() + " m"
                     DeployMode.MainBackup ->
-                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                        "Main Backup   :   " + locatorConfig.mainBackupDeployAltitude.toString() + " m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
                 color = if (rocketState.deployChannel2Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                fontFamily = FontFamily.Monospace,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deploymentChannel3Mode) {
                     DeployMode.DroguePrimary ->
-                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                        "Drogue Primary:   " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + " s"
                     DeployMode.DrogueBackup ->
-                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                        "Drogue Backup :   " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + " s"
                     DeployMode.MainPrimary ->
-                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary  :   " + locatorConfig.mainPrimaryDeployAltitude.toString() + " m"
                     DeployMode.MainBackup ->
-                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                        "Main Backup   :   " + locatorConfig.mainBackupDeployAltitude.toString() + " m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
                 color = if (rocketState.deployChannel3Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                fontFamily = FontFamily.Monospace,
             )
             Text(
                 //modifier = modifier.padding(start = 4.dp),
                 text = when (locatorConfig.deploymentChannel4Mode) {
                     DeployMode.DroguePrimary ->
-                        "Drogue Primary: " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + "s"
+                        "Drogue Primary:   " + (locatorConfig.droguePrimaryDeployDelay / 10).toString() + "." + (locatorConfig.droguePrimaryDeployDelay % 10).toString() + " s"
                     DeployMode.DrogueBackup ->
-                        "Drogue Backup: " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + "s"
+                        "Drogue Backup :   " + (locatorConfig.drogueBackupDeployDelay / 10).toString() + "." + (locatorConfig.drogueBackupDeployDelay % 10).toString() + " s"
                     DeployMode.MainPrimary ->
-                        "Main Primary: " + locatorConfig.mainPrimaryDeployAltitude.toString() + "m"
+                        "Main Primary  :   " + locatorConfig.mainPrimaryDeployAltitude.toString() + " m"
                     DeployMode.MainBackup ->
-                        "Main Backup: " + locatorConfig.mainBackupDeployAltitude.toString() + "m"
+                        "Main Backup   :   " + locatorConfig.mainBackupDeployAltitude.toString() + " m"
                     else -> ""
                 },
                 style = typography.bodyLarge,
                 color = if (rocketState.deployChannel4Armed) Color.Unspecified else MaterialTheme.colorScheme.error,
+                fontFamily = FontFamily.Monospace,
             )
         }
         if (rocketState.latitude != 0.0 && rocketState.longitude != 0.0)
             Text(
                 modifier = modifier,
                 text = BigDecimal(rocketState.latitude).setScale(6, RoundingMode.HALF_UP).toString() + "," +
-                        BigDecimal(rocketState.longitude).setScale(6, RoundingMode.HALF_UP).toString()
+                        BigDecimal(rocketState.longitude).setScale(6, RoundingMode.HALF_UP).toString(),
+                fontFamily = FontFamily.Monospace,
             )
     }
     LaunchedEffect(locatorStatisticsOffset) {
