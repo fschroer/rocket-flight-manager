@@ -15,14 +15,14 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 80 // LoRa message size (83) + channel (1) + receiver battery level (2) = 86
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 88 // LoRa message size (83) + channel (1) + receiver battery level (2) = 86
     const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 62 // LoRa message size (68)
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
     const val FLIGHT_PROFILE_DATA_PAYLOAD_MESSAGE_SIZE = 241
     const val DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE = 1
     const val MAX_PACKET_SIZE = 255
-    const val DEVICE_NAME_LENGTH = 12
+    const val DEVICE_NAME_LENGTH = 20
 }
 
 /**
@@ -294,15 +294,12 @@ enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
     NotSupported(4u),
     Enabled(5u),
     AssociateStart(6u),
-    AssociateWait(7u),
-    DevicesFound(8u),
-    Ready(9u),
-    NoDevicesAvailable(10u),
-    Pairing(11u),
-    PairingFailed(12u),
-    Paired(13u),
-    Connected(14u),
-    Disconnected(15u);
+    DevicesFound(7u),
+    NoDevicesAvailable(8u),
+    PairingFailed(9u),
+    Connected(10u),
+    Ready(11u),
+    Disconnected(12u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.bluetoothConnectionState == value } ?: throw IllegalArgumentException("Invalid type: $value")
@@ -331,8 +328,8 @@ object BluetoothManagerRepository {
     private val _scannedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val scannedDevices: StateFlow<List<BluetoothDevice>> = _scannedDevices.asStateFlow()
 
-    private val _locatorDevice = MutableStateFlow<BluetoothDevice?>(null)
-    val locatorDevice: StateFlow<BluetoothDevice?> = _locatorDevice.asStateFlow()
+    private val _receiverDevice = MutableStateFlow<BluetoothDevice?>(null)
+    val receiverDevice: StateFlow<BluetoothDevice?> = _receiverDevice.asStateFlow()
 
     private val _armedState = MutableStateFlow<Boolean>(false)
     val armedState: StateFlow<Boolean> = _armedState.asStateFlow()
@@ -348,8 +345,8 @@ object BluetoothManagerRepository {
         _scannedDevices.value = devices
     }
 
-    fun updateLocatorDevice(newLocatorDevice: BluetoothDevice?) {
-        _locatorDevice.value = newLocatorDevice
+    fun updateReceiverDevice(newReceiverDevice: BluetoothDevice?) {
+        _receiverDevice.value = newReceiverDevice
     }
 
     fun updateArmedState(newArmedState: Boolean) {

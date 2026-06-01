@@ -1,6 +1,6 @@
 package com.steampigeon.flightmanager
 
-import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -16,7 +16,6 @@ import android.content.Intent
 import android.location.LocationManager
 import android.os.Build
 import android.util.Log
-import androidx.annotation.RequiresPermission
 import androidx.core.location.LocationManagerCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
@@ -33,36 +32,38 @@ import java.util.UUID
  * No Compose dependencies.
  *
  * ---------------------------------------------------------------------------
- * HARDWARE CONFIGURATION — VG6328A
+ * PERMISSION NOTE
  * ---------------------------------------------------------------------------
+ * This class is annotated @SuppressLint("MissingPermission") because all
+ * required Bluetooth permissions (BLUETOOTH_SCAN, BLUETOOTH_CONNECT, and
+ * ACCESS_FINE_LOCATION) are verified by RocketApp before BluetoothService
+ * starts, which is before any method in this class is called. Centralising
+ * the permission check at the entry point avoids propagating
+ * @RequiresPermission annotations through every method in the call chain
+ * without hiding or skipping the actual check.
  *
- * Device discovery:
- *   The VG6328A does not support 128-bit service UUID advertisement.
- *   Discovery uses an unfiltered BLE scan and matches on the first two bytes
- *   of the MAC address ([MAC_PREFIX], currently "D8:67"). All devices whose
- *   address starts with this prefix are collected and presented to the user.
- *
- * GATT characteristics — must match VG6328A configuration:
- *   CHAR_UUID_TX  — characteristic the VG6328A notifies on (device → phone).
- *                   Must have NOTIFY property enabled on the hardware.
- *   CHAR_UUID_RX  — characteristic the phone writes to (phone → device).
- *                   Must have WRITE or WRITE_WITHOUT_RESPONSE on the hardware.
- *
- * If the VG6328A uses the Nordic UART Service layout these are typically:
- *   TX  6e400003-b5a3-f393-e0a9-e50e24dcca9e  (notify, device→phone)
- *   RX  6e400002-b5a3-f393-e0a9-e50e24dcca9e  (write,  phone→device)
  * ---------------------------------------------------------------------------
+ * HARDWARE — VG6328A
+ * ---------------------------------------------------------------------------
+ * Discovery: unfiltered BLE scan filtered in-callback by [macPrefix] (first
+ * two bytes of MAC address). The VG6328A does not advertise a service UUID.
  *
- * MTU: [REQUESTED_MTU] (247) is requested immediately after connection.
- * Usable payload per write/notification = [negotiatedMtu] - 3 (ATT overhead).
+ * GATT layout (confirmed via onServicesDiscovered log):
+ *   Service  0000ffe0  FFE0
+ *   RX char  0000ffe1  WRITE + WRITE_NO_RESP  (phone → device)
+ *   TX char  0000ffe2  NOTIFY                 (device → phone)
+ *     CCCD   00002902
+ *
+ * MTU [REQUESTED_MTU] = 247 → 244-byte usable payload (247 − 3 ATT overhead).
  *
  * Data flow:
  *   Inbound  → onCharacteristicChanged → [onDataReceived] callback
- *              → BluetoothService accumulator → extractPackets → _packets flow
- *   Outbound → [sendData] → writeCharacteristic on CHAR_UUID_RX
+ *              → BluetoothService accumulator → extractPackets → _packets
+ *   Outbound → [sendData] → writeCharacteristic on FFE1
  *
  * Call [cleanup] from onDestroy / DisposableEffect.onDispose.
  */
+@SuppressLint("MissingPermission")
 class BluetoothManager(private val appContext: Context) {
 
     private val tag = "BluetoothManager"
@@ -71,25 +72,15 @@ class BluetoothManager(private val appContext: Context) {
     // Hardware identification
     // -------------------------------------------------------------------------
 
-    // First two bytes of the VG6328A MAC address, upper-case, colon-separated.
-    // All BLE devices whose address starts with this prefix are treated as
-    // candidates. Adjust if your hardware uses a different OUI.
     private val macPrefix = "D8:67"
 
     // -------------------------------------------------------------------------
-    // GATT UUIDs — adjust to match VG6328A characteristic configuration
+    // GATT UUIDs
     // -------------------------------------------------------------------------
 
-    // Device → phone (notifications) — VG6328A FFE2
     private val txCharUuid = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
-
-    // Phone → device (write / write-no-response) — VG6328A FFE1
     private val rxCharUuid = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
-
-    // Standard CCCD descriptor — confirmed present on TX characteristic
-    private val cccdUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-    // Service UUID — VG6328A FFE0 service
+    private val cccdUuid   = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private val serviceUuid = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
 
     // -------------------------------------------------------------------------
@@ -97,9 +88,7 @@ class BluetoothManager(private val appContext: Context) {
     // -------------------------------------------------------------------------
 
     companion object {
-        private const val SCAN_DURATION_MS        = 8_000L
-        // Request 247 — gives 244-byte ATT payload (247 - 3 byte ATT header).
-        // Actual negotiated value depends on peripheral; stored in negotiatedMtu.
+        private const val SCAN_DURATION_MS        = 3_000L
         const val REQUESTED_MTU                   = 247
         private const val MAX_RECONNECT_ATTEMPTS  = 5
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
@@ -121,27 +110,29 @@ class BluetoothManager(private val appContext: Context) {
 
     private val discoveredDevices = mutableMapOf<String, BluetoothDevice>()
 
+    // Every BluetoothGatt handle this instance has ever opened, keyed by device
+    // address. This is the authoritative record of open connections — NOT
+    // systemBtManager.getConnectedDevices(), which only covers the GATT server
+    // role and misses client connections initiated by this app.
+    private val activeGattHandles = mutableMapOf<String, BluetoothGatt>()
+
+    // The handle for the currently intended target device.
     private var bluetoothGatt: BluetoothGatt? = null
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
-    var negotiatedMtu: Int = 23   // updated in onMtuChanged; default ATT MTU is 23
+    var negotiatedMtu: Int = 23
         private set
 
-    /**
-     * Set by BluetoothService after construction.
-     * Called on a binder/callback thread with raw bytes from the TX characteristic.
-     * BluetoothService feeds these into its existing packet accumulator.
-     */
+    /** Wired by BluetoothService. Called on GATT callback thread with inbound bytes. */
     var onDataReceived: ((ByteArray) -> Unit)? = null
 
     // -------------------------------------------------------------------------
     // Bluetooth enable
     // -------------------------------------------------------------------------
 
-    @SuppressWarnings("MissingPermission")
     fun enableBluetooth(): Boolean? {
         return when (bluetoothAdapter?.isEnabled) {
-            true  -> { emit(BluetoothConnectionState.Enabled);     true  }
-            false -> { emit(BluetoothConnectionState.Enabling);    false }
+            true  -> { emit(BluetoothConnectionState.Enabled);      true  }
+            false -> { emit(BluetoothConnectionState.Enabling);     false }
             null  -> { emit(BluetoothConnectionState.NotSupported); null  }
         }.also { Log.d(tag, "enableBluetooth → $it") }
     }
@@ -150,15 +141,9 @@ class BluetoothManager(private val appContext: Context) {
         Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE)
 
     // -------------------------------------------------------------------------
-    // BLE scan — unfiltered, matched on MAC address prefix
-    //
-    // ScanFilter.setDeviceAddress() requires a full exact address, so prefix
-    // matching must be done manually in the callback. The scan runs unfiltered
-    // for the full SCAN_DURATION_MS window, collecting every device whose
-    // address starts with [macPrefix]. Everything else is silently ignored.
+    // BLE scan
     // -------------------------------------------------------------------------
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     fun startScan() {
         if (!preflightScanChecks()) return
 
@@ -168,9 +153,7 @@ class BluetoothManager(private val appContext: Context) {
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
 
-        Log.d(tag, "Starting unfiltered scan — collecting MAC prefix \"$macPrefix\" " +
-                "for ${SCAN_DURATION_MS}ms")
-        // Empty filter list = no hardware filtering; all advertising devices are reported.
+        Log.d(tag, "Starting unfiltered scan — MAC prefix \"$macPrefix\" for ${SCAN_DURATION_MS}ms")
         bleScanner!!.startScan(emptyList(), settings, scanCallback)
         emit(BluetoothConnectionState.AssociateStart)
 
@@ -180,29 +163,24 @@ class BluetoothManager(private val appContext: Context) {
             stopScan()
             val found = discoveredDevices.values.toList()
             Log.d(tag, "Scan window closed — ${found.size} device(s) found")
-            if (found.isEmpty()) {
-                emit(BluetoothConnectionState.NoDevicesAvailable)
-            } else {
+            if (found.isEmpty()) emit(BluetoothConnectionState.NoDevicesAvailable)
+            else {
                 BluetoothManagerRepository.updateScannedDevices(found)
                 emit(BluetoothConnectionState.DevicesFound)
             }
         }
     }
 
-    @SuppressWarnings("MissingPermission")
     fun stopScan() {
         scanTimeoutJob?.cancel()
         bleScanner?.stopScan(scanCallback)
     }
 
     private val scanCallback = object : ScanCallback() {
-        @SuppressWarnings("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
             val address = device.address ?: return
-            // Reject devices that don't start with the VG6328A MAC prefix.
             if (!address.startsWith(macPrefix, ignoreCase = true)) return
-            // Deduplicate — scan window may report the same device multiple times.
             if (discoveredDevices.containsKey(address)) return
             Log.d(tag, "MAC prefix match: $address  name: ${device.name}  RSSI: ${result.rssi}")
             discoveredDevices[address] = device
@@ -214,49 +192,77 @@ class BluetoothManager(private val appContext: Context) {
     }
 
     // -------------------------------------------------------------------------
-    // Device selection (called by UI after user picks from DevicesFound list)
+    // Device selection
     // -------------------------------------------------------------------------
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun selectDevice(device: BluetoothDevice) {
         Log.d(tag, "User selected: ${device.address}  name: ${device.name}")
-        BluetoothManagerRepository.updateLocatorDevice(device)
+        BluetoothManagerRepository.updateReceiverDevice(device)
         connectGatt(device)
     }
 
     // -------------------------------------------------------------------------
     // GATT connection
+    //
+    // activeGattHandles tracks every handle this instance has opened so that
+    // no connection is ever orphaned. closeAllExceptTarget() is called before
+    // every new connectGatt() to ensure only one connection exists at a time,
+    // regardless of how many device switches or reconnects have occurred and
+    // regardless of whether a previous app session left stale connections.
+    //
+    // Why not use systemBtManager.getConnectedDevices()?
+    //   That API returns devices connected to the local GATT *server*, not
+    //   connections initiated by this app as a GATT *client*. It does not see
+    //   client-side connections and cannot be used for this purpose.
     // -------------------------------------------------------------------------
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connectGatt(device: BluetoothDevice) {
-        Log.d(tag, "Connecting GATT to ${device.address}")
-        bluetoothGatt?.close()
-        bluetoothGatt = device.connectGatt(
-            appContext,
-            /*autoConnect=*/ false,
-            gattCallback
-        )
+        Log.d(tag, "connectGatt → ${device.address}  (active handles: ${activeGattHandles.keys})")
+        closeAllExceptTarget(device.address)
+        bluetoothGatt = device.connectGatt(appContext, false, gattCallback)
+        activeGattHandles[device.address] = bluetoothGatt!!
+        rxCharacteristic = null
     }
 
-    @SuppressWarnings("MissingPermission")
+    /**
+     * Closes and removes every handle in [activeGattHandles] whose address
+     * does not match [targetAddress]. Called before every [connectGatt] so
+     * there is always at most one live connection.
+     */
+    private fun closeAllExceptTarget(targetAddress: String) {
+        val toClose = activeGattHandles.filter { it.key != targetAddress }
+        for ((address, gatt) in toClose) {
+            Log.d(tag, "Closing stale handle for $address")
+            gatt.disconnect()
+            gatt.close()
+            activeGattHandles.remove(address)
+        }
+        // Also close the tracked primary handle if it points to a different device.
+        bluetoothGatt?.let { current ->
+            if (current.device.address != targetAddress) {
+                Log.d(tag, "Closing primary handle for ${current.device.address}")
+                current.disconnect()
+                current.close()
+                bluetoothGatt = null
+                rxCharacteristic = null
+            }
+        }
+    }
+
     fun disconnectGatt() {
         cancelReconnect()
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
+        closeAllExceptTarget("")   // "" matches nothing → closes every handle
         bluetoothGatt = null
         rxCharacteristic = null
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
 
-        // Step 1 — connected: request MTU immediately before service discovery.
-        // Requesting MTU first avoids the race condition where discovery completes
-        // with the default 23-byte MTU and large writes get fragmented unexpectedly.
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        // Step 1: request MTU before service discovery to avoid fragmentation.
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when {
-                newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS -> {
+                newState == BluetoothProfile.STATE_CONNECTED
+                        && status == BluetoothGatt.GATT_SUCCESS -> {
                     reconnectAttempts = 0
                     Log.d(tag, "GATT connected to ${gatt.device.address} — requesting MTU $REQUESTED_MTU")
                     emit(BluetoothConnectionState.Connected)
@@ -264,95 +270,61 @@ class BluetoothManager(private val appContext: Context) {
                 }
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.w(tag, "GATT disconnected from ${gatt.device.address} (status $status)")
-                    // Delegate to onAclDisconnected so the same cleanup + reconnect
-                    // path runs regardless of whether the disconnect was detected here
-                    // or via the ACTION_ACL_DISCONNECTED broadcast.
                     onAclDisconnected(gatt.device, source = "GATT callback")
                 }
                 else -> {
-                    Log.e(tag, "GATT connection error: status=$status newState=$newState")
+                    Log.e(tag, "GATT error: status=$status newState=$newState on ${gatt.device.address}")
                     onAclDisconnected(gatt.device, source = "GATT error")
                 }
             }
         }
 
-        // Step 2 — MTU negotiated: now discover services.
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        // Step 2: MTU negotiated — discover services.
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             negotiatedMtu = mtu
-            val payload = mtu - 3
-            Log.d(tag, "MTU negotiated: $mtu (usable payload: $payload bytes)")
-            if (payload < REQUESTED_MTU - 3) {
-                Log.w(tag, "Negotiated MTU payload ($payload) is below requested " +
-                        "${REQUESTED_MTU - 3} — peripheral may not support larger MTU")
-            }
+            Log.d(tag, "MTU negotiated: $mtu (payload: ${mtu - 3} bytes)")
+            if (mtu - 3 < REQUESTED_MTU - 3)
+                Log.w(tag, "MTU below requested — peripheral may not support $REQUESTED_MTU")
             gatt.discoverServices()
         }
 
-        // Step 3 — services discovered: log the full GATT table, then find
-        // RX and TX characteristics and enable notifications.
-        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        // Step 3: log full GATT table, locate RX and TX characteristics.
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(tag, "Service discovery failed: $status")
-                return
+                Log.e(tag, "Service discovery failed: $status"); return
             }
-
-            // Log every service → characteristic → descriptor so the actual
-            // UUIDs exposed by the VG6328A are visible in logcat. This makes
-            // it straightforward to correct txCharUuid / rxCharUuid / serviceUuid
-            // if any of them don't match the hardware configuration.
             Log.d(tag, "=== GATT table for ${gatt.device.address} ===")
             for (svc in gatt.services) {
                 Log.d(tag, "  SERVICE ${svc.uuid}")
                 for (char in svc.characteristics) {
                     val props = buildString {
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)
-                            append("NOTIFY ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)
-                            append("INDICATE ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)
-                            append("WRITE ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
-                            append("WRITE_NO_RESP ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)
-                            append("READ ")
+                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)       append("NOTIFY ")
+                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)     append("INDICATE ")
+                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)        append("WRITE ")
+                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) append("WRITE_NO_RESP ")
+                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)         append("READ ")
                     }.trim()
                     Log.d(tag, "    CHAR ${char.uuid}  [$props]")
-                    for (desc in char.descriptors) {
-                        Log.d(tag, "      DESC ${desc.uuid}")
-                    }
+                    for (desc in char.descriptors) Log.d(tag, "      DESC ${desc.uuid}")
                 }
             }
             Log.d(tag, "=== end GATT table ===")
 
-            // Locate the service. If serviceUuid doesn't match, the log above
-            // will show the correct UUID to use.
             val service = gatt.getService(serviceUuid) ?: run {
-                Log.e(tag, "Service $serviceUuid not found — see GATT table above for actual UUIDs")
-                return
+                Log.e(tag, "Service $serviceUuid not found — see GATT table above"); return
             }
-
-            // Locate RX characteristic (phone → device).
             rxCharacteristic = service.getCharacteristic(rxCharUuid) ?: run {
-                Log.e(tag, "RX char $rxCharUuid not found — see GATT table above")
-                null
+                Log.e(tag, "RX char $rxCharUuid not found — see GATT table above"); null
             }
-
-            // Locate TX characteristic (device → phone, must have NOTIFY).
             val txChar = service.getCharacteristic(txCharUuid) ?: run {
-                Log.e(tag, "TX char $txCharUuid not found — see GATT table above")
-                return
+                Log.e(tag, "TX char $txCharUuid not found — see GATT table above"); return
             }
-
             enableNotifications(gatt, txChar)
         }
 
-        // Step 4 — notification descriptor written: GATT setup complete.
+        // Step 4: CCCD written — GATT fully configured, data can flow.
         override fun onDescriptorWrite(
-            gatt: BluetoothGatt,
-            descriptor: BluetoothGattDescriptor,
-            status: Int
+            gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int
         ) {
             if (descriptor.uuid == cccdUuid) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -364,81 +336,48 @@ class BluetoothManager(private val appContext: Context) {
             }
         }
 
-        // Inbound data — fires for every notification from the TX characteristic.
-        // Passes raw bytes to BluetoothService via the [onDataReceived] callback.
+        // Inbound data (API < 33)
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic
         ) {
-            if (characteristic.uuid == txCharUuid) {
-                val bytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    // API 33+: value passed directly to the override below
-                    characteristic.value  // fallback; real data arrives in the new override
-                } else {
-                    characteristic.value
-                }
-                bytes?.let { onDataReceived?.invoke(it) }
-            }
+            if (characteristic.uuid == txCharUuid)
+                characteristic.value?.let { onDataReceived?.invoke(it) }
         }
 
-        // API 33+ override receives the value directly (avoids deprecated characteristic.value)
+        // Inbound data (API 33+)
         override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray
         ) {
-            if (characteristic.uuid == txCharUuid) {
-                onDataReceived?.invoke(value)
-            }
+            if (characteristic.uuid == txCharUuid) onDataReceived?.invoke(value)
         }
 
-        // Confirmation that a write to the RX characteristic completed.
         override fun onCharacteristicWrite(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            status: Int
+            gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e(tag, "Write to RX characteristic failed: $status")
-            }
+            if (status != BluetoothGatt.GATT_SUCCESS)
+                Log.e(tag, "Write to RX char failed: $status")
         }
     }
 
     // -------------------------------------------------------------------------
-    // Notification setup helper
+    // Notification setup
     // -------------------------------------------------------------------------
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-        // Verify the characteristic actually supports notifications.
-        val supportsNotify = characteristic.properties and
-                BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0
-        val supportsIndicate = characteristic.properties and
-                BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
+        val supportsNotify   = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY   != 0
+        val supportsIndicate = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
         if (!supportsNotify && !supportsIndicate) {
-            Log.e(tag, "TX char ${characteristic.uuid} has neither NOTIFY nor INDICATE — " +
-                    "check hardware configuration")
-            return
+            Log.e(tag, "TX char ${characteristic.uuid} has neither NOTIFY nor INDICATE"); return
         }
-
         gatt.setCharacteristicNotification(characteristic, true)
 
-        // Look up CCCD by the standard UUID first, then fall back to iterating
-        // all descriptors. Some peripheral stacks expose the CCCD under a
-        // short-form UUID that the Android stack may not normalise correctly.
         val cccd = characteristic.getDescriptor(cccdUuid)
             ?: characteristic.descriptors.firstOrNull().also { fallback ->
-                if (fallback != null) {
-                    Log.w(tag, "CCCD not found by UUID $cccdUuid — " +
-                            "using first available descriptor ${fallback.uuid}")
-                } else {
-                    Log.e(tag, "No descriptors at all on TX char ${characteristic.uuid}. " +
-                            "Attempting setCharacteristicNotification only (no CCCD write). " +
-                            "Notifications may still arrive on some peripherals.")
-                    // Some devices honour setCharacteristicNotification without a
-                    // CCCD write. Emit Ready optimistically; if data never arrives
-                    // the TX/RX UUIDs or service UUID need correcting.
+                if (fallback != null)
+                    Log.w(tag, "CCCD not found by UUID — using descriptor ${fallback.uuid}")
+                else {
+                    Log.e(tag, "No descriptors on TX char — attempting without CCCD write")
                     emit(BluetoothConnectionState.Ready)
                     return
                 }
@@ -450,47 +389,27 @@ class BluetoothManager(private val appContext: Context) {
             BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val result = gatt.writeDescriptor(cccd!!, enableValue)
-            Log.d(tag, "writeDescriptor result: $result")
+            gatt.writeDescriptor(cccd!!, enableValue)
         } else {
             @Suppress("DEPRECATION")
             cccd!!.value = enableValue
             @Suppress("DEPRECATION")
-            val result = gatt.writeDescriptor(cccd)
-            Log.d(tag, "writeDescriptor result: $result")
+            gatt.writeDescriptor(cccd)
         }
-        Log.d(tag, "Writing CCCD ${cccd.uuid} to enable notifications on TX char")
+        Log.d(tag, "Writing CCCD ${cccd.uuid} on TX char")
     }
 
     // -------------------------------------------------------------------------
     // Outbound data
     // -------------------------------------------------------------------------
 
-    /**
-     * Sends [data] to the device by writing to the RX characteristic.
-     *
-     * Automatically fragments into [negotiatedMtu] - 3 byte chunks if the
-     * payload exceeds the negotiated MTU, though in practice the protocol
-     * messages should fit within a single MTU once 247 is negotiated.
-     *
-     * @return true if the write was accepted by the stack, false otherwise.
-     */
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun sendData(data: ByteArray): Boolean {
-        val gatt = bluetoothGatt
-        val rxChar = rxCharacteristic
-        if (gatt == null || rxChar == null) {
-            Log.e(tag, "sendData: GATT not ready (gatt=$gatt, rxChar=$rxChar)")
-            return false
-        }
-
+        val gatt   = bluetoothGatt ?: run { Log.e(tag, "sendData: not connected"); return false }
+        val rxChar = rxCharacteristic ?: run { Log.e(tag, "sendData: RX char not ready"); return false }
         val maxPayload = negotiatedMtu - 3
         return if (data.size <= maxPayload) {
             writeCharacteristic(gatt, rxChar, data)
         } else {
-            // Fragment — send chunks sequentially.
-            // Note: in a production implementation you should wait for each
-            // onCharacteristicWrite callback before sending the next chunk.
             Log.w(tag, "Fragmenting ${data.size} bytes into ${maxPayload}-byte chunks")
             var offset = 0
             var success = true
@@ -503,19 +422,16 @@ class BluetoothManager(private val appContext: Context) {
         }
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun writeCharacteristic(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         data: ByteArray
     ): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val result = gatt.writeCharacteristic(
-                characteristic,
-                data,
+            gatt.writeCharacteristic(
+                characteristic, data,
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            )
-            result == BluetoothGatt.GATT_SUCCESS
+            ) == android.bluetooth.BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             characteristic.value = data
@@ -525,50 +441,47 @@ class BluetoothManager(private val appContext: Context) {
     }
 
     // -------------------------------------------------------------------------
-    // Disconnect handling — single entry point for all disconnect sources
+    // Disconnect / reconnect
     // -------------------------------------------------------------------------
 
     /**
-     * Called from both the GATT callback and [BluetoothService.BondStateReceiver]
-     * whenever the connection is lost, regardless of which layer detected it first.
-     *
-     * Guards against double-execution: if [bluetoothGatt] is already null the
-     * device was already cleaned up by the other source, so only
-     * [scheduleReconnect] is called (idempotent — cancels any existing job first).
+     * Single entry point for all disconnect sources (GATT callback and
+     * ACTION_ACL_DISCONNECTED broadcast). Idempotent — if the handle was
+     * already closed by the other source the map lookup is a no-op.
      */
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun onAclDisconnected(
-        device: BluetoothDevice? = BluetoothManagerRepository.locatorDevice.value,
+        device: BluetoothDevice? = BluetoothManagerRepository.receiverDevice.value,
         source: String = "ACL broadcast"
     ) {
-        Log.w(tag, "Disconnect from $source — device: ${device?.address}")
-
-        // Close GATT if still open. If the GATT callback fired first it will
-        // already be null here, which is fine.
-        if (bluetoothGatt != null) {
-            bluetoothGatt?.close()
+        Log.w(tag, "Disconnect [$source] — device: ${device?.address}")
+        device?.address?.let { address ->
+            activeGattHandles[address]?.let { gatt ->
+                gatt.close()
+                activeGattHandles.remove(address)
+            }
+        }
+        if (bluetoothGatt?.device?.address == device?.address) {
             bluetoothGatt = null
             rxCharacteristic = null
         }
-
         emit(BluetoothConnectionState.Disconnected)
-
         val target = device ?: run {
-            Log.w(tag, "No known device — cannot reconnect, returning to scan")
+            Log.w(tag, "No device to reconnect to — returning to scan")
             emit(BluetoothConnectionState.Enabled)
+            return
+        }
+        // If locatorDevice was explicitly cleared (e.g. user pressed "Scan for devices"),
+        // do not attempt to reconnect — a fresh scan is already in progress.
+        if (BluetoothManagerRepository.receiverDevice.value == null) {
+            Log.d(tag, "locatorDevice is null — skipping reconnect, scan in progress")
             return
         }
         scheduleReconnect(target)
     }
 
-    // -------------------------------------------------------------------------
-    // Reconnection — exponential backoff
-    // -------------------------------------------------------------------------
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun scheduleReconnect(device: BluetoothDevice) {
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            Log.w(tag, "Max reconnect attempts reached — falling back to scan")
+            Log.w(tag, "Max reconnect attempts — falling back to scan")
             reconnectAttempts = 0
             emit(BluetoothConnectionState.Enabled)
             return
@@ -591,24 +504,18 @@ class BluetoothManager(private val appContext: Context) {
     }
 
     // -------------------------------------------------------------------------
-    // State-machine dispatcher (called from RocketApp LaunchedEffect)
+    // State-machine dispatcher
     // -------------------------------------------------------------------------
 
-    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT])
     fun handleConnectionState(state: BluetoothConnectionState) {
         when (state) {
             BluetoothConnectionState.Starting ->
                 enableBluetooth()
-
             BluetoothConnectionState.Enabled,
             BluetoothConnectionState.NoDevicesAvailable -> {
-                val knownDevice = BluetoothManagerRepository.locatorDevice.value
+                val knownDevice = BluetoothManagerRepository.receiverDevice.value
                 if (knownDevice == null) startScan() else connectGatt(knownDevice)
             }
-
-            // DevicesFound → UI shows picker → calls selectDevice() → connectGatt()
-            // Connected   → MTU + service discovery driven by gattCallback
-            // Ready       → normal operating state, data flowing
             else -> { }
         }
     }
@@ -620,7 +527,7 @@ class BluetoothManager(private val appContext: Context) {
     fun unpairDevice() {
         stopScan()
         disconnectGatt()
-        BluetoothManagerRepository.locatorDevice.value?.let { device ->
+        BluetoothManagerRepository.receiverDevice.value?.let { device ->
             try {
                 device.javaClass.getMethod("removeBond").invoke(device)
                 Log.d(tag, "Bond removed for ${device.address}")
@@ -628,7 +535,7 @@ class BluetoothManager(private val appContext: Context) {
                 Log.e(tag, "removeBond failed", e)
             }
         }
-        BluetoothManagerRepository.updateLocatorDevice(null)
+        BluetoothManagerRepository.updateReceiverDevice(null)
         BluetoothManagerRepository.updateScannedDevices(emptyList())
         emit(BluetoothConnectionState.Idle)
     }
@@ -637,7 +544,6 @@ class BluetoothManager(private val appContext: Context) {
     // Cleanup
     // -------------------------------------------------------------------------
 
-    @SuppressWarnings("MissingPermission")
     fun cleanup() {
         stopScan()
         disconnectGatt()
@@ -651,7 +557,6 @@ class BluetoothManager(private val appContext: Context) {
     private fun emit(state: BluetoothConnectionState) =
         BluetoothManagerRepository.updateBluetoothConnectionState(state)
 
-    @SuppressWarnings("MissingPermission")
     private fun preflightScanChecks(): Boolean {
         if (bleScanner == null) {
             Log.e(tag, "BLE scanner unavailable"); emit(BluetoothConnectionState.PairingFailed); return false
