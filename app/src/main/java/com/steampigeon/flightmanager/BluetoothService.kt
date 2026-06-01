@@ -21,6 +21,9 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
+import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
+import com.steampigeon.flightmanager.data.FlightDataRepository
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.MsgType
@@ -118,7 +121,6 @@ class BluetoothService : Service() {
             serviceStarted = true
             registerReceiver()
 
-            // Kick off the state machine — Idle → Starting is the entry point.
             if (BluetoothManagerRepository.bluetoothConnectionState.value
                 == BluetoothConnectionState.Idle
             ) {
@@ -127,8 +129,6 @@ class BluetoothService : Service() {
                 )
             }
 
-            // Observe Ready state to handle armed state messaging now that
-            // the GATT channel is fully open (notifications enabled).
             serviceScope.launch {
                 BluetoothManagerRepository.bluetoothConnectionState.collect { state ->
                     if (state == BluetoothConnectionState.Ready) {
@@ -137,7 +137,7 @@ class BluetoothService : Service() {
                         )
                     }
                     if (state == BluetoothConnectionState.Disconnected) {
-                        accumulator = ByteArray(0) // discard any partial packet bytes
+                        accumulator = ByteArray(0)
                     }
                 }
             }
@@ -154,11 +154,7 @@ class BluetoothService : Service() {
     }
 
     // -------------------------------------------------------------------------
-    // Inbound data — replaces startReading() / RFCOMM stream loop
-    //
-    // Called from btManager.onDataReceived on a GATT callback thread.
-    // Appends bytes to the accumulator and extracts complete packets,
-    // identical to the previous stream-based approach.
+    // Inbound data
     // -------------------------------------------------------------------------
 
     private fun processInboundBytes(bytes: ByteArray) {
@@ -168,7 +164,6 @@ class BluetoothService : Service() {
         for (packet in packets) {
             _packets.tryEmit(packet)
         }
-        // Armed state messaging — same logic as before
         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendRequested)
             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.NotAcknowledged)
@@ -176,7 +171,7 @@ class BluetoothService : Service() {
     }
 
     // -------------------------------------------------------------------------
-    // Packet parsing (unchanged from RFCOMM version)
+    // Packet framing
     // -------------------------------------------------------------------------
 
     private fun extractPackets(accumulator: ByteArray): Pair<List<ByteArray>, ByteArray> {
@@ -201,6 +196,8 @@ class BluetoothService : Service() {
     private fun computeExpectedPacketLength(bytes: ByteArray): Int {
         if (bytes.size < Protocol.HEADER_SIZE) return Int.MAX_VALUE
         val msgType = MsgType.fromUByte(bytes[1].toUByte())
+
+        // Side-effect: track armed state from message type (unchanged from original)
         when (msgType) {
             MsgType.PreLaunchData -> {
                 if (BluetoothManagerRepository.armedState.value) {
@@ -216,20 +213,27 @@ class BluetoothService : Service() {
             }
             else -> {}
         }
+
+        // FlightData and FlightDataParity are variable-length up to MAX_PACKET_SIZE.
+        // We accept anything up to the protocol maximum and let the CRC gate validity.
         val payloadSize = when (msgType) {
-            MsgType.PreLaunchData  -> Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE
-            MsgType.TelemetryData  -> Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE
-            MsgType.DeploymentTest -> Protocol.DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE
-            else                   -> 0
+            MsgType.PreLaunchData    -> Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE
+            MsgType.TelemetryData    -> Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE
+            MsgType.DeploymentTest   -> Protocol.DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE
+            MsgType.FlightMetadata   -> FLIGHT_METADATA_PAYLOAD_SIZE
+            MsgType.FlightData,
+            MsgType.FlightDataParity -> {
+                // Variable length: use the buffer's actual content up to MAX_PACKET_SIZE.
+                // The CRC check in extractPackets confirms correctness.
+                return minOf(bytes.size, Protocol.MAX_PACKET_SIZE)
+            }
+            else -> return Int.MAX_VALUE  // unknown type — skip
         }
         return Protocol.HEADER_SIZE + payloadSize
     }
 
     // -------------------------------------------------------------------------
     // Outbound messages
-    //
-    // sendMessage() now routes through btManager.sendData() instead of writing
-    // to a socket OutputStream. Everything else is identical.
     // -------------------------------------------------------------------------
 
     private fun changeLocatorArmedState(armedState: Boolean) {
@@ -262,10 +266,38 @@ class BluetoothService : Service() {
 
     fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean =
         sendMessage(MsgType.ReceiverCfgChgRequest, byteArrayOf(receiverConfig.channel.toByte()))
+
     fun requestFlightProfileMetadata(): Boolean =
         sendMessage(MsgType.FlightMetadataRequest, null)
-    fun requestFlightProfileData(archivePosition: Int, packet: Byte): Boolean =
-        sendMessage(MsgType.FlightDataRequest, byteArrayOf(archivePosition.toByte(), packet))
+
+    /**
+     * Request flight data for one archive record.
+     * The C++ FlightDataRequest struct carries a single `record` byte — the
+     * old `packet` byte is gone now that the locator manages chunking internally.
+     */
+    fun requestFlightProfileData(archivePosition: Int): Boolean {
+        FlightDataRepository.beginTransfer()
+        return sendMessage(MsgType.FlightDataRequest, byteArrayOf(archivePosition.toByte()))
+    }
+
+    /**
+     * Send a FlightDataAck packet built by [FlightDataRepository.buildAck].
+     * Recomputes the CRC before transmitting.
+     */
+    fun sendFlightDataAck(ackFrame: ByteArray): Boolean {
+        if (ackFrame.size != FLIGHT_DATA_ACK_SIZE) {
+            Log.w(TAG, "sendFlightDataAck: unexpected size ${ackFrame.size}")
+            return false
+        }
+        // Recompute CRC over the frame with the crc field zeroed (already 0
+        // from buildAck), then write it back into bytes [4..5].
+        val crc = computeMessageCrc(ackFrame)
+        val frame = ackFrame.copyOf()
+        frame[4] = (crc and 0xFF).toByte()
+        frame[5] = ((crc shr 8) and 0xFF).toByte()
+        return btManager.sendData(frame)
+    }
+
     fun deploymentTest(deploymentChannel: Int): Boolean =
         sendMessage(MsgType.DeploymentTestRequest, byteArrayOf(deploymentChannel.toByte()))
 
@@ -281,9 +313,7 @@ class BluetoothService : Service() {
     }
 
     // -------------------------------------------------------------------------
-    // BroadcastReceiver — adapter state changes only.
-    // Bond state is no longer relevant on the GATT path (GATT handles its own
-    // pairing/encryption negotiation internally during connectGatt).
+    // BroadcastReceiver
     // -------------------------------------------------------------------------
 
     private fun registerReceiver() {
@@ -305,26 +335,13 @@ class BluetoothService : Service() {
             when (intent.action) {
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
-                        BluetoothAdapter.STATE_OFF -> {
-                            Log.d(TAG, "Adapter turned off")
-                            BluetoothManagerRepository.updateBluetoothConnectionState(
-                                BluetoothConnectionState.NotEnabled
-                            )
-                        }
-                        BluetoothAdapter.STATE_ON -> {
-                            Log.d(TAG, "Adapter turned on → Enabled")
-                            BluetoothManagerRepository.updateBluetoothConnectionState(
-                                BluetoothConnectionState.Enabled
-                            )
-                        }
+                        BluetoothAdapter.STATE_OFF ->
+                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.NotEnabled)
+                        BluetoothAdapter.STATE_ON ->
+                            BluetoothManagerRepository.updateBluetoothConnectionState(BluetoothConnectionState.Enabled)
                     }
                 }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    // Delegate entirely to BluetoothManager — it closes GATT,
-                    // emits Disconnected state, and schedules reconnection.
-                    // This fires whether or not the GATT callback already handled
-                    // the disconnect; onAclDisconnected() is idempotent.
-                    Log.d(TAG, "ACL disconnected broadcast received")
                     btManager.onAclDisconnected(
                         device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE),
                         source = "ACL broadcast"

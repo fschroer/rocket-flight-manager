@@ -22,8 +22,10 @@ import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentTestParsed
+import com.steampigeon.flightmanager.data.FlightDataRepository
 import com.steampigeon.flightmanager.data.FlightEventData
 import com.steampigeon.flightmanager.data.FlightProfileMetadata
+import com.steampigeon.flightmanager.data.FlightSample
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,14 +55,14 @@ import kotlin.math.sin
 import kotlin.math.abs
 
 private const val TAG = "RocketViewModel"
-private var packetResendCount = 0
-private var packetsRemaining = true
-private var sampleIndex = 0
 
 sealed class ParsedMessage {
-    data class Prelaunch(val msg: PrelaunchParsed) : ParsedMessage()
-    data class Telemetry(val msg: TelemetryParsed) : ParsedMessage()
+    data class Prelaunch(val msg: PrelaunchParsed)         : ParsedMessage()
+    data class Telemetry(val msg: TelemetryParsed)         : ParsedMessage()
     data class DeploymentTest(val msg: DeploymentTestParsed) : ParsedMessage()
+    data class FlightMetadata(val frame: ByteArray)         : ParsedMessage()
+    data class FlightData(val frame: ByteArray)             : ParsedMessage()
+    data class FlightDataParity(val frame: ByteArray)       : ParsedMessage()
 }
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -256,7 +258,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun clearFlightProfileData() {
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
-        sampleIndex = 0
+        FlightDataRepository.beginTransfer()
     }
 
     private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
@@ -318,7 +320,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                         },
                                     gyro = parsed.msg.gyro,
                                     locatorBatteryLevel = ((parsed.msg.locatorBatteryMv - 3700) / 400.0f * 8).toInt(),
-                                    receiverBatteryLevel = ((parsed.msg.receiverBatteryMv) / 12.5).toInt(),
+                                    receiverBatteryLevel = ((parsed.msg.receiverBatteryMv - 3700) / 400.0f * 8).toInt(),
                                 )
                             }
                             _remoteLocatorConfig.update { currentState ->
@@ -383,6 +385,53 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             val deploymentTestCountdown = parsed.msg.count
                             if (_deploymentTestActive.value)
                                 _deploymentTestCountdown.value = deploymentTestCountdown
+                        }
+                        is ParsedMessage.FlightMetadata -> {
+                            val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
+                            if (ok) {
+                                _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
+                                // Expose parsed metadata to the UI via the existing _flightProfileMetadata flow.
+                                // FlightDataRepository.metadata maps directly to FlightProfileMetadata used by the UI.
+                                _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
+                                    FlightProfileMetadata(
+                                        position    = record.position,
+                                        date        = null,         // timestamp-to-date conversion happens in the UI layer
+                                        apogee      = record.apogeeM,
+                                        timeToDrogue = record.flightTimeMs / 1000f,
+                                    )
+                                }
+                            }
+                        }
+
+                        is ParsedMessage.FlightData -> {
+                            val ackFrame = FlightDataRepository.onFlightData(parsed.frame)
+                            if (ackFrame != null) {
+                                service.sendFlightDataAck(ackFrame)
+                                val progress = FlightDataRepository.progress.value
+                                _flightProfileDataMessageState.value =
+                                    if (progress.complete) LocatorMessageState.AckUpdated else LocatorMessageState.Sent
+
+                                // Publish samples to the existing AGL / accelerometer flows as they arrive.
+                                // This gives the UI a live partial view during a long transfer.
+                                if (progress.complete || FlightDataRepository.samples.value.isNotEmpty()) {
+                                    val samples = FlightDataRepository.samples.value
+                                    _flightProfileAglData.value    = samples.map { (it.altitudeM * 10).toInt().toUShort() }
+                                    _flightProfileAccelerometerData.value = samples.map { it.accel }
+                                }
+                            }
+                        }
+
+                        is ParsedMessage.FlightDataParity -> {
+                            val ackFrame = FlightDataRepository.onFlightDataParity(parsed.frame)
+                            if (ackFrame != null) {
+                                service.sendFlightDataAck(ackFrame)
+                                // Publish any samples recovered via parity
+                                val samples = FlightDataRepository.samples.value
+                                if (samples.isNotEmpty()) {
+                                    _flightProfileAglData.value           = samples.map { (it.altitudeM * 10).toInt().toUShort() }
+                                    _flightProfileAccelerometerData.value = samples.map { it.accel }
+                                }
+                            }
                         }
                         else -> {}
                     }
@@ -702,44 +751,27 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun getFlightProfileData(service: BluetoothService) {
-        packetResendCount = 0
         _flightProfileDataDisplayState.value = true
-        packetsRemaining = true
         _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
-        viewModelScope.launch {
-            var packet : Byte = 0xff.toByte()
-            while (packetsRemaining && packetResendCount < 3 && _flightProfileDataMessageState.value != LocatorMessageState.SendFailure) {
-                Log.d(TAG, "Sending flight profile request, packet $packet")
-                if (service.requestFlightProfileData(_flightProfileArchivePosition.value, packet)) {
-                    updateFlightProfileDataMessageState(LocatorMessageState.Sent)
-                    for (i in 1..10) {
-                        delay(100)
-                        if (_flightProfileDataMessageState.value == LocatorMessageState.AckUpdated) {
-                            packetResendCount = 0
-                            packet++
-                            break
-                        }
-                    }
-                    if (_flightProfileDataMessageState.value != LocatorMessageState.AckUpdated)
-                        packetResendCount++
-                }
-                else
-                    updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
-                Log.d(TAG, "Sent flight profile message. Packets remaining: $packetsRemaining, packetResendCount: $packetResendCount, messageState: ${_flightProfileDataMessageState.value}")
-            }
+        Log.d(TAG, "Requesting flight data for archive position ${_flightProfileArchivePosition.value}")
+        if (service.requestFlightProfileData(_flightProfileArchivePosition.value)) {
+            updateFlightProfileDataMessageState(LocatorMessageState.Sent)
+        } else {
+            updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
         }
     }
 
     private fun parseIncoming(frame: ByteArray): ParsedMessage? {
         if (frame.size < 6) return null
-
-       val msgHeader = parseHeader(frame)
-
-        return when (msgHeader?.msgType) {
-            MsgType.PreLaunchData -> ParsedMessage.Prelaunch(parsePrelaunch(frame))
-            MsgType.TelemetryData -> ParsedMessage.Telemetry(parseTelemetry(frame))
-            MsgType.DeploymentTest -> ParsedMessage.DeploymentTest(parseDeploymentTest(frame))
-            else -> null
+        val msgHeader = parseHeader(frame) ?: return null
+        return when (msgHeader.msgType) {
+            MsgType.PreLaunchData    -> ParsedMessage.Prelaunch(parsePrelaunch(frame))
+            MsgType.TelemetryData    -> ParsedMessage.Telemetry(parseTelemetry(frame))
+            MsgType.DeploymentTest   -> ParsedMessage.DeploymentTest(parseDeploymentTest(frame))
+            MsgType.FlightMetadata   -> ParsedMessage.FlightMetadata(frame)
+            MsgType.FlightData       -> ParsedMessage.FlightData(frame)
+            MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
+            else                     -> null
         }
     }
 

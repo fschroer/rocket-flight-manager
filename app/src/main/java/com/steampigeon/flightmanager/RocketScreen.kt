@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-//import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -131,7 +130,6 @@ fun RocketAppBar(
 // Root composable
 // ---------------------------------------------------------------------------
 
-//@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterialApi::class)
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun RocketApp(
@@ -249,10 +247,15 @@ fun RocketApp(
     val scannedDevices by BluetoothManagerRepository.scannedDevices.collectAsState()
     var showDevicePicker by remember { mutableStateOf(false) }
 
-    // Mirror DevicesFound state into the picker visibility flag so the dialog
-    // is driven by state, not by a one-shot event (survives recomposition).
+    // Mirror DevicesFound state into the picker visibility flag.
+    // Only ever set to true here — onDeviceSelected and onDismiss are the
+    // sole places that set it to false. Setting it false on any other state
+    // change caused the dialog to disappear mid-interaction when the old
+    // device reconnect cycled through Disconnected → Connected → Ready.
     LaunchedEffect(bluetoothConnectionState) {
-        showDevicePicker = (bluetoothConnectionState == BluetoothConnectionState.DevicesFound)
+        if (bluetoothConnectionState == BluetoothConnectionState.DevicesFound) {
+            showDevicePicker = true
+        }
     }
 
     if (showDevicePicker && scannedDevices.isNotEmpty()) {
