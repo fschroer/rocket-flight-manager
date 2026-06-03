@@ -47,7 +47,8 @@ private const val ACK_BITMAP_BYTES = MAX_PACKETS / 8   // = 32
 const val FLIGHT_DATA_ACK_SIZE     = Protocol.HEADER_SIZE + 2 + 2 + ACK_BITMAP_BYTES  // = 42
 
 // Variable-length FlightData / FlightDataParity packets: maximum possible size.
-const val FLIGHT_DATA_MAX_SIZE     = Protocol.MAX_PACKET_SIZE   // 255
+// sizeof(FlightDataPacket) == 255 (kMaxPayloadBytes on the C++ side).
+const val FLIGHT_DATA_MAX_SIZE     = Protocol.MAX_PACKET_SIZE   // 256
 
 // ============================================================================
 //  Data classes
@@ -118,6 +119,11 @@ object FlightDataRepository {
     private var packetCount:  Int  = 0
     private var totalSamples: Long = 0L
 
+    // When true, all incoming packets are refused. Set by cancelTransfer() when
+    // the user navigates away mid-transfer; cleared by beginTransfer() so that
+    // a fresh requestFlightProfileData() call re-enables reception.
+    private var draining = false
+
     // received[i] = true once packet i has been decoded without error
     private val received = BooleanArray(MAX_PACKETS)
 
@@ -141,6 +147,7 @@ object FlightDataRepository {
 
     /** Reset all transfer state for a new record request. */
     fun beginTransfer() {
+        draining     = false
         transferId   = 0
         packetCount  = 0
         totalSamples = 0L
@@ -152,6 +159,19 @@ object FlightDataRepository {
         _samples.value = emptyList()
         _progress.value = FlightTransferProgress()
         Log.d(TAG, "Transfer reset")
+    }
+
+    /**
+     * Cancel the current transfer and refuse any further incoming packets for it.
+     * Use this when the user navigates away mid-transfer to prevent late-arriving
+     * LoRa packets from re-populating the repository after it has been cleared.
+     * The drain flag is cleared automatically by the next beginTransfer() call,
+     * which is triggered by requestFlightProfileData() in BluetoothService.
+     */
+    fun cancelTransfer() {
+        beginTransfer()
+        draining = true
+        Log.d(TAG, "Transfer cancelled — draining stale packets")
     }
 
     /** Clear metadata (call before requesting new metadata). */
@@ -343,6 +363,7 @@ object FlightDataRepository {
         rxTotalSamples: Long,
     ): Boolean {
         if (rxTransferId == 0) return false  // 0 is reserved
+        if (draining) return false           // user cancelled — refuse stale packets
 
         if (transferId == 0 || rxTransferId != transferId) {
             // New or changed transfer — reset and adopt the new ID

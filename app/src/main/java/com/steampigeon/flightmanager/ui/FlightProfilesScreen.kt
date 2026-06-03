@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -134,17 +135,29 @@ fun FlightProfilesScreen(
     // calculation works from a validated list.
     val saneSamples = remember(samples) { samples.filter { it.isSane() } }
 
-    LaunchedEffect(Unit) {
-        if (flightProfileMetadataMessageState == LocatorMessageState.Idle) {
-            viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
-            viewModel.clearFlightProfileMetadata()
-            viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.SendRequested)
-            if (service?.requestFlightProfileMetadata() == true)
-                viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Sent)
-            else
-                viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.SendFailure)
-            viewModel.updateFlightMetadataState()
+    // Reset the data-display state when leaving so re-entry starts at the list,
+    // not a stale chart.  Metadata state is NOT reset here — the LaunchedEffect
+    // below sends a fresh request unconditionally on every entry, so there is no
+    // Idle-gate race to worry about.
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.updateFlightProfileDataDisplayState(false)
+            // Tell the locator to return to Disarmed so it resumes PreLaunchData.
+            service?.exitFlightProfileMode()
         }
+    }
+
+    // Request metadata on every entry.  LaunchedEffect(Unit) is already bounded
+    // to one execution per composition lifecycle, so this cannot loop.
+    LaunchedEffect(Unit) {
+        viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+        viewModel.clearFlightProfileMetadata()
+        viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.SendRequested)
+        if (service?.requestFlightProfileMetadata() == true)
+            viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Sent)
+        else
+            viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.SendFailure)
+        viewModel.updateFlightMetadataState()
     }
 
     BackHandler(enabled = true) {
@@ -169,11 +182,9 @@ fun FlightProfilesScreen(
                 verticalArrangement = Arrangement.SpaceAround
             ) {
                 when {
-                    flightProfileMetadataMessageState != LocatorMessageState.AckUpdated ->
-                        Text("Fetching flight data from locator ${locatorConfig.deviceName}")
-                    flightProfileMetadata.isEmpty() ->
-                        Text("No flights recorded on locator ${locatorConfig.deviceName}")
-                    else ->
+                    flightProfileMetadata.isNotEmpty() ->
+                        // Always show the list while metadata is populated, regardless of
+                        // message state, so a background state change never hides the list.
                         flightProfileMetadata.forEach { item ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -211,6 +222,10 @@ fun FlightProfilesScreen(
                             }
                             Divider(modifier = modifier.weight(1f))
                         }
+                    flightProfileMetadataMessageState == LocatorMessageState.AckUpdated ->
+                        Text("No flights recorded on locator ${locatorConfig.deviceName}")
+                    else ->
+                        Text("Fetching flight data from locator ${locatorConfig.deviceName}")
                 }
                 Spacer(modifier = modifier.weight(1f))
             }

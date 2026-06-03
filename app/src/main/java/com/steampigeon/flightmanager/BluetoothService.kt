@@ -271,6 +271,13 @@ class BluetoothService : Service() {
         sendMessage(MsgType.FlightMetadataRequest, null)
 
     /**
+     * Signal to the locator that the user has exited the flight profile screen.
+     * The locator will return to Disarmed state and resume sending PreLaunchData.
+     */
+    fun exitFlightProfileMode(): Boolean =
+        sendMessage(MsgType.DisarmRequest, null)
+
+    /**
      * Request flight data for one archive record.
      * The C++ FlightDataRequest struct carries a single `record` byte — the
      * old `packet` byte is gone now that the locator manages chunking internally.

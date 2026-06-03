@@ -258,7 +258,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun clearFlightProfileData() {
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
-        FlightDataRepository.beginTransfer()
+        FlightDataRepository.cancelTransfer()
     }
 
     private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
@@ -395,7 +395,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
                                     FlightProfileMetadata(
                                         position    = record.position,
-                                        date        = null,         // timestamp-to-date conversion happens in the UI layer
+                                        date        = if (record.timestampS > 0L)
+                                                          java.time.Instant.ofEpochSecond(record.timestampS)
+                                                              .atZone(java.time.ZoneId.systemDefault())
+                                                      else null,
                                         apogee      = record.apogeeM,
                                         timeToDrogue = record.flightTimeMs / 1000f,
                                     )
@@ -747,6 +750,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 _flightProfileMetadataMessageState.value == LocatorMessageState.Sent) {
                 _flightProfileMetadataMessageState.value = LocatorMessageState.NotAcknowledged
             }
+            // State is NOT reset to Idle here. FlightProfilesScreen resets it via
+            // DisposableEffect.onDispose so the list stays visible while the user is
+            // on the screen, and a fresh fetch is triggered on the next entry.
         }
     }
 
