@@ -10,10 +10,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +40,17 @@ fun DeploymentTestScreen(
 ) {
     val deploymentTestCountdown = viewModel.deploymentTestCountdown.collectAsState().value
     var deploymentTestOption by remember {mutableStateOf(DeploymentTestOption.None)}
+
+    // Cancel any active deployment test when the user navigates away.
+    // rememberUpdatedState ensures onDispose sees the latest service reference.
+    val currentService by rememberUpdatedState(service)
+    DisposableEffect(Unit) {
+        onDispose {
+            currentService?.deploymentTest(0)
+            viewModel.updateDeploymentTestActive(false)
+            viewModel.updateDeploymentTestCountdown(0)
+        }
+    }
 
     Column (
         modifier = modifier.fillMaxHeight().padding(16.dp)

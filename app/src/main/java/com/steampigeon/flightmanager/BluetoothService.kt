@@ -109,6 +109,7 @@ class BluetoothService : Service() {
         // Wire GATT data notifications into the packet accumulator.
         // onDataReceived is called on a GATT callback thread (not main thread).
         btManager.onDataReceived = { bytes ->
+            btManager.recordDataReceived()
             processInboundBytes(bytes)
         }
 
@@ -121,14 +122,27 @@ class BluetoothService : Service() {
             serviceStarted = true
             registerReceiver()
 
-            if (BluetoothManagerRepository.bluetoothConnectionState.value
-                == BluetoothConnectionState.Idle
-            ) {
-                BluetoothManagerRepository.updateBluetoothConnectionState(
-                    BluetoothConnectionState.Starting
-                )
+            // Reset to Starting whenever the singleton repository holds a stale
+            // state from a previous service instance.  Idle is the normal first-run
+            // case; Disconnected / Connected / Ready can be left behind when the
+            // service was destroyed between sessions (the repository is a Kotlin
+            // object that outlives the service).
+            when (BluetoothManagerRepository.bluetoothConnectionState.value) {
+                BluetoothConnectionState.Idle,
+                BluetoothConnectionState.Disconnected,
+                BluetoothConnectionState.Connected,
+                BluetoothConnectionState.Ready ->
+                    BluetoothManagerRepository.updateBluetoothConnectionState(
+                        BluetoothConnectionState.Starting
+                    )
+                else -> { }
             }
 
+            // Drive the connection state machine from the service scope.
+            // The service has android:foregroundServiceType="connectedDevice"
+            // which makes it Doze-exempt, so this collector always runs even
+            // when the device is idle and the UI's LaunchedEffect coroutines
+            // are throttled by Doze.
             serviceScope.launch {
                 BluetoothManagerRepository.bluetoothConnectionState.collect { state ->
                     if (state == BluetoothConnectionState.Ready) {
@@ -139,6 +153,7 @@ class BluetoothService : Service() {
                     if (state == BluetoothConnectionState.Disconnected) {
                         accumulator = ByteArray(0)
                     }
+                    btManager.handleConnectionState(state)
                 }
             }
         }
@@ -221,6 +236,8 @@ class BluetoothService : Service() {
             MsgType.TelemetryData    -> Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE
             MsgType.DeploymentTest   -> Protocol.DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE
             MsgType.FlightMetadata   -> FLIGHT_METADATA_PAYLOAD_SIZE
+            MsgType.ReceiverInfo     -> Protocol.RECEIVER_INFO_PAYLOAD_SIZE
+            MsgType.VersionInfo      -> Protocol.VERSION_INFO_PAYLOAD_SIZE
             MsgType.FlightData,
             MsgType.FlightDataParity -> {
                 // Variable length: use the buffer's actual content up to MAX_PACKET_SIZE.
@@ -265,7 +282,13 @@ class BluetoothService : Service() {
     }
 
     fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean =
-        sendMessage(MsgType.ReceiverCfgChgRequest, byteArrayOf(receiverConfig.channel.toByte()))
+        sendMessage(
+            MsgType.ReceiverCfgChgRequest,
+            concatBytes(
+                byteArrayOf(receiverConfig.channel.toByte()),
+                fillFixed(Protocol.DEVICE_NAME_LENGTH, receiverConfig.deviceName)
+            )
+        )
 
     fun requestFlightProfileMetadata(): Boolean =
         sendMessage(MsgType.FlightMetadataRequest, null)
@@ -307,6 +330,17 @@ class BluetoothService : Service() {
 
     fun deploymentTest(deploymentChannel: Int): Boolean =
         sendMessage(MsgType.DeploymentTestRequest, byteArrayOf(deploymentChannel.toByte()))
+
+    /** Ask the receiver for its current LoRa channel and device name.
+     *  Used when no locator PreLaunchData has been received recently. */
+    fun requestReceiverInfo(): Boolean =
+        sendMessage(MsgType.ReceiverInfoRequest, null)
+
+    /** Ask the locator (via the receiver) for firmware version strings.
+     *  The receiver forwards the request to the locator, which responds with its
+     *  version; the receiver appends its own version before relaying to the app. */
+    fun requestVersionInfo(): Boolean =
+        sendMessage(MsgType.VersionRequest, null)
 
     @SuppressLint("MissingPermission")
     private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean =
@@ -415,7 +449,13 @@ class BluetoothService : Service() {
     }
 
     override fun onBind(intent: Intent): IBinder = binder
-    override fun onUnbind(intent: Intent): Boolean { stopSelf(); return true }
+
+    // Return false so Android does not keep the service in a "rebindable" state.
+    // Returning true would conflict with the stopSelf() call: the system sees
+    // "wants rebinding" and defers the stop, leaving the GATT handle open on
+    // every closure after the first.  With false, stopSelf() + no remaining
+    // bindings → onDestroy() fires consistently and cleanup() releases the GATT.
+    override fun onUnbind(intent: Intent): Boolean { stopSelf(); return false }
 
     private fun createNotificationChannel() {
         val mChannel = NotificationChannel(

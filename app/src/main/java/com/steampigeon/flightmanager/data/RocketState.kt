@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.time.ZonedDateTime
+import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.sqrt
 
 object Protocol {
     const val HEADER_SIZE =
@@ -15,9 +18,11 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 88 // LoRa message size (83) + channel (1) + receiver battery level (2) = 86
-    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 62 // LoRa message size (68)
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 110 // PreLaunchData payload (85) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 110
+    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 64 // vel_ned (12) + q_bn (16) replaces accel (12) + gyro (12) + velocity (4); + rssi (2)
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
+    const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
+    const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
     const val FLIGHT_PROFILE_DATA_PAYLOAD_MESSAGE_SIZE = 241
     const val DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE = 1
@@ -33,7 +38,7 @@ data class RocketState(
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val satellites: UByte = 0.toUByte(),
-    val hdop: Float = 0f,
+    val hacc: Float = 0f,
     val baroStatus: SensorHealth = SensorHealth.Ok,
     val imuStatus: SensorHealth = SensorHealth.Ok,
     val gpsStatus: SensorHealth = SensorHealth.Ok,
@@ -56,6 +61,9 @@ data class RocketState(
     val locatorBatteryLevel: Int = 0,
     val receiverBatteryLevel: Int = 0,
     val flightState: FlightStates = FlightStates.WaitingForLaunch,
+    val rssi: Int = -120,
+    val velNed: Vec3f = Vec3f(0f, 0f, 0f),
+    val attitude: Quaternionf = Quaternionf.IDENTITY,
 )
 
 data class LocatorConfig(
@@ -75,6 +83,7 @@ data class LocatorConfig(
 
 data class ReceiverConfig(
     val channel: Int = 0,
+    val deviceName: String = "",
 )
 
 data class FlightProfileMetadata(
@@ -175,6 +184,39 @@ data class Vec3f (
     val z: Float
 )
 
+data class Quaternionf(
+    val w: Float = 1f,
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val z: Float = 0f
+) {
+    // Rotate the body +x axis (rocket nose) into NED — first column of R(q)
+    fun noseNED(): Triple<Float, Float, Float> {
+        val n = 1f - 2f * (y * y + z * z)
+        val e = 2f * (x * y + w * z)
+        val d = 2f * (x * z - w * y)
+        return Triple(n, e, d)
+    }
+
+    // Angle from vertical in degrees (0 = straight up, 90 = horizontal)
+    fun inclinationDeg(): Float {
+        val (_, _, d) = noseNED()
+        return Math.toDegrees(acos((-d).coerceIn(-1f, 1f).toDouble())).toFloat()
+    }
+
+    // Compass bearing of the nose projected onto the horizontal plane (0–360°)
+    fun headingDeg(): Float {
+        val (n, e, _) = noseNED()
+        val h = Math.toDegrees(atan2(e.toDouble(), n.toDouble())).toFloat()
+        return if (h < 0f) h + 360f else h
+    }
+
+    // Total speed magnitude from NED velocity vector
+    companion object {
+        val IDENTITY = Quaternionf(1f, 0f, 0f, 0f)
+    }
+}
+
 enum class MsgType(val value: UByte) {
     LocatorCfgChgRequest(1u),   // Request to update locator configuration sent from the app via the receiver.
     ReceiverCfgChgRequest(2u),  // Request to update receiver configuration sent from the app via the receiver.
@@ -189,7 +231,11 @@ enum class MsgType(val value: UByte) {
     FlightDataParity(11u),      // Parity packet to allow the app to reconstruct profile data if one packet is lost.
     FlightDataAck(12u),         // Profile data acknowledgement sent from the app via the receiver.
     DeploymentTestRequest(13u), // Request from the app, via the receiver, for the locator to execute a deployment test.
-    DeploymentTest(14u);        // Deployment test countdown sent from the locator to the app via the receiver.
+    DeploymentTest(14u),        // Deployment test countdown sent from the locator to the app via the receiver.
+    ReceiverInfoRequest(15u),   // Request from the app to the receiver for its current channel and name.
+    ReceiverInfo(16u),          // Response from the receiver with its current LoRa channel and device name.
+    VersionRequest(17u),        // Request from the app, via the receiver, for both firmware versions.
+    VersionInfo(18u);           // Response: locator version forwarded through receiver, which appends its own version.
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }
@@ -259,31 +305,43 @@ data class PrelaunchParsed(
     val deviceName: String,       // char[device_name_length]
     val locatorBatteryMv: Int,    // uint16_t
     val receiverChannel: Int,     // uint8_t
-    val receiverBatteryMv: Int    // uint16_t
+    val receiverBatteryMv: Int,   // uint16_t
+    val receiverName: String,     // char[device_name_length]
+    val rssi: Int,                // int16_t
 )
 
 data class TelemetryParsed(
     val latitude: Double,
     val longitude: Double,
-    val satellites: Int,     // uint8_t
-    val hacc: Float,         // float
+    val satellites: Int,              // uint8_t
+    val hacc: Float,                  // float
     val imuStatus: SensorHealth,      // uint8_t enum
     val baroStatus: SensorHealth,     // uint8_t enum
     val gpsStatus: SensorHealth,      // uint8_t enum
-    val deploymentCh1Stats: Int,   // uint8_t
-    val deploymentCh2Stats: Int,   // uint8_t
-    val deploymentCh3Stats: Int,   // uint8_t
-    val deploymentCh4Stats: Int,   // uint8_t
-    val physicalDeploymentStats: Int,   // uint8_t
-    val agl: Float,          // float
-    val accel: Vec3f,   // Vec3f
-    val gyro: Vec3f,    // Vec3f
-    val velocity: Float,     // float
-    val flightState: FlightStates     // uint8_t enum
+    val deploymentCh1Stats: Int,      // uint8_t
+    val deploymentCh2Stats: Int,      // uint8_t
+    val deploymentCh3Stats: Int,      // uint8_t
+    val deploymentCh4Stats: Int,      // uint8_t
+    val physicalDeploymentStats: Int, // uint8_t
+    val agl: Float,                   // float
+    val velNed: Vec3f,                // Vec3f — fused NED velocity m/s
+    val attitude: Quaternionf,        // Quaternionf — body-to-NED quaternion
+    val flightState: FlightStates,    // uint8_t enum
+    val rssi: Int,                    // int16_t
 )
 
 data class DeploymentTestParsed(
     val count: Int
+)
+
+data class ReceiverInfoParsed(
+    val channel: Int,     // uint8_t
+    val deviceName: String // char[device_name_length]
+)
+
+data class VersionInfoParsed(
+    val locatorVersion: String,  // uint8_t[64] null-terminated string
+    val receiverVersion: String  // uint8_t[64] null-terminated string
 )
 
 enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
@@ -299,7 +357,8 @@ enum class BluetoothConnectionState (val bluetoothConnectionState: UByte) {
     PairingFailed(9u),
     Connected(10u),
     Ready(11u),
-    Disconnected(12u);
+    Disconnected(12u),
+    LocationDisabled(13u);
 
     companion object {
         fun fromUByte(value: UByte) = entries.firstOrNull { it.bluetoothConnectionState == value } ?: throw IllegalArgumentException("Invalid type: $value")

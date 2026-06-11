@@ -20,6 +20,10 @@
     <string name="channel_description">Rocket locator communicator</string>
     <string name="decrement">Decrement</string>
     <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
+    <string name="deployment_channel_1">Deployment Channel 1</string>
+    <string name="deployment_channel_2">Deployment Channel 2</string>
+    <string name="deployment_channel_3">Deployment Channel 3</string>
+    <string name="deployment_channel_4">Deployment Channel 4</string>
     <string name="deployment_test">Deployment Test</string>
     <string name="device_name">Locator Name</string>
     <string name="drogue_backup_deploy_delay">Drogue Backup Deploy Delay (s)</string>
@@ -35,6 +39,7 @@
     <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>
     <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
     <string name="next">Next</string>
+    <string name="receiver_name">Receiver Name</string>
     <string name="receiver_settings">Receiver Settings</string>
     <string name="refresh">Refresh</string>
     <string name="return_to_main">Return</string>

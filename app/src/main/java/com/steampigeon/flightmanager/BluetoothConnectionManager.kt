@@ -92,6 +92,7 @@ class BluetoothManager(private val appContext: Context) {
         const val REQUESTED_MTU                   = 247
         private const val MAX_RECONNECT_ATTEMPTS  = 5
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
+        private const val DATA_TIMEOUT_MS         = 10_000L  // phantom-connection watchdog
     }
 
     // -------------------------------------------------------------------------
@@ -106,7 +107,12 @@ class BluetoothManager(private val appContext: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var scanTimeoutJob: Job? = null
     private var reconnectJob: Job? = null
+    private var connectionHealthJob: Job? = null
     private var reconnectAttempts = 0
+
+    // Timestamp of the last byte received from any GATT characteristic notification.
+    // Updated by [recordDataReceived]; read by the health watchdog.
+    private var lastDataTime: Long = 0L
 
     private val discoveredDevices = mutableMapOf<String, BluetoothDevice>()
 
@@ -140,11 +146,47 @@ class BluetoothManager(private val appContext: Context) {
     fun buildEnableBluetoothIntent(): Intent =
         Intent(android.bluetooth.BluetoothAdapter.ACTION_REQUEST_ENABLE)
 
+    /**
+     * Called by [BluetoothService] whenever bytes arrive from the GATT
+     * characteristic notification. Used by the health watchdog to distinguish
+     * a live connection from a phantom (OS-cached) one.
+     */
+    fun recordDataReceived() {
+        lastDataTime = System.currentTimeMillis()
+    }
+
+    /**
+     * Immediately reconnect to the known device (or fall back to a scan if
+     * no device is recorded). Called from the UI layer when the app is reopened
+     * while the connection state is stale (e.g. [BluetoothConnectionState.Disconnected]
+     * or [BluetoothConnectionState.Connected] with the activity having been
+     * destroyed). Cancels any pending reconnect backoff so the attempt is
+     * immediate rather than waiting for the next scheduled retry.
+     */
+    fun forceReconnect() {
+        cancelReconnect()
+        val knownDevice = BluetoothManagerRepository.receiverDevice.value
+        Log.d(tag, "forceReconnect() — device: ${knownDevice?.address}")
+        if (knownDevice != null) {
+            disconnectGatt()
+            connectGatt(knownDevice)
+        } else {
+            emit(BluetoothConnectionState.Enabled)
+        }
+    }
+
     // -------------------------------------------------------------------------
     // BLE scan
     // -------------------------------------------------------------------------
 
     fun startScan() {
+        // Guard against duplicate calls: if the timeout job is still active a scan
+        // is already running.  Letting a second bleScanner.startScan() through would
+        // cause SCAN_FAILED_ALREADY_STARTED → onScanFailed → spurious PairingFailed.
+        if (scanTimeoutJob?.isActive == true) {
+            Log.d(tag, "startScan: scan already in progress — ignoring duplicate call")
+            return
+        }
         if (!preflightScanChecks()) return
 
         discoveredDevices.clear()
@@ -187,7 +229,12 @@ class BluetoothManager(private val appContext: Context) {
         }
         override fun onScanFailed(errorCode: Int) {
             Log.e(tag, "Scan failed: ${scanErrorString(errorCode)}")
-            emit(BluetoothConnectionState.PairingFailed)
+            // SCAN_FAILED_ALREADY_STARTED means a scan is already running — not a
+            // real failure.  The in-progress scan will complete normally, so suppress
+            // the state change to avoid a spurious PairingFailed flash in the UI.
+            if (errorCode != ScanCallback.SCAN_FAILED_ALREADY_STARTED) {
+                emit(BluetoothConnectionState.PairingFailed)
+            }
         }
     }
 
@@ -330,6 +377,7 @@ class BluetoothManager(private val appContext: Context) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     Log.d(tag, "TX notifications enabled — GATT ready")
                     emit(BluetoothConnectionState.Ready)
+                    startHealthWatchdog()
                 } else {
                     Log.e(tag, "Failed to enable TX notifications: $status")
                 }
@@ -454,6 +502,9 @@ class BluetoothManager(private val appContext: Context) {
         source: String = "ACL broadcast"
     ) {
         Log.w(tag, "Disconnect [$source] — device: ${device?.address}")
+
+        // Clean up the GATT handle for the disconnecting device regardless of
+        // whether it is still the selected receiver.
         device?.address?.let { address ->
             activeGattHandles[address]?.let { gatt ->
                 gatt.close()
@@ -464,16 +515,29 @@ class BluetoothManager(private val appContext: Context) {
             bluetoothGatt = null
             rxCharacteristic = null
         }
+
+        // If the disconnecting device is no longer the selected receiver (the user
+        // switched to a new device while this one was being torn down), suppress
+        // the Disconnected state emission and skip reconnect entirely.  Emitting
+        // Disconnected here would clobber the new connection's Ready state, leaving
+        // the app stuck disconnected even though the new device is fully connected.
+        val selectedDevice = BluetoothManagerRepository.receiverDevice.value
+        if (device != null && selectedDevice != null &&
+            device.address != selectedDevice.address) {
+            Log.d(tag, "Disconnect of superseded device ${device.address} — suppressing state change")
+            return
+        }
+
+        connectionHealthJob?.cancel()
         emit(BluetoothConnectionState.Disconnected)
         val target = device ?: run {
             Log.w(tag, "No device to reconnect to — returning to scan")
             emit(BluetoothConnectionState.Enabled)
             return
         }
-        // If locatorDevice was explicitly cleared (e.g. user pressed "Scan for devices"),
-        // do not attempt to reconnect — a fresh scan is already in progress.
-        if (BluetoothManagerRepository.receiverDevice.value == null) {
-            Log.d(tag, "locatorDevice is null — skipping reconnect, scan in progress")
+        // If receiverDevice was explicitly cleared, a fresh scan is already in progress.
+        if (selectedDevice == null) {
+            Log.d(tag, "receiverDevice is null — skipping reconnect, scan in progress")
             return
         }
         scheduleReconnect(target)
@@ -503,6 +567,28 @@ class BluetoothManager(private val appContext: Context) {
         reconnectAttempts = 0
     }
 
+    /**
+     * Starts a one-shot watchdog that fires [DATA_TIMEOUT_MS] after the
+     * connection reaches [BluetoothConnectionState.Ready]. If no GATT
+     * characteristic notification has arrived since Ready was established,
+     * the connection is treated as a phantom (BLE-stack-cached) link and
+     * [onAclDisconnected] is called to trigger a proper reconnect.
+     */
+    private fun startHealthWatchdog() {
+        connectionHealthJob?.cancel()
+        val watchdogStart = System.currentTimeMillis()
+        connectionHealthJob = scope.launch {
+            delay(DATA_TIMEOUT_MS)
+            if (lastDataTime < watchdogStart) {
+                Log.w(tag, "Health watchdog: no GATT data in ${DATA_TIMEOUT_MS}ms since Ready — " +
+                        "probable phantom connection, forcing reconnect")
+                onAclDisconnected(bluetoothGatt?.device, source = "health watchdog")
+            } else {
+                Log.d(tag, "Health watchdog: data received — connection is live")
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // State-machine dispatcher
     // -------------------------------------------------------------------------
@@ -512,7 +598,8 @@ class BluetoothManager(private val appContext: Context) {
             BluetoothConnectionState.Starting ->
                 enableBluetooth()
             BluetoothConnectionState.Enabled,
-            BluetoothConnectionState.NoDevicesAvailable -> {
+            BluetoothConnectionState.NoDevicesAvailable,
+            BluetoothConnectionState.LocationDisabled -> {
                 val knownDevice = BluetoothManagerRepository.receiverDevice.value
                 if (knownDevice == null) startScan() else connectGatt(knownDevice)
             }
@@ -545,6 +632,7 @@ class BluetoothManager(private val appContext: Context) {
     // -------------------------------------------------------------------------
 
     fun cleanup() {
+        connectionHealthJob?.cancel()
         stopScan()
         disconnectGatt()
         scope.coroutineContext[Job]?.cancel()
@@ -563,7 +651,9 @@ class BluetoothManager(private val appContext: Context) {
         }
         val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         if (!LocationManagerCompat.isLocationEnabled(lm)) {
-            Log.e(tag, "Location services off — BLE scan will return nothing"); return false
+            Log.e(tag, "Location services off — BLE scan will return nothing")
+            emit(BluetoothConnectionState.LocationDisabled)
+            return false
         }
         return true
     }

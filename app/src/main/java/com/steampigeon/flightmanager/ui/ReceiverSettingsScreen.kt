@@ -12,7 +12,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,8 +27,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
+import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.Protocol
 
 @Composable
 fun ReceiverSettingsScreen(
@@ -38,6 +42,53 @@ fun ReceiverSettingsScreen(
     var stagedReceiverConfig by remember { mutableStateOf(viewModel.remoteReceiverConfig.value) }
     val receiverConfigChanged = viewModel.receiverConfigChanged.collectAsState().value
     val receiverConfigMessageState = viewModel.receiverConfigMessageState.collectAsState().value
+    val remoteReceiverConfig = viewModel.remoteReceiverConfig.collectAsState().value
+    val rocketState by viewModel.rocketState.collectAsState()
+    val receiverVersion by viewModel.receiverVersion.collectAsState()
+    val bluetoothConnectionState by BluetoothManagerRepository.bluetoothConnectionState.collectAsState()
+
+    // Keep the staged copy in sync with the remote config as long as the user
+    // has not made any local edits.  This ensures that arriving PreLaunchData
+    // (channel) or a receiver-device switch (full reset) are reflected
+    // immediately rather than showing stale values from a previous session.
+    LaunchedEffect(remoteReceiverConfig) {
+        if (!receiverConfigChanged) {
+            stagedReceiverConfig = remoteReceiverConfig
+        }
+    }
+
+    // On entry: if no locator PreLaunchData has been received in the last 5 seconds,
+    // request the receiver to send its current channel and name directly.
+    // The ReceiverInfo response updates remoteReceiverConfig, which the
+    // LaunchedEffect above propagates to stagedReceiverConfig automatically.
+    LaunchedEffect(Unit) {
+        val lastPreLaunchMessageAge =
+            System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
+        if (lastPreLaunchMessageAge > 5_000L) {
+            service?.requestReceiverInfo()
+        }
+    }
+
+    // After a config update is sent, request ReceiverInfo to solicit confirmation.
+    // PreLaunchData may no longer arrive (locator/receiver LoRa channel mismatch),
+    // so ReceiverInfo over BLE is the only reliable acknowledgement path.
+    LaunchedEffect(receiverConfigMessageState) {
+        if (receiverConfigMessageState == LocatorMessageState.Sent) {
+            delay(300L)
+            service?.requestReceiverInfo()
+        }
+    }
+
+    // If the BLE module was reset as part of a name change, the connection drops and
+    // then reconnects.  Re-request ReceiverInfo once the link is back so the poll
+    // loop can confirm the new channel even when no locator is transmitting.
+    LaunchedEffect(bluetoothConnectionState) {
+        if (bluetoothConnectionState == BluetoothConnectionState.Connected &&
+            receiverConfigMessageState == LocatorMessageState.Sent) {
+            delay(500L) // let the BLE module re-enter data mode after reset
+            service?.requestReceiverInfo()
+        }
+    }
 
     Column(
         modifier = modifier
@@ -48,6 +99,25 @@ fun ReceiverSettingsScreen(
             modifier = modifier.padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
+            // Firmware version (read-only, populated once VersionInfo is received)
+            if (receiverVersion.isNotEmpty()) {
+                Text(
+                    text = "Firmware: $receiverVersion",
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            ConfigurationItemText(
+                configItemName = stringResource(R.string.receiver_name),
+                configItemValue = stagedReceiverConfig.deviceName,
+                configMessageState = receiverConfigMessageState,
+                modifier = modifier
+            ) { newConfigValue ->
+                stagedReceiverConfig = stagedReceiverConfig.copy(
+                    deviceName = newConfigValue.take(Protocol.DEVICE_NAME_LENGTH)
+                )
+                viewModel.updateReceiverConfigChanged(true)
+            }
             ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.locator_channel),
                 initialConfigValue = stagedReceiverConfig.channel,
@@ -62,28 +132,6 @@ fun ReceiverSettingsScreen(
         }
 
         Spacer(modifier = modifier.weight(1f))
-
-        // -----------------------------------------------------------------------
-        // Re-scan option
-        //
-        // Clears the currently known device, disconnects GATT, and starts a fresh
-        // UUID-filtered scan. Navigates immediately back to HomeScreen so the
-        // DevicePickerDialog (managed by RocketApp) can appear over the map once
-        // the 8-second scan window closes and devices are found.
-        // -----------------------------------------------------------------------
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-        OutlinedButton(
-            modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                BluetoothManagerRepository.updateReceiverDevice(null)
-                service?.btManager?.disconnectGatt()
-                service?.btManager?.startScan()
-                onCancelButtonClicked()
-            }
-        ) {
-            Text(stringResource(R.string.scan_for_devices))
-        }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 

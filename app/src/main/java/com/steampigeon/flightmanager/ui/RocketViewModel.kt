@@ -37,11 +37,14 @@ import kotlin.math.sqrt
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.MsgType
+import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.PacketHeader
 import com.steampigeon.flightmanager.data.PrelaunchParsed
 import com.steampigeon.flightmanager.data.Protocol
 import com.steampigeon.flightmanager.data.ReceiverConfig
+import com.steampigeon.flightmanager.data.ReceiverInfoParsed
 import com.steampigeon.flightmanager.data.SensorHealth
+import com.steampigeon.flightmanager.data.VersionInfoParsed
 import com.steampigeon.flightmanager.data.TelemetryParsed
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import com.steampigeon.flightmanager.data.Vec3f
@@ -57,12 +60,14 @@ import kotlin.math.abs
 private const val TAG = "RocketViewModel"
 
 sealed class ParsedMessage {
-    data class Prelaunch(val msg: PrelaunchParsed)         : ParsedMessage()
-    data class Telemetry(val msg: TelemetryParsed)         : ParsedMessage()
+    data class Prelaunch(val msg: PrelaunchParsed)           : ParsedMessage()
+    data class Telemetry(val msg: TelemetryParsed)           : ParsedMessage()
     data class DeploymentTest(val msg: DeploymentTestParsed) : ParsedMessage()
-    data class FlightMetadata(val frame: ByteArray)         : ParsedMessage()
-    data class FlightData(val frame: ByteArray)             : ParsedMessage()
-    data class FlightDataParity(val frame: ByteArray)       : ParsedMessage()
+    data class FlightMetadata(val frame: ByteArray)          : ParsedMessage()
+    data class FlightData(val frame: ByteArray)              : ParsedMessage()
+    data class FlightDataParity(val frame: ByteArray)        : ParsedMessage()
+    data class ReceiverInfo(val msg: ReceiverInfoParsed)     : ParsedMessage()
+    data class VersionInfo(val msg: VersionInfoParsed)       : ParsedMessage()
 }
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -103,6 +108,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 _locatorStatisticsOffset.value = IntOffset(preferences.locatorStatisticsOffsetX, preferences.locatorStatisticsOffsetY)
                 _voiceEnabled.value = preferences.voiceEnabled
                 _voiceName.value = preferences.voiceName
+                _remoteReceiverConfig.update { it.copy(deviceName = preferences.receiverName) }
+            }
+        }
+        // Reset receiver config whenever the user selects a *different* receiver so
+        // that stale name/channel from the previous device is never shown.
+        viewModelScope.launch {
+            var prevAddress: String? = null
+            BluetoothManagerRepository.receiverDevice.collect { device ->
+                val addr = device?.address
+                if (addr != null && addr != prevAddress && prevAddress != null) {
+                    _remoteReceiverConfig.value = ReceiverConfig()
+                    _receiverConfigChanged.value = false
+                }
+                prevAddress = addr
             }
         }
     }
@@ -115,6 +134,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 .setLocatorStatisticsOffsetY(_locatorStatisticsOffset.value.y)
                 .setVoiceEnabled(_voiceEnabled.value)
                 .setVoiceName(_voiceName.value)
+                .setReceiverName(_remoteReceiverConfig.value.deviceName)
                 .build()
         }
     }
@@ -149,6 +169,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
     private val _handheldDevicePitch = MutableStateFlow<Float>(0f)
     val handheldDevicePitch: StateFlow<Float> = _handheldDevicePitch.asStateFlow()
+    // Camera azimuth: direction the back camera is pointing (landscape-remapped Z axis).
+    // Distinct from handheldDeviceAzimuth (direction of phone top / Y axis) which is
+    // used for the map bearing and is 90° off in landscape.
+    private val _handheldCameraAzimuth = MutableStateFlow<Float>(0f)
+    val handheldCameraAzimuth: StateFlow<Float> = _handheldCameraAzimuth.asStateFlow()
     private val _locatorDistance = MutableStateFlow<Int>(0)
     val locatorDistance: StateFlow<Int> = _locatorDistance.asStateFlow()
     private val _locatorAzimuth = MutableStateFlow<Float>(0f)
@@ -261,6 +286,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         FlightDataRepository.cancelTransfer()
     }
 
+    private val _flightPath = MutableStateFlow<List<Triple<Double, Double, Float>>>(emptyList())
+    val flightPath: StateFlow<List<Triple<Double, Double, Float>>> = _flightPath.asStateFlow()
+    private var _previousFlightState = FlightStates.WaitingForLaunch
+
     private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
     val deploymentTestActive: StateFlow<Boolean> = _deploymentTestActive.asStateFlow()
 
@@ -274,6 +303,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun updateDeploymentTestCountdown(newDeploymentTestCountdown: Int) {
         _deploymentTestCountdown.value = newDeploymentTestCountdown
     }
+
+    private val _locatorVersion = MutableStateFlow("")
+    val locatorVersion: StateFlow<String> = _locatorVersion.asStateFlow()
+
+    private val _receiverVersion = MutableStateFlow("")
+    val receiverVersion: StateFlow<String> = _receiverVersion.asStateFlow()
 
     fun startService() {
         val context = getApplication<Application>().applicationContext
@@ -302,12 +337,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
                                     satellites = parsed.msg.satellites.toUByte(),
-                                    hdop = parsed.msg.hacc,
+                                    hacc = parsed.msg.hacc,
                                     baroStatus = parsed.msg.baroStatus,
                                     imuStatus = parsed.msg.imuStatus,
                                     gpsStatus = parsed.msg.gpsStatus,
                                     deployChannel1Armed = parsed.msg.deployStatus.and(1) == 1,
                                     deployChannel2Armed = parsed.msg.deployStatus.and(2) == 2,
+                                    deployChannel3Armed = parsed.msg.deployStatus.and(4) == 4,
+                                    deployChannel4Armed = parsed.msg.deployStatus.and(8) == 8,
                                     altitudeAboveGroundLevel = parsed.msg.agl,
                                     accelerometer = parsed.msg.accel,
                                     gForce = sqrt(parsed.msg.accel.x * parsed.msg.accel.x + parsed.msg.accel.y * parsed.msg.accel.y +
@@ -321,6 +358,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     gyro = parsed.msg.gyro,
                                     locatorBatteryLevel = ((parsed.msg.locatorBatteryMv - 3700) / 400.0f * 8).toInt(),
                                     receiverBatteryLevel = ((parsed.msg.receiverBatteryMv - 3700) / 400.0f * 8).toInt(),
+                                    rssi = parsed.msg.rssi,
                                 )
                             }
                             _remoteLocatorConfig.update { currentState ->
@@ -341,6 +379,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             _remoteReceiverConfig.update { currentState ->
                                 currentState.copy(
                                     channel = parsed.msg.receiverChannel,
+                                    deviceName = if (parsed.msg.receiverName.isNotEmpty())
+                                        parsed.msg.receiverName
+                                    else
+                                        currentState.deviceName,
                                 )
                             }
                         }
@@ -351,7 +393,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
                                     satellites = parsed.msg.satellites.toUByte(),
-                                    hdop = parsed.msg.hacc,
+                                    hacc = parsed.msg.hacc,
                                     baroStatus = parsed.msg.baroStatus,
                                     imuStatus = parsed.msg.imuStatus,
                                     gpsStatus = parsed.msg.gpsStatus,
@@ -366,25 +408,47 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     drogueDeployDetected = parsed.msg.physicalDeploymentStats.and(1) == 1,
                                     mainDeployDetected = parsed.msg.physicalDeploymentStats.and(2) == 2,
                                     altitudeAboveGroundLevel = parsed.msg.agl,
-                                    accelerometer = parsed.msg.accel,
-                                    gForce = sqrt(parsed.msg.accel.x * parsed.msg.accel.x + parsed.msg.accel.y * parsed.msg.accel.y +
-                                            parsed.msg.accel.z * parsed.msg.accel.z),
-                                    orientation =
-                                        when {
-                                            _rocketState.value.accelerometer.x.toFloat() < -4.9 -> "up"
-                                            _rocketState.value.accelerometer.x.toFloat() > 4.9 -> "down"
-                                            else -> "side"
-                                        },
-                                    gyro = parsed.msg.gyro,
-                                    velocity = parsed.msg.velocity,
+                                    velNed = parsed.msg.velNed,
+                                    velocity = sqrt(parsed.msg.velNed.x * parsed.msg.velNed.x +
+                                            parsed.msg.velNed.y * parsed.msg.velNed.y +
+                                            parsed.msg.velNed.z * parsed.msg.velNed.z),
+                                    attitude = parsed.msg.attitude,
                                     flightState = parsed.msg.flightState,
+                                    rssi = parsed.msg.rssi,
                                 )
                             }
+                            // Reset path on new launch; accumulate during flight
+                            val newFlightState = parsed.msg.flightState
+                            if (_previousFlightState == FlightStates.WaitingForLaunch &&
+                                newFlightState == FlightStates.Launched) {
+                                _flightPath.value = emptyList()
+                            }
+                            if (newFlightState > FlightStates.WaitingForLaunch &&
+                                (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0)) {
+                                _flightPath.value = _flightPath.value +
+                                    Triple(parsed.msg.latitude, parsed.msg.longitude, parsed.msg.agl)
+                            }
+                            _previousFlightState = newFlightState
                         }
                         is ParsedMessage.DeploymentTest -> {
                             val deploymentTestCountdown = parsed.msg.count
                             if (_deploymentTestActive.value)
                                 _deploymentTestCountdown.value = deploymentTestCountdown
+                        }
+                        is ParsedMessage.ReceiverInfo -> {
+                            _remoteReceiverConfig.update { currentState ->
+                                currentState.copy(
+                                    channel    = parsed.msg.channel,
+                                    deviceName = if (parsed.msg.deviceName.isNotEmpty())
+                                        parsed.msg.deviceName
+                                    else
+                                        currentState.deviceName,
+                                )
+                            }
+                        }
+                        is ParsedMessage.VersionInfo -> {
+                            _locatorVersion.value = parsed.msg.locatorVersion
+                            _receiverVersion.value = parsed.msg.receiverVersion
                         }
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
@@ -441,7 +505,25 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: Exception) {
                     Log.e("Parser", "Error parsing inbound packet", e)
                 }
+            }
+        }
 
+        // Re-request version info until it is received.  Only sends when the locator
+        // is actively sending PreLaunchData (i.e. the LoRa link is up), so the
+        // VersionRequest can be timed around prelaunch messages by the receiver.
+        viewModelScope.launch {
+            while (_locatorVersion.value.isEmpty()) {
+                delay(1_000L)
+                val age = System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime
+                if (age < 5_000L) {
+                    service.requestVersionInfo()
+                    delay(5_000L)
+                }
+            }
+        }
+    }
+
+/*
 //                when (parsed) {
 //                    locatorMessageHeader.contentEquals(BluetoothService.receiverConfigMessageHeader) -> {
 //                        _remoteReceiverConfig.update { currentState ->
@@ -540,9 +622,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 //                            _deploymentTestCountdown.value = deploymentTestCountdown
 //                    }
 //                }
-            }
-        }
-    }
+*/
 
     private fun gpsCoord(byteArray: ByteArray, offset: Int): Double {
         require(offset >= 0 && offset + 8 <= byteArray.size) { "Invalid offset or length" }
@@ -583,26 +663,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateOrientation(values: FloatArray) {
-        val rotationMatrix = FloatArray(9)
-        val orientation = FloatArray(3)
+        val rotationMatrix  = FloatArray(9)
+        val landscapeMatrix = FloatArray(9)
+        val orientation     = FloatArray(3)
 
         SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
+
+        // Azimuth: derive from the un-remapped portrait frame.
         SensorManager.getOrientation(rotationMatrix, orientation)
-
         val azimuthDeg = Math.toDegrees(orientation[0].toDouble()).toFloat()
-        val pitchDeg   = Math.toDegrees(orientation[1].toDouble()).toFloat()
-
-        // Normalize
         val az = (azimuthDeg + 360f) % 360f
 
-        // Apply Google‑Maps‑style smoothing
-        val delta = ((az - _lastHandheldDeviceAzimuth.value + 540f) % 360f) - 180f
-        val eased = easeAngle(delta)
+        // Apply Google‑Maps‑style smoothing for the map bearing.
+        val delta   = ((az - _lastHandheldDeviceAzimuth.value + 540f) % 360f) - 180f
+        val eased   = easeAngle(delta)
         val smoothed = (_lastHandheldDeviceAzimuth.value + eased + 360f) % 360f
-
         _lastHandheldDeviceAzimuth.value = smoothed
         _handheldDeviceAzimuth.value = smoothed
-        _handheldDevicePitch.value = pitchDeg
+
+        // Pitch for the landscape AR overlay: remap so that the new Y axis aligns
+        // with the camera direction (old Z axis).  Negating orientation[1] makes
+        // positive pitch mean the camera is pointing upward, matching the sign
+        // convention expected by the elevation delta formula in CameraPreviewScreen.
+        SensorManager.remapCoordinateSystem(
+            rotationMatrix,
+            SensorManager.AXIS_X, SensorManager.AXIS_Z,
+            landscapeMatrix
+        )
+        SensorManager.getOrientation(landscapeMatrix, orientation)
+        // After the remap the new Y axis is the old Z axis (camera direction), so
+        // orientation[0] is the compass bearing the camera is actually pointing —
+        // this is the correct azimuth for the landscape AR overlay.
+        _handheldCameraAzimuth.value = (Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f
+        _handheldDevicePitch.value   = Math.toDegrees(-orientation[1].toDouble()).toFloat()
     }
 
     private fun easeAngle(delta: Float): Float {
@@ -698,8 +791,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             for (i in 1..50) {
                 delay(100)
-                if (_remoteReceiverConfig.value == stagedReceiverConfig) {
+                // The receiver echoes its channel back via PreLaunchData but never its name,
+                // so compare only the channel for acknowledgement.  The name is accepted
+                // optimistically once the channel is confirmed.
+                if (_remoteReceiverConfig.value.channel == stagedReceiverConfig.channel) {
+                    _remoteReceiverConfig.update { it.copy(deviceName = stagedReceiverConfig.deviceName) }
                     _receiverConfigMessageState.value = LocatorMessageState.AckUpdated
+                    saveUserPreferences()
                     break
                 }
                 else if (_receiverConfigMessageState.value == LocatorMessageState.SendFailure)
@@ -774,6 +872,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             MsgType.PreLaunchData    -> ParsedMessage.Prelaunch(parsePrelaunch(frame))
             MsgType.TelemetryData    -> ParsedMessage.Telemetry(parseTelemetry(frame))
             MsgType.DeploymentTest   -> ParsedMessage.DeploymentTest(parseDeploymentTest(frame))
+            MsgType.ReceiverInfo     -> ParsedMessage.ReceiverInfo(parseReceiverInfo(frame))
+            MsgType.VersionInfo      -> ParsedMessage.VersionInfo(parseVersionInfo(frame))
             MsgType.FlightMetadata   -> ParsedMessage.FlightMetadata(frame)
             MsgType.FlightData       -> ParsedMessage.FlightData(frame)
             MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
@@ -830,6 +930,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
         val channel = Bytes.u8(frame[o]); o += 1
         val receiverBatteryMv = Bytes.u16(frame, o); o += 2
+        val receiverNameBytes = frame.copyOfRange(o, o + Protocol.DEVICE_NAME_LENGTH)
+        val receiverName = receiverNameBytes.takeWhile { it != 0.toByte() }
+            .toByteArray()
+            .toString(Charsets.UTF_8)
+        o += Protocol.DEVICE_NAME_LENGTH
+        val rssi = Bytes.i16(frame, o)
 
         return PrelaunchParsed(
             latitude, longitude, satellites, hacc,
@@ -840,7 +946,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
             deviceName, locatorBatteryMv,
-            channel, receiverBatteryMv
+            channel, receiverBatteryMv,
+            receiverName, rssi
         )
     }
 
@@ -863,11 +970,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val physicalDeploymentStats = Bytes.u8(frame[o]); o += 1
         val agl = Bytes.f32(frame, o); o += 4
 
-        val accel = parseVec3f(frame, o); o += 12
-        val gyro = parseVec3f(frame, o); o += 12
+        val velNed = parseVec3f(frame, o); o += 12
+        val qW = Bytes.f32(frame, o); o += 4
+        val qX = Bytes.f32(frame, o); o += 4
+        val qY = Bytes.f32(frame, o); o += 4
+        val qZ = Bytes.f32(frame, o); o += 4
+        val attitude = Quaternionf(qW, qX, qY, qZ)
 
-        val velocity = Bytes.f32(frame, o); o += 4
         val flightState = FlightStates.fromUByte(frame[o].toUByte()); o += 1
+        val rssi = Bytes.i16(frame, o)
 
         return TelemetryParsed(
             latitude, longitude, satellites, hacc,
@@ -875,8 +986,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deploymentCh1Stats, deploymentCh2Stats,
             deploymentCh3Stats, deploymentCh4Stats,
             physicalDeploymentStats, agl,
-            accel, gyro,
-            velocity, flightState
+            velNed, attitude,
+            flightState, rssi
         )
     }
 
@@ -888,12 +999,44 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         return DeploymentTestParsed(count)
     }
 
+    private fun parseReceiverInfo(frame: ByteArray): ReceiverInfoParsed {
+        var o = 6 // start after PacketHeader
+
+        val channel = Bytes.u8(frame[o]); o += 1
+
+        val nameBytes = frame.copyOfRange(o, o + Protocol.DEVICE_NAME_LENGTH)
+        val deviceName = nameBytes.takeWhile { it != 0.toByte() }
+            .toByteArray()
+            .toString(Charsets.UTF_8)
+
+        return ReceiverInfoParsed(channel, deviceName)
+    }
+
+    private fun parseVersionInfo(frame: ByteArray): VersionInfoParsed {
+        var o = 6 // start after PacketHeader
+
+        val locatorBytes = frame.copyOfRange(o, o + 64)
+        val locatorVersion = locatorBytes.takeWhile { it != 0.toByte() }
+            .toByteArray().toString(Charsets.UTF_8)
+        o += 64
+
+        val receiverBytes = frame.copyOfRange(o, o + 64)
+        val receiverVersion = receiverBytes.takeWhile { it != 0.toByte() }
+            .toByteArray().toString(Charsets.UTF_8)
+
+        return VersionInfoParsed(locatorVersion, receiverVersion)
+    }
+
     object Bytes {
         fun u8(b: Byte) = b.toInt() and 0xFF
 
         fun u16(bytes: ByteArray, offset: Int): Int =
             (bytes[offset].toInt() and 0xFF) or
                     ((bytes[offset + 1].toInt() and 0xFF) shl 8)
+
+        fun i16(bytes: ByteArray, offset: Int): Int =
+            (((bytes[offset + 1].toInt() and 0xFF) shl 8) or
+                    (bytes[offset].toInt() and 0xFF)).toShort().toInt()
 
         fun u32(bytes: ByteArray, offset: Int): Long =
             (bytes[offset].toLong() and 0xFF) or

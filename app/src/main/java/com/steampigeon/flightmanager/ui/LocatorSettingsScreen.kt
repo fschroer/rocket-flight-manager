@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,7 +38,6 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,8 @@ fun LocatorSettingsScreen(
     var stagedLocatorConfig by remember {mutableStateOf(viewModel.remoteLocatorConfig.value)}
     var locatorConfigChanged = viewModel.locatorConfigChanged.collectAsState().value
     val locatorConfigMessageState = viewModel.locatorConfigMessageState.collectAsState().value
+    val locatorVersion by viewModel.locatorVersion.collectAsState()
+    val scrollState = rememberScrollState()
 
     Column (
         modifier = modifier
@@ -88,13 +91,22 @@ fun LocatorSettingsScreen(
             .padding(16.dp)
     ) {
         Column(
-            modifier = modifier.weight(11f),
-                //.verticalScroll(scrollState)
-                //.padding(start = 40.dp),
-            verticalArrangement = Arrangement.SpaceAround
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.Top
         ) {
+            // Firmware version (read-only, populated once VersionInfo is received)
+            if (locatorVersion.isNotEmpty()) {
+                Text(
+                    text = "Firmware: $locatorVersion",
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
             // Capture initial and updated locator configuration data.
             // Used for configuration screen and confirming locator update acknowledgement.
+            Text(stringResource(R.string.deployment_channel_1))
             EnumDropdown(
                 DeployMode::class,
                 stagedLocatorConfig.deploymentChannel1Mode ?: DeployMode.DroguePrimary,
@@ -160,9 +172,10 @@ fun LocatorSettingsScreen(
                 }
                 else -> {}
             }
+            Text(stringResource(R.string.deployment_channel_2))
             EnumDropdown(
                 DeployMode::class,
-                stagedLocatorConfig.deploymentChannel2Mode ?: DeployMode.MainPrimary,
+                stagedLocatorConfig.deploymentChannel2Mode ?: DeployMode.DrogueBackup,
                 enabled = locatorConfigMessageState == LocatorMessageState.Idle,
                 modifier = modifier
             )
@@ -171,6 +184,138 @@ fun LocatorSettingsScreen(
                 viewModel.updateLocatorConfigChanged(true)
             }
             when (stagedLocatorConfig.deploymentChannel2Mode) {
+                DeployMode.DroguePrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
+                        minValue = 0.0,
+                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.DrogueBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
+                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
+                        maxValue = 3.0,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainPrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
+                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
+                        maxValue = 500,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
+                        minValue = 0,
+                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                else -> {}
+            }
+            Text(stringResource(R.string.deployment_channel_3))
+            EnumDropdown(
+                DeployMode::class,
+                stagedLocatorConfig.deploymentChannel3Mode ?: DeployMode.MainPrimary,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
+                modifier = modifier
+            )
+            { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel3Mode = newConfigValue as DeployMode)
+                viewModel.updateLocatorConfigChanged(true)
+            }
+            when (stagedLocatorConfig.deploymentChannel3Mode) {
+                DeployMode.DroguePrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
+                        minValue = 0.0,
+                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.DrogueBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
+                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
+                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
+                        maxValue = 3.0,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainPrimary -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
+                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
+                        maxValue = 500,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                DeployMode.MainBackup -> {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
+                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
+                        minValue = 0,
+                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
+                        configMessageState = locatorConfigMessageState,
+                        modifier = modifier
+                    ) { newConfigValue ->
+                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
+                        viewModel.updateLocatorConfigChanged(true)
+                    }
+                }
+                else -> {}
+            }
+            Text(stringResource(R.string.deployment_channel_4))
+            EnumDropdown(
+                DeployMode::class,
+                stagedLocatorConfig.deploymentChannel4Mode ?: DeployMode.MainBackup,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
+                modifier = modifier
+            )
+            { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel4Mode = newConfigValue as DeployMode)
+                viewModel.updateLocatorConfigChanged(true)
+            }
+            when (stagedLocatorConfig.deploymentChannel4Mode) {
                 DeployMode.DroguePrimary -> {
                     ConfigurationItemNumeric(
                         configItemName = stringResource(R.string.drogue_primary_deploy_delay),
@@ -259,10 +404,9 @@ fun LocatorSettingsScreen(
                 viewModel.updateLocatorConfigChanged(true)
             }
         }
-        Spacer (modifier = modifier.weight(1f))
+        Spacer(modifier = Modifier.padding(vertical = 4.dp))
         Row(
-            modifier = modifier.weight(1f),
-            //.padding(dimensionResource(R.dimen.padding_medium)),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
             verticalAlignment = Alignment.Bottom
         ) {
@@ -494,27 +638,32 @@ fun NudgeButton(
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Int) -> Unit
 ) {
-    var counter = configItemValue
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val currentClickListener by rememberUpdatedState(onConfigUpdate)
+    val enabled = (if (change > 0) configItemValue < bound else configItemValue > bound) &&
+            configMessageState == LocatorMessageState.Idle
 
     TextButton(
-        onClick = { },
-        enabled = (if(change > 0) counter < bound else counter > bound) && configMessageState == LocatorMessageState.Idle,
+        onClick = { if (enabled) onConfigUpdate(configItemValue + change) },
+        enabled = enabled,
         interactionSource = interactionSource,
         content = content
     )
-    // Increment counter while button is pressed
+    // Hold-to-repeat: after an initial delay, keep incrementing while the button is held.
+    // onClick handles the single-tap case, so start the repeat loop only after the initial delay
+    // to avoid a double-increment on a quick tap.
     LaunchedEffect(isPressed) {
-        var currentDelayMillis = maxDelayMillis
-        while (isPressed) {
-            counter += change
-            onConfigUpdate(counter)
-            //currentClickListener(counter)
-            delay(currentDelayMillis)
-            val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
-            currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+        if (isPressed) {
+            delay(maxDelayMillis)
+            var currentDelayMillis = maxDelayMillis
+            var repeatValue = configItemValue + change
+            while (isPressed) {
+                onConfigUpdate(repeatValue)
+                repeatValue += change
+                delay(currentDelayMillis)
+                val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
+                currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+            }
         }
     }
 }
@@ -528,27 +677,32 @@ fun NudgeButton(
     content: @Composable RowScope.() -> Unit,
     onConfigUpdate: (Double) -> Unit
 ) {
-    var counter = configItemValue
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val currentClickListener by rememberUpdatedState(onConfigUpdate)
+    val enabled = (if (change > 0) configItemValue < bound - 0.05 else configItemValue > bound + 0.05) &&
+            configMessageState == LocatorMessageState.Idle
 
     TextButton(
-        onClick = { },
-        enabled = (if(change > 0) counter < bound - 0.05 else counter > bound + 0.05) && configMessageState == LocatorMessageState.Idle,
+        onClick = { if (enabled) onConfigUpdate(configItemValue + change) },
+        enabled = enabled,
         interactionSource = interactionSource,
         content = content
     )
-    // Increment counter while button is pressed
+    // Hold-to-repeat: after an initial delay, keep incrementing while the button is held.
+    // onClick handles the single-tap case, so start the repeat loop only after the initial delay
+    // to avoid a double-increment on a quick tap.
     LaunchedEffect(isPressed) {
-        var currentDelayMillis = maxDelayMillis
-        while (isPressed) {
-            counter += change
-            onConfigUpdate(counter)
-            //currentClickListener(counter)
-            delay(currentDelayMillis)
-            val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
-            currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+        if (isPressed) {
+            delay(maxDelayMillis)
+            var currentDelayMillis = maxDelayMillis
+            var repeatValue = configItemValue + change
+            while (isPressed) {
+                onConfigUpdate(repeatValue)
+                repeatValue += change
+                delay(currentDelayMillis)
+                val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
+                currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+            }
         }
     }
 }
