@@ -49,6 +49,7 @@ import com.steampigeon.flightmanager.data.TelemetryParsed
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import com.steampigeon.flightmanager.data.Vec3f
 import kotlinx.coroutines.delay
+import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -288,7 +289,50 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _flightPath = MutableStateFlow<List<Triple<Double, Double, Float>>>(emptyList())
     val flightPath: StateFlow<List<Triple<Double, Double, Float>>> = _flightPath.asStateFlow()
-    private var _previousFlightState = FlightStates.WaitingForLaunch
+    private var _previousFlightState = FlightStates.WaitingLaunch
+
+    private val _isFlightPathRecording = MutableStateFlow(true)
+    val isFlightPathRecording: StateFlow<Boolean> = _isFlightPathRecording.asStateFlow()
+
+    private val flightPathFile: File
+        get() = File(getApplication<Application>().filesDir, "flight_path.csv")
+
+    init {
+        loadFlightPath()
+    }
+
+    private fun loadFlightPath() {
+        val file = flightPathFile
+        if (!file.exists()) return
+        try {
+            val points = file.readLines().mapNotNull { line ->
+                val parts = line.split(",")
+                if (parts.size == 3) {
+                    Triple(parts[0].toDouble(), parts[1].toDouble(), parts[2].toFloat())
+                } else null
+            }
+            if (points.isNotEmpty()) _flightPath.value = points
+        } catch (_: Exception) {}
+    }
+
+    private fun saveFlightPath() {
+        viewModelScope.launch {
+            try {
+                flightPathFile.writeText(
+                    _flightPath.value.joinToString("\n") { (lat, lng, agl) -> "$lat,$lng,$agl" }
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun startFlightPathRecording() { _isFlightPathRecording.value = true }
+    fun stopFlightPathRecording() { _isFlightPathRecording.value = false }
+    fun resetFlightPath() {
+        _flightPath.value = emptyList()
+        viewModelScope.launch {
+            try { flightPathFile.delete() } catch (_: Exception) {}
+        }
+    }
 
     private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
     val deploymentTestActive: StateFlow<Boolean> = _deploymentTestActive.asStateFlow()
@@ -336,6 +380,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     lastPreLaunchMessageTime = currentTime,
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
+                                    rawLatitude = parsed.msg.rawLatitude,
+                                    rawLongitude = parsed.msg.rawLongitude,
                                     satellites = parsed.msg.satellites.toUByte(),
                                     hacc = parsed.msg.hacc,
                                     baroStatus = parsed.msg.baroStatus,
@@ -345,7 +391,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     deployChannel2Armed = parsed.msg.deployStatus.and(2) == 2,
                                     deployChannel3Armed = parsed.msg.deployStatus.and(4) == 4,
                                     deployChannel4Armed = parsed.msg.deployStatus.and(8) == 8,
-                                    altitudeAboveGroundLevel = parsed.msg.agl,
+                                    // Guard against a non-finite AGL ever entering UI state:
+                                    // it would render as "NaN" and feed NaN into tilt/descent math.
+                                    altitudeAboveGroundLevel = parsed.msg.agl.takeIf { it.isFinite() }
+                                        ?: currentState.altitudeAboveGroundLevel,
                                     accelerometer = parsed.msg.accel,
                                     gForce = sqrt(parsed.msg.accel.x * parsed.msg.accel.x + parsed.msg.accel.y * parsed.msg.accel.y +
                                             parsed.msg.accel.z * parsed.msg.accel.z),
@@ -407,7 +456,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     channel4Fired = parsed.msg.deploymentCh4Stats.and(4) == 4,
                                     drogueDeployDetected = parsed.msg.physicalDeploymentStats.and(1) == 1,
                                     mainDeployDetected = parsed.msg.physicalDeploymentStats.and(2) == 2,
-                                    altitudeAboveGroundLevel = parsed.msg.agl,
+                                    // Guard against a non-finite AGL ever entering UI state:
+                                    // it would render as "NaN" and feed NaN into tilt/descent math.
+                                    altitudeAboveGroundLevel = parsed.msg.agl.takeIf { it.isFinite() }
+                                        ?: currentState.altitudeAboveGroundLevel,
                                     velNed = parsed.msg.velNed,
                                     velocity = sqrt(parsed.msg.velNed.x * parsed.msg.velNed.x +
                                             parsed.msg.velNed.y * parsed.msg.velNed.y +
@@ -419,14 +471,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             // Reset path on new launch; accumulate during flight
                             val newFlightState = parsed.msg.flightState
-                            if (_previousFlightState == FlightStates.WaitingForLaunch &&
+                            if (_previousFlightState == FlightStates.WaitingLaunch &&
                                 newFlightState == FlightStates.Launched) {
                                 _flightPath.value = emptyList()
+                                saveFlightPath()
                             }
-                            if (newFlightState > FlightStates.WaitingForLaunch &&
+                            if (_isFlightPathRecording.value &&
+                                newFlightState > FlightStates.WaitingLaunch &&
                                 (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0)) {
                                 _flightPath.value = _flightPath.value +
                                     Triple(parsed.msg.latitude, parsed.msg.longitude, parsed.msg.agl)
+                                saveFlightPath()
                             }
                             _previousFlightState = newFlightState
                         }
@@ -897,6 +952,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
         val latitude = Bytes.f64(frame, o); o += 8
         val longitude = Bytes.f64(frame, o); o += 8
+        val rawLatitude = Bytes.f64(frame, o); o += 8
+        val rawLongitude = Bytes.f64(frame, o); o += 8
         val satellites = Bytes.u8(frame[o]); o += 1
         val hacc = Bytes.f32(frame, o); o += 4
 
@@ -938,7 +995,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val rssi = Bytes.i16(frame, o)
 
         return PrelaunchParsed(
-            latitude, longitude, satellites, hacc,
+            latitude, longitude, rawLatitude, rawLongitude, satellites, hacc,
             imuStatus, baroStatus, gpsStatus,
             deployStatus, agl,
             accel, gyro,

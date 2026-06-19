@@ -1,0 +1,42 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Ground plane in perspective (trapezoid) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:pathData="M4,42 L44,42 L34,26 L14,26 Z"/>
+    <!-- Ground grid lines -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M24,26 L20,42 M24,26 L28,42"/>
+    <!-- Vertical altitude axis -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:pathData="M24,26 L24,8"/>
+    <!-- Arrow tip on altitude axis -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M20,13 L24,8 L28,13"/>
+    <!-- 3D flight path (ascent arc) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF8800"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M20,42 L22,32 L24,18 L24,8"/>
+    <!-- Launch point dot -->
+    <path
+        android:fillColor="#FF8800"
+        android:pathData="M20,42 m-3,0 a3,3 0,1,1 6,0 a3,3 0,1,1 -6,0"/>
+</vector>

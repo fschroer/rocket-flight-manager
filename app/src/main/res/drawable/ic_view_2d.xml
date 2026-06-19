@@ -1,0 +1,28 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Flat top-down map grid -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:pathData="M6,8 L42,8 L42,42 L6,42 Z"/>
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:pathData="M24,8 L24,42 M6,25 L42,25"/>
+    <!-- Flight path line (top-down) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF8800"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M10,40 L18,30 L26,18 L34,10"/>
+    <!-- Launch point dot -->
+    <path
+        android:fillColor="#FF8800"
+        android:pathData="M10,40 m-3,0 a3,3 0,1,1 6,0 a3,3 0,1,1 -6,0"/>
+</vector>

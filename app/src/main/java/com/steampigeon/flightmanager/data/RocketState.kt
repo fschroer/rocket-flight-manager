@@ -18,7 +18,7 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 110 // PreLaunchData payload (85) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 110
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 126 // PreLaunchData payload (101) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 126
     const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 64 // vel_ned (12) + q_bn (16) replaces accel (12) + gyro (12) + velocity (4); + rssi (2)
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
@@ -37,6 +37,8 @@ data class RocketState(
     val lastPreLaunchMessageTime: Long = 0,
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
+    val rawLatitude: Double = 0.0,
+    val rawLongitude: Double = 0.0,
     val satellites: UByte = 0.toUByte(),
     val hacc: Float = 0f,
     val baroStatus: SensorHealth = SensorHealth.Ok,
@@ -60,7 +62,7 @@ data class RocketState(
     val velocity: Float = 0f,
     val locatorBatteryLevel: Int = 0,
     val receiverBatteryLevel: Int = 0,
-    val flightState: FlightStates = FlightStates.WaitingForLaunch,
+    val flightState: FlightStates = FlightStates.WaitingLaunch,
     val rssi: Int = -120,
     val velNed: Vec3f = Vec3f(0f, 0f, 0f),
     val attitude: Quaternionf = Quaternionf.IDENTITY,
@@ -162,14 +164,14 @@ enum class DeploymentTestOption (val deploymentTestOption: UByte) {
 }
 
 enum class FlightStates (val flightStates: UByte) {
-    WaitingForLaunch(0u),
+    WaitingLaunch(0u),
     Launched(1u),
     Burnout(2u),
     Noseover(3u),
-    DroguePrimaryDeployed(4u),
-    DrogueBackupDeployed(5u),
-    MainPrimaryDeployed(6u),
-    MainBackupDeployed(7u),
+    DroguePrimaryEvent(4u),
+    DrogueBackupEvent(5u),
+    MainPrimaryEvent(6u),
+    MainBackupEvent(7u),
     Landed(8u),
     NoSignal(9u);
 
@@ -285,6 +287,8 @@ fun PacketHeader.toBytes(): ByteArray {
 data class PrelaunchParsed(
     val latitude: Double,
     val longitude: Double,
+    val rawLatitude: Double,      // raw SAM-M10Q latitude (deg)
+    val rawLongitude: Double,     // raw SAM-M10Q longitude (deg)
     val satellites: Int,          // uint8_t
     val hacc: Float,              // float
     val imuStatus: SensorHealth,  // uint8_t enum
