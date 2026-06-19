@@ -355,8 +355,8 @@ fun RocketApp(
                 )
             }
             composable(route = NavDestination.AppSettings.name) {
-                AppSettingsScreen(viewModel, textToSpeech,
-                    onCancelButtonClicked = { navigateToStart(navController) }, modifier)
+                AppSettingsScreen(modifier, viewModel, textToSpeech,
+                    onCancelButtonClicked = { navigateToStart(navController) })
             }
             composable(route = NavDestination.LocatorSettings.name) {
                 LocatorSettingsScreen(viewModel, bluetoothService,

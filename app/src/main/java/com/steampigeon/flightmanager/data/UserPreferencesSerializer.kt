@@ -1,10 +1,7 @@
 package com.steampigeon.flightmanager.data
 
-import android.content.Context
 import androidx.datastore.core.CorruptionException
-import androidx.datastore.core.DataStore
 import androidx.datastore.core.Serializer
-import androidx.datastore.dataStore
 import com.google.protobuf.InvalidProtocolBufferException
 import com.steampigeon.flightmanager.UserPreferences
 import java.io.InputStream

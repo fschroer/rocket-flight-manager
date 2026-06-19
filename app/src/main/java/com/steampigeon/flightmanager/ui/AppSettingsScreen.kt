@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.R
 import kotlinx.coroutines.launch
+import androidx.compose.material3.MenuAnchorType
 
 private const val TAG = "AppSettings"
 
@@ -45,10 +46,10 @@ private const val TAG = "AppSettings"
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppSettingsScreen(
+    modifier: Modifier = Modifier,
     viewModel: RocketViewModel = viewModel(),
     textToSpeech: TextToSpeech?,
     onCancelButtonClicked: () -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
     Column (
         modifier = modifier
@@ -104,7 +105,7 @@ fun AppSettingsScreen(
                     value = selectedOptionText,
                     onValueChange = { },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                    modifier = Modifier.menuAnchor(),
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable),
                     colors = ExposedDropdownMenuDefaults.textFieldColors()
                 )
                 ExposedDropdownMenu(

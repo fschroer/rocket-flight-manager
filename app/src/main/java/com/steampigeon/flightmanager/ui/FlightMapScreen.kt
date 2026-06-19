@@ -3,7 +3,6 @@ package com.steampigeon.flightmanager.ui
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.bluetooth.BluetoothDevice
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.location.Location
@@ -31,14 +30,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -106,7 +102,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -155,14 +150,11 @@ import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.NavDestination
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
-import com.steampigeon.flightmanager.data.BluetoothManagerRepository.receiverDevice
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
-import com.steampigeon.flightmanager.data.Protocol
 import com.steampigeon.flightmanager.data.Quaternionf
-import com.steampigeon.flightmanager.data.ReceiverConfig
 import com.steampigeon.flightmanager.data.RocketState
 import com.steampigeon.flightmanager.data.SensorHealth
 import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.G_FORCE_MS2
@@ -179,7 +171,6 @@ import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.log2
 import kotlin.math.min
-import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -189,7 +180,6 @@ private const val messageTimeout = 2000
 // Consistent semi-transparent overlay background used for all map UI panels and buttons.
 // Derived from secondaryContainerLight (#5D6F96) at 75% opacity.
 private val mapOverlayBg = Color(0xC05D6F96)
-private const val mainVelocityThreshold = -8
 private const val landingAltitudeThreshold = 30
 private const val minimumSpokenAGLVelocity = 2 * 9.8
 
@@ -214,7 +204,7 @@ private data class ChannelConfig(val mode: DeployMode?, val isArmed: Boolean)
 // ── Helper functions ──────────────────────────────────────────────────────────
 
 /** Returns the display string for a single deployment channel based on its mode.
- *  Format: "Ch [n]: [DP|DB|MP|MB|NA] [value]" */
+ *  Format: "Ch \[n]: [DP|DB|MP|MB|NA] \[value]" */
 private fun deployChannelText(channel: Int, mode: DeployMode?, config: LocatorConfig): String {
     val abbr = when (mode) {
         DeployMode.DroguePrimary -> "Drogue Prm "

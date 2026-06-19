@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.time.ZonedDateTime
 import kotlin.math.acos
 import kotlin.math.atan2
-import kotlin.math.sqrt
 
 object Protocol {
     const val HEADER_SIZE =

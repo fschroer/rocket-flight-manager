@@ -45,7 +45,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
@@ -474,7 +473,7 @@ fun EnumDropdown(
         ExposedDropdownMenu(expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            enumClass.java.enumConstants.forEach { enumValue ->
+            enumClass.java.enumConstants?.forEach { enumValue ->
                 DropdownMenuItem(text = { Text(enumValue.name) },
                     onClick = {
                         onValueChange(enumValue)

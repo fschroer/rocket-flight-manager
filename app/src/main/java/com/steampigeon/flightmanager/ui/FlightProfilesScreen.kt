@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -52,7 +52,6 @@ import com.steampigeon.flightmanager.data.FlightEventData
 import com.steampigeon.flightmanager.data.FlightSample
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import java.math.RoundingMode
-import java.text.DateFormat
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -220,7 +219,7 @@ fun FlightProfilesScreen(
                                     }
                                 }
                             }
-                            Divider(modifier = modifier.weight(1f))
+                            HorizontalDivider(modifier = modifier.weight(1f))
                         }
                     flightProfileMetadataMessageState == LocatorMessageState.AckUpdated ->
                         Text("No flights recorded on locator ${locatorConfig.deviceName}")

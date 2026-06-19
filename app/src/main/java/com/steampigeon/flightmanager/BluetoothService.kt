@@ -40,7 +40,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
-import java.io.IOException
+import androidx.core.content.IntentCompat
 
 private const val TAG = "BluetoothService"
 private const val CHANNEL_ID = "BluetoothService"
@@ -84,8 +84,7 @@ class BluetoothService : Service() {
 
     private var serviceStarted = false
 
-    @Suppress("DEPRECATION")
-    private val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+//    @Suppress("DEPRECATION")
     private val bondStateReceiver = BondStateReceiver()
     private val binder = LocalBinder()
 
@@ -367,7 +366,7 @@ class BluetoothService : Service() {
 
     private fun unregisterReceiver() {
         try { unregisterReceiver(bondStateReceiver) }
-        catch (e: IllegalArgumentException) { Log.w(TAG, "Receiver already unregistered") }
+        catch (_: IllegalArgumentException) { Log.w(TAG, "Receiver already unregistered") }
     }
 
     inner class BondStateReceiver : BroadcastReceiver() {
@@ -384,7 +383,7 @@ class BluetoothService : Service() {
                 }
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                     btManager.onAclDisconnected(
-                        device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE),
+                        device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java),
                         source = "ACL broadcast"
                     )
                 }
