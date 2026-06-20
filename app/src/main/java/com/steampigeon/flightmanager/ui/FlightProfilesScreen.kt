@@ -164,6 +164,10 @@ fun FlightProfilesScreen(
             viewModel.clearFlightProfileData()
             viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
             viewModel.updateFlightProfileDataDisplayState(false)
+            // Tell the locator we are back at the list so it aborts the in-flight
+            // transfer immediately (and stays quiet) instead of bursting until it
+            // times out.
+            service?.requestFlightProfileMetadata()
         } else {
             onCancelButtonClicked()
         }
@@ -243,6 +247,29 @@ fun FlightProfilesScreen(
         }
     } else {
         // ── Chart view ───────────────────────────────────────────────────
+
+        // The locator advertised a zero-length transfer: this record has no
+        // sample data.  Show a clear message instead of a perpetual loading
+        // chart, and let the user return to the list.
+        if (progress.noData) {
+            Column(
+                modifier = modifier.fillMaxHeight().padding(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("No flight data for this record")
+                Spacer(modifier = modifier.size(8.dp))
+                OutlinedButton(onClick = {
+                    viewModel.clearFlightProfileData()
+                    viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
+                    viewModel.updateFlightProfileDataDisplayState(false)
+                    service?.requestFlightProfileMetadata()
+                }) {
+                    Text(stringResource(R.string.return_to_main))
+                }
+            }
+            return
+        }
 
         // Safety: guard against stale / invalid archive position
         val metadataIndex = flightProfileMetadata.indexOfFirst { it.position == flightProfileArchivePosition }
@@ -603,6 +630,8 @@ fun FlightProfilesScreen(
                         viewModel.clearFlightProfileData()
                         viewModel.updateFlightProfileDataMessageState(LocatorMessageState.Idle)
                         viewModel.updateFlightProfileDataDisplayState(false)
+                        // Abort the locator's transfer and return it to the list.
+                        service?.requestFlightProfileMetadata()
                     }
                 ) {
                     Text(stringResource(R.string.return_to_main))

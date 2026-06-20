@@ -50,6 +50,50 @@ const val FLIGHT_DATA_ACK_SIZE     = Protocol.HEADER_SIZE + 2 + 2 + ACK_BITMAP_B
 // sizeof(FlightDataPacket) == 255 (kMaxPayloadBytes on the C++ side).
 const val FLIGHT_DATA_MAX_SIZE     = Protocol.MAX_PACKET_SIZE   // 256
 
+// Samples packed into a full FlightData packet. MUST equal
+// FlightProfileCodec::MaxSamplesPerPacket() on the C++ side
+// (1 + (kPayloadSize 239 − CompressedHeader 48) / CompressedDelta 24 = 8).
+const val SAMPLES_PER_PACKET = 8
+
+// Compressed payload capacity the locator reserves per packet (C++ kPayloadSize).
+// A FlightDataParity frame always carries the full buffer, so its on-wire size is
+// fixed even though data packets are variable-length.
+private const val FLIGHT_DATA_PAYLOAD_CAPACITY = 239
+const val FLIGHT_DATA_PARITY_SIZE = FLIGHT_DATA_HEADER_SIZE + FLIGHT_DATA_PAYLOAD_CAPACITY  // = 255
+
+// Exact on-wire length of a FlightData packet (MsgType 10), derived from its
+// header so the BLE framer can delimit it precisely. Data packets are
+// variable-length: the last packet of a transfer (and any short transfer)
+// carries fewer than SAMPLES_PER_PACKET samples.
+//
+// Returns null when fewer than FLIGHT_DATA_HEADER_SIZE bytes are buffered — the
+// caller should wait for more bytes rather than guess.
+//
+// Header layout (little-endian), offsets from start of frame:
+//   PacketHeader        @0  (6)
+//   transfer_id   u16   @6
+//   packet_index  u16   @8
+//   packet_count  u16   @10
+//   total_samples u32   @12
+fun flightDataPacketLength(buffer: ByteArray): Int? {
+    if (buffer.size < FLIGHT_DATA_HEADER_SIZE) return null
+    val o = Protocol.HEADER_SIZE
+    val packetIndex = (buffer[o + 2].toInt() and 0xFF) or
+            ((buffer[o + 3].toInt() and 0xFF) shl 8)
+    val packetCount = (buffer[o + 4].toInt() and 0xFF) or
+            ((buffer[o + 5].toInt() and 0xFF) shl 8)
+    // packet_count == 0 is the locator's "no data for this record" marker:
+    // a header-only frame with no payload.
+    if (packetCount == 0) return FLIGHT_DATA_HEADER_SIZE
+    val totalSamples = (buffer[o + 6].toLong() and 0xFF) or
+            ((buffer[o + 7].toLong() and 0xFF) shl 8) or
+            ((buffer[o + 8].toLong() and 0xFF) shl 16) or
+            ((buffer[o + 9].toLong() and 0xFF) shl 24)
+    val globalStart = packetIndex.toLong() * SAMPLES_PER_PACKET
+    val count = (totalSamples - globalStart).coerceIn(1L, SAMPLES_PER_PACKET.toLong()).toInt()
+    return FLIGHT_DATA_HEADER_SIZE + COMPRESSED_HEADER_SIZE + (count - 1) * COMPRESSED_DELTA_SIZE
+}
+
 // ============================================================================
 //  Data classes
 // ============================================================================
@@ -80,6 +124,7 @@ data class FlightTransferProgress(
     val receivedCount:  Int   = 0,
     val complete:       Boolean = false,
     val failed:         Boolean = false,
+    val noData:         Boolean = false,   // locator reported the record has no samples
 )
 
 // ============================================================================
@@ -229,6 +274,23 @@ object FlightDataRepository {
         val packetIndex    = Bytes.u16(frame, o);             o += 2
         val rxPacketCount  = Bytes.u16(frame, o);             o += 2
         val rxTotalSamples = Bytes.u32(frame, o);             o += 4
+
+        // packet_count == 0 is the locator's "no data for this record" marker.
+        // There is nothing to ACK; surface it to the UI and stop here.
+        if (rxPacketCount == 0) {
+            if (draining || rxTransferId.toInt() == 0) return null
+            if (rxTransferId.toInt() != transferId) {
+                beginTransfer()
+                transferId = rxTransferId.toInt()
+            }
+            packetCount = 0
+            _progress.value = _progress.value.copy(
+                transferId = transferId, packetCount = 0, totalSamples = 0L,
+                receivedCount = 0, complete = true, noData = true,
+            )
+            Log.d(TAG, "FlightData: empty-record marker for transfer $transferId")
+            return null
+        }
 
         if (!acceptTransferHeader(rxTransferId.toInt(), rxPacketCount, rxTotalSamples))
             return null

@@ -22,7 +22,9 @@ import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
+import com.steampigeon.flightmanager.data.FLIGHT_DATA_PARITY_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
+import com.steampigeon.flightmanager.data.flightDataPacketLength
 import com.steampigeon.flightmanager.data.FlightDataRepository
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
@@ -237,11 +239,18 @@ class BluetoothService : Service() {
             MsgType.FlightMetadata   -> FLIGHT_METADATA_PAYLOAD_SIZE
             MsgType.ReceiverInfo     -> Protocol.RECEIVER_INFO_PAYLOAD_SIZE
             MsgType.VersionInfo      -> Protocol.VERSION_INFO_PAYLOAD_SIZE
-            MsgType.FlightData,
+            MsgType.FlightData -> {
+                // Variable-length: compute the EXACT on-wire length from the packet
+                // header so the framer delimits each packet precisely. Consuming the
+                // whole buffer breaks when packets are bursted/concatenated or arrive
+                // fragmented across BLE notifications, because the CRC is computed over
+                // the full frame length and would never match.
+                // null = header not fully buffered yet → wait for more bytes.
+                return flightDataPacketLength(bytes) ?: Protocol.MAX_PACKET_SIZE
+            }
             MsgType.FlightDataParity -> {
-                // Variable length: use the buffer's actual content up to MAX_PACKET_SIZE.
-                // The CRC check in extractPackets confirms correctness.
-                return minOf(bytes.size, Protocol.MAX_PACKET_SIZE)
+                // Parity frames always carry the full payload buffer → fixed size.
+                return FLIGHT_DATA_PARITY_SIZE
             }
             else -> return Int.MAX_VALUE  // unknown type — skip
         }
