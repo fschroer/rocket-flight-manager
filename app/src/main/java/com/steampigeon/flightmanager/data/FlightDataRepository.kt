@@ -186,6 +186,11 @@ object FlightDataRepository {
     // decoded samples from packet i, or null if not yet received.
     private val samplesByPacket = arrayOfNulls<List<FlightSample>>(MAX_PACKETS)
 
+    // Transfer-health diagnostics (reset by beginTransfer):
+    private var parityRecoveredCount = 0          // packets reconstructed via parity FEC
+    private var duplicateCount       = 0          // retransmitted packets we already had
+    private val missingLogged = BooleanArray(MAX_PACKETS)  // gap warned at most once per index
+
     // -------------------------------------------------------------------------
     //  Public API
     // -------------------------------------------------------------------------
@@ -201,6 +206,9 @@ object FlightDataRepository {
         parityPayloads.forEach { it.fill(0) }
         parityReceived.fill(false)
         samplesByPacket.fill(null)
+        parityRecoveredCount = 0
+        duplicateCount       = 0
+        missingLogged.fill(false)
         _samples.value = emptyList()
         _progress.value = FlightTransferProgress()
         Log.d(TAG, "Transfer reset")
@@ -301,7 +309,8 @@ object FlightDataRepository {
         }
 
         if (received[packetIndex]) {
-            Log.d(TAG, "FlightData: duplicate packet $packetIndex — re-ACKing")
+            duplicateCount++
+            Log.d(TAG, "FlightData: duplicate packet $packetIndex — re-ACKing (duplicates=$duplicateCount)")
             return buildAck()
         }
 
@@ -326,6 +335,7 @@ object FlightDataRepository {
         Log.d(TAG, "FlightData: received packet $packetIndex / ${packetCount - 1}")
 
         tryRecoverMissingPackets()
+        logNewGaps()
         publishSamples()
         return buildAck()
     }
@@ -369,6 +379,7 @@ object FlightDataRepository {
         Log.d(TAG, "FlightDataParity: received parity for group $groupIndex")
 
         tryRecoverMissingPackets()
+        logNewGaps()
         publishSamples()
         return buildAck()
     }
@@ -481,9 +492,30 @@ object FlightDataRepository {
                 payloads[missingIndex]      = recovered
                 samplesByPacket[missingIndex] = decoded
                 received[missingIndex]      = true
-                Log.d(TAG, "Recovered packet $missingIndex (${decoded.size} samples)")
+                parityRecoveredCount++
+                Log.d(TAG, "Recovered packet $missingIndex via parity " +
+                        "(${decoded.size} samples, parity-recovered=$parityRecoveredCount)")
             } else {
                 Log.w(TAG, "Parity recovery of packet $missingIndex produced undecodable payload")
+            }
+        }
+    }
+
+    /**
+     * Log each genuinely-missing packet exactly once.  A gap *below* the highest
+     * received index means a packet was lost and parity could not (yet) recover
+     * it, so the locator will have to retransmit it.  Called after parity
+     * recovery so reconstructed packets are never falsely flagged.  Indices in
+     * the still-arriving tail (above the highest received) are not flagged —
+     * they simply haven't arrived yet.
+     */
+    private fun logNewGaps() {
+        var maxReceived = -1
+        for (i in 0 until packetCount) if (received[i]) maxReceived = i
+        for (i in 0 until maxReceived) {
+            if (!received[i] && !missingLogged[i]) {
+                missingLogged[i] = true
+                Log.w(TAG, "FlightData: packet $i missing — awaiting retransmit")
             }
         }
     }
@@ -509,7 +541,9 @@ object FlightDataRepository {
             receivedCount = receivedCount,
             complete      = complete,
         )
-        if (complete) Log.d(TAG, "Transfer complete: ${allSamples.size} samples")
+        if (complete) Log.d(TAG, "Transfer complete: ${allSamples.size} samples, " +
+                "$packetCount packets (parity-recovered=$parityRecoveredCount, " +
+                "duplicate/retransmit=$duplicateCount)")
     }
 
     /**
