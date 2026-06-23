@@ -114,6 +114,12 @@ class BluetoothService : Service() {
             processInboundBytes(bytes)
         }
 
+        // Wire the health watchdog's liveness probe. The receiver answers a
+        // ReceiverInfoRequest even when no locator is transmitting, so a probe
+        // response keeps an idle-but-healthy connection alive instead of letting
+        // the watchdog mistake locator silence for a dead (phantom) link.
+        btManager.onHealthProbe = { requestReceiverInfo() }
+
         createNotificationChannel()
         startForeground(1, getNotification())
     }

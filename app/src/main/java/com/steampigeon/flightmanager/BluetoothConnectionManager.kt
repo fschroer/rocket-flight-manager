@@ -93,6 +93,7 @@ class BluetoothManager(private val appContext: Context) {
         private const val MAX_RECONNECT_ATTEMPTS  = 5
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
         private const val DATA_TIMEOUT_MS         = 10_000L  // phantom-connection watchdog
+        private const val MAX_MISSED_HEALTH_PROBES = 3       // probes before declaring phantom
     }
 
     // -------------------------------------------------------------------------
@@ -130,6 +131,15 @@ class BluetoothManager(private val appContext: Context) {
 
     /** Wired by BluetoothService. Called on GATT callback thread with inbound bytes. */
     var onDataReceived: ((ByteArray) -> Unit)? = null
+
+    /**
+     * Wired by BluetoothService. Invoked by the health watchdog to send a
+     * receiver-info request — a message the receiver itself answers even when no
+     * locator is transmitting. Its response lets the watchdog tell a live-but-idle
+     * receiver (rocket powered off / on the pad / out of radio range) from a
+     * phantom (BLE-stack-cached) connection that delivers nothing at all.
+     */
+    var onHealthProbe: (() -> Unit)? = null
 
     // -------------------------------------------------------------------------
     // Bluetooth enable
@@ -568,23 +578,43 @@ class BluetoothManager(private val appContext: Context) {
     }
 
     /**
-     * Starts a one-shot watchdog that fires [DATA_TIMEOUT_MS] after the
-     * connection reaches [BluetoothConnectionState.Ready]. If no GATT
-     * characteristic notification has arrived since Ready was established,
-     * the connection is treated as a phantom (BLE-stack-cached) link and
-     * [onAclDisconnected] is called to trigger a proper reconnect.
+     * Starts a repeating watchdog that, every [DATA_TIMEOUT_MS] after the
+     * connection reaches [BluetoothConnectionState.Ready], checks whether any
+     * GATT notification has arrived since the previous check.
+     *
+     * A silent window does NOT immediately mean a dead link: a healthy receiver
+     * has nothing to relay when no locator is transmitting (rocket powered off,
+     * on the pad, or out of radio range). To tell that apart from a phantom
+     * (BLE-stack-cached) connection, each silent window triggers [onHealthProbe],
+     * which asks the receiver for its own info — a message a live receiver answers
+     * regardless of locator activity. Only after [MAX_MISSED_HEALTH_PROBES]
+     * consecutive probes go unanswered is the link treated as phantom and
+     * [onAclDisconnected] called to force a reconnect.
      */
     private fun startHealthWatchdog() {
         connectionHealthJob?.cancel()
-        val watchdogStart = System.currentTimeMillis()
         connectionHealthJob = scope.launch {
-            delay(DATA_TIMEOUT_MS)
-            if (lastDataTime < watchdogStart) {
-                Log.w(tag, "Health watchdog: no GATT data in ${DATA_TIMEOUT_MS}ms since Ready — " +
-                        "probable phantom connection, forcing reconnect")
-                onAclDisconnected(bluetoothGatt?.device, source = "health watchdog")
-            } else {
-                Log.d(tag, "Health watchdog: data received — connection is live")
+            var missedProbes = 0
+            var lastCheck = System.currentTimeMillis()
+            while (true) {
+                delay(DATA_TIMEOUT_MS)
+                if (lastDataTime >= lastCheck) {
+                    // Locator relay data or a probe response arrived — link is live.
+                    missedProbes = 0
+                    Log.d(tag, "Health watchdog: data received — connection is live")
+                } else {
+                    missedProbes++
+                    if (missedProbes >= MAX_MISSED_HEALTH_PROBES) {
+                        Log.w(tag, "Health watchdog: $missedProbes probes unanswered — " +
+                                "probable phantom connection, forcing reconnect")
+                        onAclDisconnected(bluetoothGatt?.device, source = "health watchdog")
+                        return@launch
+                    }
+                    Log.d(tag, "Health watchdog: silent for ${DATA_TIMEOUT_MS}ms — " +
+                            "probing receiver (miss $missedProbes/$MAX_MISSED_HEALTH_PROBES)")
+                    onHealthProbe?.invoke()
+                }
+                lastCheck = System.currentTimeMillis()
             }
         }
     }
