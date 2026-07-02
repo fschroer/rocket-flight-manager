@@ -118,6 +118,9 @@ fun ReceiverSettingsScreen(
                 )
                 viewModel.updateReceiverConfigChanged(true)
             }
+            // Receiver-only channel change: used to point the receiver at a *different*
+            // locator that is already on another channel.  (Changing a locator's own
+            // channel is done from Locator Settings, where the receiver auto-follows.)
             ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.locator_channel),
                 initialConfigValue = stagedReceiverConfig.channel,

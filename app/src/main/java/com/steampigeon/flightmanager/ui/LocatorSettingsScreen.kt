@@ -379,6 +379,17 @@ fun LocatorSettingsScreen(
                 viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(
+                configItemName = stringResource(R.string.locator_channel),
+                initialConfigValue = stagedLocatorConfig.loraChannel,
+                minValue = 0,
+                maxValue = 63,
+                configMessageState = locatorConfigMessageState,
+                modifier = modifier
+            ) { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(loraChannel = newConfigValue)
+                viewModel.updateLocatorConfigChanged(true)
+            }
+            ConfigurationItemNumeric(
                 configItemName = stringResource(R.string.launch_detect_altitude),
                 initialConfigValue = stagedLocatorConfig.launchDetectAltitude,
                 minValue = 10,
@@ -426,7 +437,7 @@ fun LocatorSettingsScreen(
                             viewModel.updateLocatorConfigMessageState(LocatorMessageState.Sent)
                         else
                             viewModel.updateLocatorConfigMessageState(LocatorMessageState.SendFailure)
-                        viewModel.updateLocatorConfigState(stagedLocatorConfig)
+                        viewModel.updateLocatorConfigState(stagedLocatorConfig, service)
                     }
                 }
             ) {

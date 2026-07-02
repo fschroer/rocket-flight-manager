@@ -422,6 +422,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     mainPrimaryDeployAltitude = parsed.msg.mainPrimaryAltitude,
                                     mainBackupDeployAltitude = parsed.msg.mainBackupAltitude,
                                     deploySignalDuration = 10, // To do: remove from UI
+                                    // A received PreLaunchData proves the locator and
+                                    // receiver share a channel, and the receiver appends
+                                    // that channel as receiverChannel.  Use it as the
+                                    // locator's current LoRa channel so Locator Settings
+                                    // shows the true value and channel changes can be
+                                    // confirmed by whole-object equality below.
+                                    loraChannel = parsed.msg.receiverChannel,
                                     deviceName = parsed.msg.deviceName,
                                 )
                             }
@@ -869,26 +876,85 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun updateLocatorConfigState(stagedLocatorConfig: LocatorConfig) {
+    fun updateLocatorConfigState(
+        stagedLocatorConfig: LocatorConfig,
+        service: BluetoothService? = null,
+    ) {
         viewModelScope.launch {
-            for (i in 1..50) {
-                delay(100)
-                if (_remoteLocatorConfig.value == stagedLocatorConfig) {
+            // Channel to fall back to if the locator never confirms the change.
+            // Captured before polling, while remoteLocatorConfig still reflects the
+            // last channel PreLaunchData arrived on (i.e. the old channel).
+            val oldChannel = _remoteLocatorConfig.value.loraChannel
+            val channelChanged = stagedLocatorConfig.loraChannel != oldChannel
+
+            if (waitForLocatorConfig(stagedLocatorConfig)) {
+                _locatorConfigMessageState.value = LocatorMessageState.AckUpdated
+            } else if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure) {
+                // The BLE send itself failed: nothing left the phone, so the receiver
+                // never switched and there is nothing to recover.  Leave SendFailure.
+            } else if (channelChanged && service != null) {
+                // The locator never appeared on the new channel, so it likely missed
+                // the LoRa command and is still on the old channel — but the receiver
+                // already followed the command onto the new channel, so the link is
+                // split.  Pull the receiver back to the old channel, wait for the link
+                // to resume, then retry the locator change once.
+                if (recoverLocatorChannel(stagedLocatorConfig, oldChannel, service))
                     _locatorConfigMessageState.value = LocatorMessageState.AckUpdated
-                    break
-                }
-                else if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure)
-                    break
-            }
-            if (_locatorConfigMessageState.value == LocatorMessageState.SendRequested ||
+                else
+                    _locatorConfigMessageState.value = LocatorMessageState.NotAcknowledged
+            } else if (_locatorConfigMessageState.value == LocatorMessageState.SendRequested ||
                 _locatorConfigMessageState.value == LocatorMessageState.Sent) {
                 _locatorConfigMessageState.value = LocatorMessageState.NotAcknowledged
             }
+
             if (_locatorConfigMessageState.value == LocatorMessageState.AckUpdated)
                 _locatorConfigChanged.value = false
             delay(2000)
             _locatorConfigMessageState.value = LocatorMessageState.Idle
         }
+    }
+
+    // Poll ~5 s for the locator config to be echoed back (via PreLaunchData).
+    // Returns true on confirmation, false on timeout or an explicit send failure.
+    private suspend fun waitForLocatorConfig(stagedLocatorConfig: LocatorConfig): Boolean {
+        for (i in 1..50) {
+            delay(100)
+            if (_remoteLocatorConfig.value == stagedLocatorConfig)
+                return true
+            if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure)
+                return false
+        }
+        return false
+    }
+
+    // Recovery for a failed channel change: move the receiver back to the old channel
+    // (BLE, always reachable), wait for PreLaunchData to resume, then re-send the
+    // locator change once.  Returns true if the retry is confirmed.
+    private suspend fun recoverLocatorChannel(
+        stagedLocatorConfig: LocatorConfig,
+        oldChannel: Int,
+        service: BluetoothService,
+    ): Boolean {
+        service.changeReceiverConfig(
+            ReceiverConfig(channel = oldChannel, deviceName = _remoteReceiverConfig.value.deviceName)
+        )
+        // Wait for the link to come back on the old channel.
+        var relinked = false
+        for (i in 1..50) {
+            delay(100)
+            if (_remoteReceiverConfig.value.channel == oldChannel &&
+                _remoteLocatorConfig.value.loraChannel == oldChannel) {
+                relinked = true
+                break
+            }
+        }
+        if (!relinked)
+            return false
+        // Retry the locator channel change once now that the link is restored.
+        if (service.changeLocatorConfig(stagedLocatorConfig) != true)
+            return false
+        _locatorConfigMessageState.value = LocatorMessageState.Sent
+        return waitForLocatorConfig(stagedLocatorConfig)
     }
 
     fun updateFlightMetadataState() {
