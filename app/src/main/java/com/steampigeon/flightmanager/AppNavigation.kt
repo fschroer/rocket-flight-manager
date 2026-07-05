@@ -35,7 +35,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -60,6 +62,7 @@ import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.DevicePickerDialog
 import com.steampigeon.flightmanager.ui.FlightProfilesScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
+import com.steampigeon.flightmanager.ui.LocatorPasswordDialog
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
@@ -375,6 +378,23 @@ fun RocketApp(
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
         }
+    }
+
+    // App-wide locator password challenge. Appears over any screen so a fresh app
+    // that hears an unknown locator on startup prompts to connect, as well as for a
+    // deliberate receiver channel change onto an unknown locator.
+    val challenge by viewModel.challenge.collectAsState()
+    val challengeError by viewModel.challengeError.collectAsState()
+    val challengeScope = rememberCoroutineScope()
+    challenge?.let { c ->
+        LocatorPasswordDialog(
+            deviceName = c.deviceName,
+            isChannelChange = c.previousChannel != null,
+            error = challengeError,
+            onSubmit = { pw -> challengeScope.launch { viewModel.submitPassword(pw) } },
+            onDismiss = { viewModel.cancelChallenge(bluetoothService) },
+            onEdit = { viewModel.clearChallengeError() },
+        )
     }
 }
 

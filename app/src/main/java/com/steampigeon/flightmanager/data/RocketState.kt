@@ -17,7 +17,11 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 126 // PreLaunchData payload (101) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 126
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 134 // PreLaunchData payload (109 = 101 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 134
+    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 109).
+    // The password auth_tag is computed over exactly these bytes (with crc and
+    // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
+    const val PRELAUNCH_BASE_STRUCT_SIZE = 115
     const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 64 // vel_ned (12) + q_bn (16) replaces accel (12) + gyro (12) + velocity (4); + rssi (2)
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
@@ -307,6 +311,8 @@ data class PrelaunchParsed(
     val mainBackupAltitude: Int,  // uint16_t
     val deviceName: String,       // char[device_name_length]
     val locatorBatteryMv: Int,    // uint16_t
+    val locatorId: Long,          // uint32_t — cleartext STM MPU UID
+    val authTag: Long,            // uint32_t — password-seeded checksum from the locator
     val receiverChannel: Int,     // uint8_t
     val receiverBatteryMv: Int,   // uint16_t
     val receiverName: String,     // char[device_name_length]

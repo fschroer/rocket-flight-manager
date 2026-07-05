@@ -17,7 +17,9 @@ import com.google.android.gms.maps.model.LatLng
 import com.mutualmobile.composesensors.AccelerometerSensorState
 import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
+import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
+import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
@@ -28,8 +30,11 @@ import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.FlightSample
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
@@ -110,6 +115,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 _voiceEnabled.value = preferences.voiceEnabled
                 _voiceName.value = preferences.voiceName
                 _remoteReceiverConfig.update { it.copy(deviceName = preferences.receiverName) }
+                _knownLocators.value = preferences.knownLocatorsMap.mapKeys { it.key.toLong() and 0xFFFFFFFFL }
+                knownLocatorsLoaded = true
             }
         }
         // Reset receiver config whenever the user selects a *different* receiver so
@@ -202,11 +209,189 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _remoteReceiverConfig = MutableStateFlow<ReceiverConfig>(ReceiverConfig())
     val remoteReceiverConfig: StateFlow<ReceiverConfig> = _remoteReceiverConfig.asStateFlow()
 
+    // -------------------------------------------------------------------------
+    // Locator recognition / password gating
+    //
+    // A locator is "recognised" when the app holds a password key that
+    // authenticates its PreLaunchData auth_tag (or the locator is open, key 0).
+    // Only recognised locators are processed for control and enabled for sending.
+    // -------------------------------------------------------------------------
+    private val _knownLocators = MutableStateFlow<Map<Long, KnownLocator>>(emptyMap())
+
+    // The locator_id the app currently recognises (null = none → sending gated off).
+    private val _recognizedLocatorId = MutableStateFlow<Long?>(null)
+    val recognizedLocatorId: StateFlow<Long?> = _recognizedLocatorId.asStateFlow()
+    val locatorRecognized: StateFlow<Boolean> =
+        _recognizedLocatorId.map { it != null }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // An unrecognised locator_id currently heard on the channel. Drives a
+    // non-blocking warning banner; cleared on recognition, dismiss, or channel change.
+    private val _conflictLocatorId = MutableStateFlow<Long?>(null)
+    val conflictLocatorId: StateFlow<Long?> = _conflictLocatorId.asStateFlow()
+
+    // Active password challenge, shown app-wide. Raised either by a receiver channel
+    // change that landed on an unknown locator (previousChannel != null → cancel
+    // reverts the channel), or passively on first contact with an unknown locator
+    // while not connected (previousChannel == null → cancel just dismisses).
+    data class LocatorChallenge(val locatorId: Long, val deviceName: String, val previousChannel: Int?)
+    private val _challenge = MutableStateFlow<LocatorChallenge?>(null)
+    val challenge: StateFlow<LocatorChallenge?> = _challenge.asStateFlow()
+
+    // True after a wrong password; the dialog stays open to retry.
+    private val _challengeError = MutableStateFlow(false)
+    val challengeError: StateFlow<Boolean> = _challengeError.asStateFlow()
+
+    // PreLaunchData frame from the challenged locator, refreshed while the dialog is
+    // open, so a typed password is verified against that locator's auth_tag.
+    @Volatile private var challengeFrame: ByteArray? = null
+    // Latest PreLaunchData frame (any locator), so the conflict banner's Connect
+    // action can re-raise a challenge after a dismiss.
+    @Volatile private var lastPrelaunchFrame: ByteArray? = null
+    private var lastPrelaunchLocatorId: Long? = null
+    private var lastPrelaunchDeviceName: String = ""
+    // Passive challenges the user dismissed this session (don't auto-reprompt).
+    private val declinedLocatorIds = mutableSetOf<Long>()
+    // True once the known-locator store has loaded, so the first PreLaunchData does not
+    // passively prompt for an already-known locator before the store is read.
+    @Volatile private var knownLocatorsLoaded = false
+    private var awaitingChannelRecognition = false
+    private var channelChangePreviousChannel = 0
+
     private val _receiverConfigChanged = MutableStateFlow<Boolean>(false)
     val receiverConfigChanged: StateFlow<Boolean> = _receiverConfigChanged.asStateFlow()
 
     fun updateReceiverConfigChanged(newReceiverConfigChanged: Boolean) {
         _receiverConfigChanged.value = newReceiverConfigChanged
+    }
+
+    /**
+     * Evaluate recognition for an incoming PreLaunchData [frame].  Called for every
+     * PreLaunchData: recognises known/open locators automatically, raises the
+     * channel-change password challenge when a deliberate channel change lands on
+     * an unrecognised locator, and flags passive conflicting traffic otherwise.
+     */
+    private fun evaluateRecognition(frame: ByteArray, locatorId: Long, deviceName: String) {
+        lastPrelaunchFrame = frame
+        lastPrelaunchLocatorId = locatorId
+        lastPrelaunchDeviceName = deviceName
+        val knownKey = _knownLocators.value[locatorId]?.passwordKey?.toLong()?.and(0xFFFFFFFFL)
+        val recognized =
+            (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey)) ||
+                    LocatorAuth.verifyFrame(frame, 0L)   // open locator (no password)
+
+        // Keep the challenge frame fresh while a dialog for this locator is open.
+        if (_challenge.value?.locatorId == locatorId) challengeFrame = frame
+
+        if (recognized) {
+            _recognizedLocatorId.value = locatorId
+            _conflictLocatorId.value = null
+            awaitingChannelRecognition = false
+            if (_challenge.value?.locatorId == locatorId) _challenge.value = null
+            return
+        }
+        if (awaitingChannelRecognition) {
+            // Deliberate channel change landed on an unknown locator → challenge (cancel reverts).
+            awaitingChannelRecognition = false
+            challengeFrame = frame
+            _challengeError.value = false
+            _challenge.value = LocatorChallenge(locatorId, deviceName, channelChangePreviousChannel)
+            return
+        }
+        // Passive: unrecognised traffic on the current channel — warn, and (if we are
+        // not already connected) prompt to connect on first contact with this locator.
+        _conflictLocatorId.value = locatorId
+        if (knownLocatorsLoaded && _recognizedLocatorId.value == null && _challenge.value == null &&
+            locatorId !in declinedLocatorIds) {
+            challengeFrame = frame
+            _challengeError.value = false
+            _challenge.value = LocatorChallenge(locatorId, deviceName, null)
+        }
+    }
+
+    /** Arm the channel-change flow: the next PreLaunchData on the new channel decides
+     *  recognition, or raises a password challenge (cancel reverts to [previousChannel]). */
+    fun beginChannelChangeRecognition(previousChannel: Int) {
+        channelChangePreviousChannel = previousChannel
+        awaitingChannelRecognition = true
+        _recognizedLocatorId.value = null
+        _conflictLocatorId.value = null
+        _challenge.value = null
+        _challengeError.value = false
+    }
+
+    /** Submit a password for the active challenge. Correct → remember + recognise +
+     *  close. Wrong → keep the dialog open with an error so the user can retry. */
+    suspend fun submitPassword(password: String): Boolean {
+        val challenge = _challenge.value ?: return false
+        val frame = challengeFrame ?: return false
+        val key = LocatorAuth.deriveKey(password)
+        val ok = LocatorAuth.verifyFrame(frame, key)
+        if (ok) {
+            rememberLocator(challenge.locatorId, key, challenge.deviceName)
+            _recognizedLocatorId.value = challenge.locatorId
+            _conflictLocatorId.value = null
+            declinedLocatorIds.remove(challenge.locatorId)
+            _challenge.value = null
+            _challengeError.value = false
+        } else {
+            _challengeError.value = true
+        }
+        return ok
+    }
+
+    /** Dismiss the active challenge. A channel-change challenge reverts the receiver to
+     *  the previous channel (and resets the Receiver Settings state so the UI reflects
+     *  it); a passive challenge is remembered as declined so it does not re-prompt. */
+    fun cancelChallenge(service: BluetoothService?) {
+        val challenge = _challenge.value ?: return
+        val prev = challenge.previousChannel
+        if (prev != null) {
+            service?.changeReceiverConfig(_remoteReceiverConfig.value.copy(channel = prev))
+            _receiverConfigChanged.value = false
+            updateReceiverConfigMessageState(LocatorMessageState.Idle)
+        } else {
+            declinedLocatorIds.add(challenge.locatorId)
+        }
+        _challenge.value = null
+        _challengeError.value = false
+    }
+
+    fun clearChallengeError() { _challengeError.value = false }
+
+    /** Re-raise the password prompt for the currently-warned unrecognised locator.
+     *  Lets the user connect after having dismissed the automatic prompt. */
+    fun requestConnectToConflict() {
+        val id = _conflictLocatorId.value ?: return
+        if (_recognizedLocatorId.value == id) return
+        declinedLocatorIds.remove(id)
+        if (lastPrelaunchLocatorId == id) challengeFrame = lastPrelaunchFrame
+        _challengeError.value = false
+        _challenge.value = LocatorChallenge(id, lastPrelaunchDeviceName, null)
+    }
+
+    /** No PreLaunchData arrived after a channel change — stop waiting (no locator found). */
+    fun channelChangeRecognitionTimedOut() {
+        awaitingChannelRecognition = false
+    }
+
+    fun dismissConflict() {
+        _conflictLocatorId.value = null
+    }
+
+    private suspend fun rememberLocator(locatorId: Long, passwordKey: Long, label: String) {
+        currentContext.userPreferencesDataStore.updateData { prefs ->
+            prefs.toBuilder()
+                .putKnownLocators(
+                    locatorId.toInt(),
+                    KnownLocator.newBuilder()
+                        .setId(locatorId.toInt())
+                        .setPasswordKey(passwordKey.toInt())
+                        .setLabel(label)
+                        .build()
+                )
+                .build()
+        }
     }
 
     private val _locatorConfigChanged = MutableStateFlow<Boolean>(false)
@@ -368,6 +553,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     @OptIn(ExperimentalUnsignedTypes::class)
     fun collectInboundMessageData(service: BluetoothService) {
+        // Keep the service's send gate in sync with recognition so only an authorized
+        // (recognised) locator can be commanded.
+        viewModelScope.launch {
+            recognizedLocatorId.collect { service.locatorAuthorized = it != null }
+        }
         viewModelScope.launch {
             service.packets.collect { locatorMessage ->
 //                Log.d("Collector", "Received packet size=${locatorMessage.size} bytes")
@@ -375,6 +565,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 try {
                     when (val parsed = parseIncoming(locatorMessage)) {
                         is ParsedMessage.Prelaunch -> {
+                            // Gate BEFORE display: identify + authenticate the sender first,
+                            // and surface its telemetry/config only if THIS locator is
+                            // recognised. Dismissing the password prompt leaves the sender
+                            // unrecognised, so its data is never shown (no bypass).
+                            evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
+                            if (_recognizedLocatorId.value == parsed.msg.locatorId) {
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -432,6 +628,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     deviceName = parsed.msg.deviceName,
                                 )
                             }
+                            } // end recognised-locator gate
+                            // Receiver metadata (channel/name) is the user's own receiver,
+                            // not the locator — reflect it regardless of recognition so the
+                            // Receiver Settings channel display and challenge flow still work.
                             _remoteReceiverConfig.update { currentState ->
                                 currentState.copy(
                                     channel = parsed.msg.receiverChannel,
@@ -443,6 +643,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                         is ParsedMessage.Telemetry -> {
+                            // Telemetry carries no locator id (kept minimal for range), so it
+                            // is processed only while connected to a recognised locator.
+                            if (_recognizedLocatorId.value != null) {
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -491,6 +694,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 saveFlightPath()
                             }
                             _previousFlightState = newFlightState
+                            } // end recognised-locator gate
                         }
                         is ParsedMessage.DeploymentTest -> {
                             val deploymentTestCountdown = parsed.msg.count
@@ -1051,6 +1255,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         o += Protocol.DEVICE_NAME_LENGTH
 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
+        val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
+        val authTag = Bytes.u32(frame, o); o += 4
         val channel = Bytes.u8(frame[o]); o += 1
         val receiverBatteryMv = Bytes.u16(frame, o); o += 2
         val receiverNameBytes = frame.copyOfRange(o, o + Protocol.DEVICE_NAME_LENGTH)
@@ -1069,6 +1275,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
             deviceName, locatorBatteryMv,
+            locatorId, authTag,
             channel, receiverBatteryMv,
             receiverName, rssi
         )

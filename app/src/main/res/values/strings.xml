@@ -50,4 +50,14 @@
     <string name="update_not_acknowledged">Not Received</string>
     <string name="updated">Updated</string>
     <string name="updating">Updating</string>
+    <string name="connect">Connect</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="password">Password</string>
+    <string name="show_password">Show password</string>
+    <string name="hide_password">Hide password</string>
+    <string name="incorrect_password">Incorrect password. Try again.</string>
+    <string name="locator_password_title">Locator password</string>
+    <string name="locator_password_prompt">Enter the password to connect to “%1$s”.</string>
+    <string name="locator_conflict_warning">Another locator (ID %1$s) is transmitting on this channel. Consider switching to an uncontested channel.</string>
+    <string name="locator_unrecognized_prompt">Locator ID %1$s found. Enter its password to connect.</string>
 </resources>

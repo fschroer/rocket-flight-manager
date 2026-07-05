@@ -21,9 +21,10 @@ class WireLayoutTest {
 
     @Test fun headerSize() = assertEquals(6, Protocol.HEADER_SIZE)
 
-    // PreLaunchData: C++ sizeof 107 → payload 101; + channel 1 + recv battery 2
-    //                + recv name 20 + rssi 2 = 126
-    @Test fun prelaunchPayloadSize() = assertEquals(126, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
+    // PreLaunchData: C++ sizeof 115 → payload 109 (101 + locator_id 4 + auth_tag 4);
+    //                + channel 1 + recv battery 2 + recv name 20 + rssi 2 = 134
+    @Test fun prelaunchPayloadSize() = assertEquals(134, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
+    @Test fun prelaunchBaseStructSize() = assertEquals(115, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
 
     // TelemetryData: C++ sizeof 68 → payload 62; + rssi 2 = 64
     @Test fun telemetryPayloadSize() = assertEquals(64, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)

@@ -10,4 +10,14 @@ message UserPreferences {
   bool voice_enabled = 3;
   string voice_name = 4;
   string receiver_name = 5;
+  // Locators the app has been authorised to connect to (keyed by locator_id).
+  // Presence + a matching password_key lets the app recognise a locator's
+  // PreLaunchData without re-prompting for its password.
+  map<uint32, KnownLocator> known_locators = 6;
+}
+
+message KnownLocator {
+  fixed32 id = 1;            // locator_id (STM MPU UID)
+  fixed32 password_key = 2;  // FNV-1a of the accepted password (0 = open)
+  string label = 3;          // device name last seen, for display
 }

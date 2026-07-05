@@ -699,6 +699,8 @@ private fun MapWithOverlays(
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
+        // Password gating: only a recognised locator may be armed from the app.
+        val locatorRecognized = viewModel.locatorRecognized.collectAsState().value
         var autoTargetMode by remember { mutableStateOf(true) }
         var autoZoomMode by remember { mutableStateOf(true) }
         var compassEnabled by remember { mutableStateOf(true) }
@@ -860,6 +862,7 @@ private fun MapWithOverlays(
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
                     textToSpeech = textToSpeech,
+                    locatorRecognized = locatorRecognized,
                     modifier = Modifier,
                 )
             }
@@ -1187,6 +1190,7 @@ private fun MapControlsColumn(
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
     textToSpeech: TextToSpeech?,
+    locatorRecognized: Boolean = true,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -1255,8 +1259,9 @@ private fun MapControlsColumn(
                 .padding(8.dp)
                 .pointerInput(Unit) {
                     detectTapGestures {
-                        val canAcceptTap = currentArmedMsgState == LocatorMessageState.Idle ||
-                            currentArmedMsgState == LocatorMessageState.AckUpdated
+                        val canAcceptTap = (currentArmedMsgState == LocatorMessageState.Idle ||
+                            currentArmedMsgState == LocatorMessageState.AckUpdated) &&
+                            locatorRecognized
                         if (!canAcceptTap) return@detectTapGestures
                         val now = System.currentTimeMillis()
                         when {

@@ -356,9 +356,19 @@ class BluetoothService : Service() {
     fun requestVersionInfo(): Boolean =
         sendMessage(MsgType.VersionRequest, null)
 
+    // Password gate: set by the ViewModel from its recognition state. Until the app
+    // has recognised (been authorised for) the current locator, only receiver-directed
+    // messages are sent — so an unrecognised locator cannot be armed, configured,
+    // deployment-tested, or have its flight data pulled from the standard app.
+    @Volatile var locatorAuthorized: Boolean = false
+
     @SuppressLint("MissingPermission")
-    private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean =
-        btManager.sendData(buildMessage(msgType, payload))
+    private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean {
+        val receiverDirected =
+            msgType == MsgType.ReceiverCfgChgRequest || msgType == MsgType.ReceiverInfoRequest
+        if (!locatorAuthorized && !receiverDirected) return false
+        return btManager.sendData(buildMessage(msgType, payload))
+    }
 
     private fun buildMessage(msgType: MsgType, payload: ByteArray?): ByteArray {
         val payloadBytes = payload ?: ByteArray(0)

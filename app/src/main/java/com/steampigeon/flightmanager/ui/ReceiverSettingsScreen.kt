@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,6 +48,10 @@ fun ReceiverSettingsScreen(
     val rocketState by viewModel.rocketState.collectAsState()
     val receiverVersion by viewModel.receiverVersion.collectAsState()
     val bluetoothConnectionState by BluetoothManagerRepository.bluetoothConnectionState.collectAsState()
+    // The password challenge dialog itself is hosted app-wide (see RocketApp); this
+    // screen only arms the channel-change flow and shows the unrecognised-locator banner.
+    val conflictLocatorId by viewModel.conflictLocatorId.collectAsState()
+    val locatorRecognized by viewModel.locatorRecognized.collectAsState()
 
     // Keep the staged copy in sync with the remote config as long as the user
     // has not made any local edits.  This ensures that arriving PreLaunchData
@@ -95,6 +101,36 @@ fun ReceiverSettingsScreen(
             .fillMaxHeight()
             .padding(16.dp)
     ) {
+        // Conflicting-traffic warning: an unrecognised locator is transmitting on the
+        // current channel.  Non-blocking; the user can switch to an uncontested channel.
+        conflictLocatorId?.let { id ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    // When already connected to a different locator, this is genuine
+                    // conflicting traffic → advise switching channel. When not yet
+                    // connected, it's simply a new locator to connect to → invite a password.
+                    text = if (locatorRecognized)
+                        stringResource(R.string.locator_conflict_warning, "%08X".format(id))
+                    else
+                        stringResource(R.string.locator_unrecognized_prompt, "%08X".format(id)),
+                    color = if (locatorRecognized)
+                        MaterialTheme.colorScheme.error
+                    else
+                        MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { viewModel.requestConnectToConflict() }) {
+                    Text(stringResource(R.string.connect))
+                }
+                TextButton(onClick = { viewModel.dismissConflict() }) {
+                    Text(stringResource(R.string.dismiss))
+                }
+            }
+        }
+
         Column(
             modifier = modifier.padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
@@ -157,6 +193,12 @@ fun ReceiverSettingsScreen(
                 enabled = (receiverConfigChanged && receiverConfigMessageState == LocatorMessageState.Idle),
                 onClick = {
                     if (receiverConfigMessageState == LocatorMessageState.Idle) {
+                        // A channel change points the receiver at a (possibly different)
+                        // locator.  Arm recognition first so the next PreLaunchData on the
+                        // new channel is recognised, challenged for a password, or reverted.
+                        if (stagedReceiverConfig.channel != remoteReceiverConfig.channel) {
+                            viewModel.beginChannelChangeRecognition(remoteReceiverConfig.channel)
+                        }
                         viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendRequested)
                         if (service?.changeReceiverConfig(stagedReceiverConfig) == true)
                             viewModel.updateReceiverConfigMessageState(LocatorMessageState.Sent)
