@@ -1,11 +1,15 @@
 <resources>
     <string name="app_name">Wherezit?</string>
+    <string name="action_arm">Arm</string>
+    <string name="action_disarm">Disarm</string>
+    <string name="action_rescan">Rescan</string>
     <string name="application_settings">Application Settings</string>
     <string name="armed_state_armed">Armed</string>
     <string name="armed_state_arming">Arming</string>
     <string name="armed_state_disarmed">Disarmed</string>
     <string name="armed_state_disarming">Disarming</string>
     <string name="back_button">Back</string>
+    <string name="disarm_in_flight_blocked">Can\'t disarm while the rocket is in flight. Wait until it has landed.</string>
     <string name="battery_0_bar">Battery Empty</string>
     <string name="battery_1_bar">Battery 1 Bar</string>
     <string name="battery_2_bar">Battery 2 Bars</string>

@@ -8,11 +8,13 @@ import android.content.res.Configuration
 import android.location.Location
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -20,6 +22,10 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -52,6 +58,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -176,6 +183,7 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 private const val messageTimeout = 2000
+private const val actionPanelCollapseDelay = 5000L   // auto-collapse the Rescan/Arm action panel after this idle time
 
 // Consistent semi-transparent overlay background used for all map UI panels and buttons.
 // Derived from secondaryContainerLight (#5D6F96) at 75% opacity.
@@ -303,6 +311,9 @@ fun HomeScreen(
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     var trackerLocation by remember { mutableStateOf<Location?>(null) }
+    // Stand-in used until the first fix so the map can render right away; its 0,0
+    // coordinates read as "no tracker GPS" everywhere downstream (validLatLng).
+    val fallbackTrackerLocation = remember { Location("fallback") }
     val locationPermissionState = permissionsState.permissions
         .find { it.permission == Manifest.permission.ACCESS_FINE_LOCATION }
     val locationCallback = remember {
@@ -314,6 +325,12 @@ fun HomeScreen(
     }
     DisposableEffect(locationPermissionState?.hasPermission) {
         if (locationPermissionState?.hasPermission == true) {
+            // Seed from the cached fix so the map can render immediately instead of
+            // waiting for the first live GPS update (which can take many seconds, or
+            // never arrive indoors / with GPS off).
+            fusedLocationClient.lastLocation.addOnSuccessListener { cached ->
+                if (trackerLocation == null && cached != null) trackerLocation = cached
+            }
             val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3_000L).build()
             fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
         }
@@ -389,9 +406,14 @@ fun HomeScreen(
                 modifier = Modifier.onGloballyPositioned { scaffoldSize = it.size },
                 floatingActionButton = {},
             ) {
-                trackerLocation?.let { location ->
+                // Render the map even before the first GPS fix.  Downstream code
+                // treats a 0,0 location as "no tracker GPS" (validLatLng) and simply
+                // omits the phone position from auto-zoom until a real fix arrives,
+                // so the map (and its controls) appear immediately rather than
+                // blocking on location the way an early-return null gate did.
+                run {
                     MapWithOverlays(
-                        trackerLocation = location,
+                        trackerLocation = trackerLocation ?: fallbackTrackerLocation,
                         rocketState = rocketState,
                         armedState = armedState,
                         receiverDeviceName = receiverDeviceName,
@@ -705,6 +727,9 @@ private fun MapWithOverlays(
         var autoZoomMode by remember { mutableStateOf(true) }
         var compassEnabled by remember { mutableStateOf(true) }
         var showControls by remember { mutableStateOf(false) }
+        // Hoisted so a tap anywhere on the map (onMapClick) can collapse the
+        // status-panel action dropdown, not just the timeout or a second panel tap.
+        var actionsExpanded by remember { mutableStateOf(false) }
         var googleMap by remember { mutableStateOf<GoogleMap?>(null) }
         var is3DView by remember { mutableStateOf(false) }
         var mapSizePx by remember { mutableStateOf(IntSize.Zero) }
@@ -722,13 +747,35 @@ private fun MapWithOverlays(
             rocketMarkerState.position = locatorLatLng
         }
 
+        // One-shot recenter: the map now renders before the first GPS fix (initial
+        // camera falls back to 0,0), and auto-target only kicks in once the rocket
+        // has GPS.  So as soon as the phone's own position is known — and while the
+        // rocket still has none — snap the camera to the phone once, mirroring the
+        // pre-render behaviour without reintroducing the blank-screen wait.
+        var didInitialCenter by remember { mutableStateOf(false) }
+        LaunchedEffect(isMapLoaded, trackerLocation.latitude, trackerLocation.longitude) {
+            val trackerValid = trackerLocation.latitude != 0.0 || trackerLocation.longitude != 0.0
+            val rocketValid = rocketState.latitude != 0.0 || rocketState.longitude != 0.0
+            if (!didInitialCenter && isMapLoaded && trackerValid && !rocketValid) {
+                cameraPositionState.position = CameraPosition.Builder()
+                    .target(LatLng(trackerLocation.latitude, trackerLocation.longitude))
+                    .zoom(12f)
+                    .bearing(azimuth)
+                    .build()
+                didInitialCenter = true
+            }
+        }
+
         GoogleMap(
             modifier = Modifier.fillMaxSize().onSizeChanged { mapSizePx = it },
             onMapLoaded = onMapLoaded,
             cameraPositionState = cameraPositionState,
             properties = properties,
             uiSettings = mapUiSettings,
-            onMapClick = { showControls = !showControls }
+            onMapClick = {
+                showControls = !showControls
+                actionsExpanded = false
+            }
         ) {
             MapEffect(Unit) { map -> googleMap = map }
             Marker(
@@ -863,6 +910,8 @@ private fun MapWithOverlays(
                     onRescan = onRescan,
                     textToSpeech = textToSpeech,
                     locatorRecognized = locatorRecognized,
+                    actionsExpanded = actionsExpanded,
+                    onActionsExpandedChange = { actionsExpanded = it },
                     modifier = Modifier,
                 )
             }
@@ -1191,6 +1240,8 @@ private fun MapControlsColumn(
     onRescan: () -> Unit,
     textToSpeech: TextToSpeech?,
     locatorRecognized: Boolean = true,
+    actionsExpanded: Boolean,
+    onActionsExpandedChange: (Boolean) -> Unit,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -1204,32 +1255,41 @@ private fun MapControlsColumn(
         val nameWidth = 190.dp     // fits DEVICE_NAME_LENGTH characters at body size
         val batterySize = 20.dp
         val batteryBoxWidth = 24.dp
+        // Total width of a status row; the action buttons match it so revealing the
+        // dropdown never widens the panel beyond its collapsed size.
+        val panelContentWidth = iconBoxWidth + nameWidth + batteryBoxWidth
 
-        // ── Arm/disarm state ──────────────────────────────────────────────────
-        // Declared here so it can be referenced in the background Column modifier.
-        //   0 = idle         — steady white (disarmed) or green (armed)
-        //   1 = first tap    — blinking yellow, awaiting confirmation tap within 1 s
-        //   2 = command sent — blinking target colour until armedState reflects the change
-        var armTapState by remember { mutableIntStateOf(0) }
-        var firstArmTapTime by remember { mutableLongStateOf(0L) }
-        // Return to idle 1 s after the first tap if no second tap arrives,
-        // or 2 s after the command is sent if no acknowledgement arrives.
-        LaunchedEffect(armTapState, firstArmTapTime) {
-            when (armTapState) {
-                1 -> { delay(1000L); armTapState = 0 }
-                2 -> { delay(2000L); armTapState = 0 }
+        // ── Action panel expand/collapse ──────────────────────────────────────
+        // The status rows are small on purpose, so instead of hunting for a fine
+        // tap target the user taps anywhere on the panel to drop down large
+        // "Rescan" and "Arm"/"Disarm" buttons.  It auto-collapses after a short
+        // idle time, and the caller collapses it too when the map is tapped
+        // (expanded state is hoisted).
+        LaunchedEffect(actionsExpanded) {
+            if (actionsExpanded) {
+                delay(actionPanelCollapseDelay)
+                onActionsExpandedChange(false)
             }
         }
-        // Announce arm-state changes via TTS and clear the "awaiting confirmation" blink.
+
+        // ── Arm/disarm feedback state ─────────────────────────────────────────
+        // While a command is in flight the rocket icon blinks toward its target
+        // colour (green when arming, white when disarming) until armedState
+        // reflects the change or the 2 s timeout elapses.
+        var armCommandPending by remember { mutableStateOf(false) }
+        LaunchedEffect(armCommandPending) {
+            if (armCommandPending) { delay(2000L); armCommandPending = false }
+        }
+        // Announce arm-state changes via TTS and clear the pending blink.
         val armedStateText = if (armedState)
             stringResource(R.string.armed_state_armed)
         else
             stringResource(R.string.armed_state_disarmed)
         LaunchedEffect(armedState) {
             textToSpeech?.speak(armedStateText, TextToSpeech.QUEUE_FLUSH, null, null)
-            if (armTapState == 2) armTapState = 0   // confirmation received
+            armCommandPending = false   // acknowledgement received
         }
-        // Continuous blink animation — applied only when armTapState > 0.
+        // Continuous blink animation — applied only while a command is pending.
         val blinkTransition = rememberInfiniteTransition(label = "rocketBlink")
         val blinkAlpha by blinkTransition.animateFloat(
             initialValue = 1f,
@@ -1240,57 +1300,27 @@ private fun MapControlsColumn(
             ),
             label = "rocketBlinkAlpha",
         )
-        // State 2 blinks toward the target colour: green if we just armed, white if we just disarmed.
         val rocketIconTint = when {
-            armTapState == 1 -> Color.Yellow
-            armTapState == 2 -> if (!armedState) Color.Green else Color.White
-            armedState       -> Color.Green
-            else             -> Color.White
+            armCommandPending -> if (!armedState) Color.Green else Color.White
+            armedState        -> Color.Green
+            else              -> Color.White
         }
-        val rocketIconAlpha = if (armTapState > 0) blinkAlpha else 1f
-        // Use rememberUpdatedState so the pointerInput(Unit) block always sees the
-        // latest locatorArmedMessageState without needing to restart on each change.
-        val currentArmedMsgState by rememberUpdatedState(locatorArmedMessageState)
+        val rocketIconAlpha = if (armCommandPending) blinkAlpha else 1f
+        // Arm/disarm is only accepted once the previous command has settled and
+        // the locator is recognised (password-verified).
+        val armActionEnabled = (locatorArmedMessageState == LocatorMessageState.Idle ||
+            locatorArmedMessageState == LocatorMessageState.AckUpdated) && locatorRecognized
 
         Column(
             modifier = Modifier
                 .clip(RoundedCornerShape(16.dp))
                 .background(mapOverlayBg)
                 .padding(8.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        val canAcceptTap = (currentArmedMsgState == LocatorMessageState.Idle ||
-                            currentArmedMsgState == LocatorMessageState.AckUpdated) &&
-                            locatorRecognized
-                        if (!canAcceptTap) return@detectTapGestures
-                        val now = System.currentTimeMillis()
-                        when {
-                            armTapState == 0 -> {
-                                armTapState = 1
-                                firstArmTapTime = now
-                            }
-                            now - firstArmTapTime < 1000L -> {
-                                BluetoothManagerRepository.updateLocatorArmedMessageState(
-                                    LocatorMessageState.SendRequested
-                                )
-                                onToggleArmed()
-                                armTapState = 2
-                            }
-                            else -> {
-                                // Second tap arrived too late — restart as a fresh first tap
-                                armTapState = 1
-                                firstArmTapTime = now
-                            }
-                        }
-                    }
-                }
+                .clickable { onActionsExpandedChange(!actionsExpanded) }
         ) {
             // Row 1: radio icon | receiver name | receiver battery
-            // Tapping anywhere on this row triggers a BLE rescan so the user
-            // can switch receivers or reconnect after a drop.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable(onClick = onRescan)
             ) {
                 Box(modifier = Modifier.width(iconBoxWidth), contentAlignment = Alignment.CenterStart) {
                     Icon(
@@ -1403,6 +1433,78 @@ private fun MapControlsColumn(
                         color = rssiColor(rocketState.rssi),
                         maxLines = 1,
                     )
+                }
+            }
+
+            // ── Descending action buttons ─────────────────────────────────────
+            // Large, clearly labelled touch targets revealed by tapping the panel.
+            AnimatedVisibility(
+                visible = actionsExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .width(panelContentWidth)
+                        .padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            onActionsExpandedChange(false)
+                            onRescan()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                    ) {
+                        Text(stringResource(R.string.action_rescan))
+                    }
+                    val disarming = armedState
+                    Button(
+                        onClick = {
+                            onActionsExpandedChange(false)
+                            // Mirror the locator rule: a disarm is only honoured while
+                            // the rocket is waiting for launch or has landed.  Block it
+                            // in the app during flight so we don't send a request the
+                            // locator would silently ignore, and say why with an
+                            // auto-dismissing popup.
+                            val inFlight = rocketState.flightState != FlightStates.WaitingLaunch &&
+                                rocketState.flightState != FlightStates.Landed
+                            if (disarming && inFlight) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.disarm_in_flight_blocked),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                    LocatorMessageState.SendRequested
+                                )
+                                onToggleArmed()
+                                armCommandPending = true
+                            }
+                        },
+                        enabled = armActionEnabled,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (disarming)
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.primary,
+                            contentColor = if (disarming)
+                                MaterialTheme.colorScheme.onError
+                            else
+                                MaterialTheme.colorScheme.onPrimary,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                    ) {
+                        Text(
+                            if (disarming) stringResource(R.string.action_disarm)
+                            else stringResource(R.string.action_arm)
+                        )
+                    }
                 }
             }
             } // end background Column
