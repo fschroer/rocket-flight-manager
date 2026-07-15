@@ -1564,9 +1564,13 @@ fun LocatorStats(
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
+                    // Floor the max bound at marginPx: while the scaffold or column is
+                    // being (re)measured the available extent can go negative, and
+                    // coerceIn(min, max) throws when max < min (crash on returning to
+                    // the map screen — see onSizeChanged below).
                     locatorStatisticsOffset = IntOffset(
-                        (locatorStatisticsOffset.x + dragAmount.x.toInt()).coerceIn(marginPx, scaffoldSize.width - columnWidth - panelPaddingPx - marginPx),
-                        (locatorStatisticsOffset.y + dragAmount.y.toInt()).coerceIn(marginPx, scaffoldSize.height - columnHeight - panelPaddingPx - marginPx)
+                        (locatorStatisticsOffset.x + dragAmount.x.toInt()).coerceIn(marginPx, maxOf(marginPx, scaffoldSize.width - columnWidth - panelPaddingPx - marginPx)),
+                        (locatorStatisticsOffset.y + dragAmount.y.toInt()).coerceIn(marginPx, maxOf(marginPx, scaffoldSize.height - columnHeight - panelPaddingPx - marginPx))
                     )
                 }
             }
@@ -1577,9 +1581,12 @@ fun LocatorStats(
                 columnWidth = size.width
                 columnHeight = size.height
                 if (!needsDefaultPosition) {
+                    // Floor the max bound at marginPx so a not-yet-measured scaffold
+                    // (width == 0 on return to the map screen) can't produce max < min,
+                    // which makes coerceIn throw "Cannot coerce value to an empty range".
                     locatorStatisticsOffset = IntOffset(
-                        locatorStatisticsOffset.x.coerceIn(marginPx, scaffoldSize.width - columnWidth - panelPaddingPx - marginPx),
-                        locatorStatisticsOffset.y.coerceIn(marginPx, scaffoldSize.height - columnHeight - panelPaddingPx - marginPx)
+                        locatorStatisticsOffset.x.coerceIn(marginPx, maxOf(marginPx, scaffoldSize.width - columnWidth - panelPaddingPx - marginPx)),
+                        locatorStatisticsOffset.y.coerceIn(marginPx, maxOf(marginPx, scaffoldSize.height - columnHeight - panelPaddingPx - marginPx))
                     )
                 }
             }
