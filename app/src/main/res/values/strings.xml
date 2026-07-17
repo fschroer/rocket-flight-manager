@@ -34,6 +34,7 @@
     <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>
     <string name="exit">Exit</string>
     <string name="export">Export flight path</string>
+    <string name="download_map">Download maps</string>
     <string name="flight_profiles">Flight Profiles</string>
     <string name="increment">Increment</string>
     <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>

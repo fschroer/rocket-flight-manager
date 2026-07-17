@@ -74,15 +74,8 @@ dependencies {
     implementation(libs.androidx.ui.text.google.fonts)
     implementation(libs.androidx.navigation.runtime.ktx)
     implementation(libs.androidx.navigation.compose)
-    // Google Maps Compose library
-    implementation(libs.maps.compose)
-    // Google Maps Compose utility library
-    implementation(libs.maps.compose.utils)
-    // Google Maps Compose widgets library
-    implementation(libs.maps.compose.widgets)
-    implementation(libs.play.services.maps)
-    //implementation ("com.google.android.libraries.places:places:4.1.0")
-    //implementation ("com.google.maps.android:places-ktx:3.2.0")
+    // Google Maps SDK removed — the map is MapLibre now (see ui/MapLibreCompat.kt).
+    // play-services-location stays: it provides the fused location provider.
     implementation (libs.play.services.location)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.i18n)
@@ -113,9 +106,10 @@ dependencies {
     implementation(libs.protobuf.java)
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
-    implementation(libs.jserialcomm)
-    implementation(libs.usb.serial.for1.android)
+    // jSerialComm / usb-serial-for-android removed with the unused USB-serial path.
     implementation(libs.androidx.material.icons.extended)
+    // PROTOTYPE: MapLibre offline-satellite evaluation (see prototype/maplibre-offline)
+    implementation(libs.maplibre.android)
 }
 
 protobuf {

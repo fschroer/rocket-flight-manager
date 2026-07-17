@@ -9,6 +9,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModelProvider
+import org.maplibre.android.MapLibre
 import com.steampigeon.flightmanager.ui.RocketViewModel
 import com.steampigeon.flightmanager.ui.theme.FlightManagerTheme
 
@@ -18,6 +19,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var viewModel: RocketViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Must run before any MapLibre view/offline API is touched (FlightMapScreen's map).
+        MapLibre.getInstance(applicationContext)
         super.onCreate(savedInstanceState)
 
         viewModel = ViewModelProvider(this)[RocketViewModel::class.java]

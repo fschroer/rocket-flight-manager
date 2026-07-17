@@ -130,26 +130,9 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.GoogleMap
-import com.google.android.gms.maps.model.BitmapDescriptorFactory
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.LatLngBounds
-import com.google.maps.android.compose.CameraMoveStartedReason
-import com.google.maps.android.compose.CameraPositionState
-import com.google.maps.android.compose.Circle
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapEffect
-import com.google.maps.android.compose.MapProperties
-import com.google.maps.android.compose.MapType
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.MapsComposeExperimentalApi
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.Polyline
-import com.google.maps.android.compose.rememberCameraPositionState
-import com.google.maps.android.compose.rememberMarkerState
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
 import com.mutualmobile.composesensors.SensorDelay
 import com.mutualmobile.composesensors.rememberAccelerometerSensorState
 import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
@@ -235,32 +218,10 @@ private fun deployChannelText(channel: Int, mode: DeployMode?, config: LocatorCo
     return "Ch $channel: $abbr$value"
 }
 
-/**
- * Computes the Google Maps zoom level that fits [bounds] within the available viewport
- * (map dimensions minus [paddingPx] on each side) using Mercator projection math.
- * Used in 3D mode to avoid a probe moveCamera call that would transiently reset tilt to 0.
- */
-private fun computeZoomForBounds(
-    bounds: LatLngBounds,
-    mapWidthPx: Int,
-    mapHeightPx: Int,
-    paddingPx: Int,
-): Pair<LatLng, Float> {
-    val ne = bounds.northeast
-    val sw = bounds.southwest
-
-    fun mercatorY(lat: Double): Double {
-        val s = sin(lat * PI / 180.0)
-        return 0.5 - ln((1 + s) / (1 - s)) / (4 * PI)
-    }
-
-    val latFrac = abs(mercatorY(sw.latitude) - mercatorY(ne.latitude)).coerceAtLeast(1e-10)
-    val lngFrac = ((ne.longitude - sw.longitude + 360.0) % 360.0).coerceAtLeast(1e-10) / 360.0
-    val availW  = (mapWidthPx  - 2 * paddingPx).coerceAtLeast(1).toDouble()
-    val availH  = (mapHeightPx - 2 * paddingPx).coerceAtLeast(1).toDouble()
-    val zoom    = min(log2(availW / (256.0 * lngFrac)), log2(availH / (256.0 * latFrac)))
-    return Pair(bounds.center, zoom.toFloat().coerceIn(0f, 21f))
-}
+// Bounds-fitting is done by MapLibre's own getCameraForLatLngBounds (a pure query) rather
+// than hand-rolled Mercator math: replicating the SDK's pixel-density and tile-size
+// conventions is easy to get subtly wrong, and wrong framing is invisible until the points
+// you were supposed to be tracking slide off screen.
 
 // ── HomeScreen ────────────────────────────────────────────────────────────────
 
@@ -280,20 +241,8 @@ fun HomeScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var isMapLoaded by remember { mutableStateOf(false) }
-
-    val mapUiSettings = remember {
-        MapUiSettings(
-            compassEnabled = false,
-            indoorLevelPickerEnabled = false,
-            mapToolbarEnabled = false,
-            myLocationButtonEnabled = false,
-            tiltGesturesEnabled = false,
-            zoomControlsEnabled = false
-        )
-    }
-    val properties by remember {
-        mutableStateOf(MapProperties(isMyLocationEnabled = true, mapType = MapType.SATELLITE))
-    }
+    // Satellite imagery + gesture settings are configured inside MapLibreMapView; the
+    // old Google MapProperties/MapUiSettings holders are no longer needed.
 
     val receiverConfig by viewModel.remoteReceiverConfig.collectAsState()
     val locatorConfig by viewModel.remoteLocatorConfig.collectAsState()
@@ -429,8 +378,6 @@ fun HomeScreen(
                         lastAzimuth = lastAzimuth,
                         lastPreLaunchMessageAge = lastPreLaunchMessageAge,
                         distanceToLocator = distanceToLocator,
-                        properties = properties,
-                        mapUiSettings = mapUiSettings,
                         viewModel = viewModel,
                         scaffoldSize = scaffoldSize,
                         textToSpeech = textToSpeech,
@@ -662,6 +609,7 @@ private fun AppDrawerContent(
 ) {
     val items = buildList {
         add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
+        add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
         if (bluetoothConnectionState == BluetoothConnectionState.Ready)
             add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
         if (locatorActive && !armedState) {
@@ -691,7 +639,6 @@ private fun AppDrawerContent(
  * controller, arm/zoom controls, Bluetooth status, GPS lock warnings, and the
  * draggable locator stats panel.
  */
-@OptIn(MapsComposeExperimentalApi::class)
 @Composable
 private fun MapWithOverlays(
     trackerLocation: Location,
@@ -710,8 +657,6 @@ private fun MapWithOverlays(
     lastAzimuth: Float,
     lastPreLaunchMessageAge: Long,
     distanceToLocator: Int,
-    properties: MapProperties,
-    mapUiSettings: MapUiSettings,
     viewModel: RocketViewModel,
     scaffoldSize: IntSize,
     textToSpeech: TextToSpeech?,
@@ -730,21 +675,26 @@ private fun MapWithOverlays(
         // Hoisted so a tap anywhere on the map (onMapClick) can collapse the
         // status-panel action dropdown, not just the timeout or a second panel tap.
         var actionsExpanded by remember { mutableStateOf(false) }
-        var googleMap by remember { mutableStateOf<GoogleMap?>(null) }
+        // Handle used only for pure camera queries (getCameraForLatLngBounds) — never to
+        // move the camera from the controller.
+        var mapLibre by remember { mutableStateOf<MapLibreMap?>(null) }
         var is3DView by remember { mutableStateOf(false) }
-        var mapSizePx by remember { mutableStateOf(IntSize.Zero) }
 
+        val context = LocalContext.current
+        // Live map uses whichever satellite provider the user selected in the download
+        // screen, so downloaded offline regions (same source) render here.
+        val styleJson = remember { MapProviderPrefs.get(context).styleJson(context) }
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
-        val cameraPositionState = rememberCameraPositionState {
-            position = CameraPosition.Builder()
-                .target(LatLng(trackerLocation.latitude, trackerLocation.longitude))
-                .zoom(12f)
-                .bearing(azimuth)
-                .build()
-        }
-        val rocketMarkerState = rememberMarkerState()
-        LaunchedEffect(rocketState.latitude, rocketState.longitude) {
-            rocketMarkerState.position = locatorLatLng
+        val rocketFresh = lastPreLaunchMessageAge < messageTimeout
+        val cameraState = remember {
+            MapLibreCameraState(
+                CamPos(
+                    target = LatLng(trackerLocation.latitude, trackerLocation.longitude),
+                    zoom = 12f,
+                    tilt = 0f,
+                    bearing = azimuth,
+                )
+            )
         }
 
         // One-shot recenter: the map now renders before the first GPS fix (initial
@@ -757,55 +707,39 @@ private fun MapWithOverlays(
             val trackerValid = trackerLocation.latitude != 0.0 || trackerLocation.longitude != 0.0
             val rocketValid = rocketState.latitude != 0.0 || rocketState.longitude != 0.0
             if (!didInitialCenter && isMapLoaded && trackerValid && !rocketValid) {
-                cameraPositionState.position = CameraPosition.Builder()
-                    .target(LatLng(trackerLocation.latitude, trackerLocation.longitude))
-                    .zoom(12f)
-                    .bearing(azimuth)
-                    .build()
+                cameraState.position = CamPos(
+                    target = LatLng(trackerLocation.latitude, trackerLocation.longitude),
+                    zoom = 12f,
+                    tilt = 0f,
+                    bearing = azimuth,
+                )
                 didInitialCenter = true
             }
         }
 
-        GoogleMap(
-            modifier = Modifier.fillMaxSize().onSizeChanged { mapSizePx = it },
+        MapLibreMapView(
+            modifier = Modifier.fillMaxSize(),
+            styleJson = styleJson,
+            cameraState = cameraState,
+            rocketLatLng = locatorLatLng,
+            rocketFresh = rocketFresh,
+            accuracyRadiusM = rocketState.hacc.toDouble(),
+            flightPath = flightPath.map { (lat, lng, _) -> LatLng(lat, lng) },
+            userLocation = trackerLocation,
             onMapLoaded = onMapLoaded,
-            cameraPositionState = cameraPositionState,
-            properties = properties,
-            uiSettings = mapUiSettings,
             onMapClick = {
                 showControls = !showControls
                 actionsExpanded = false
-            }
-        ) {
-            MapEffect(Unit) { map -> googleMap = map }
-            Marker(
-                state = rocketMarkerState,
-                icon = BitmapDescriptorFactory.defaultMarker(
-                    if (lastPreLaunchMessageAge < messageTimeout) BitmapDescriptorFactory.HUE_GREEN
-                    else BitmapDescriptorFactory.HUE_RED
-                )
-            )
-            Circle(
-                center = locatorLatLng,
-                fillColor = Color(if (lastPreLaunchMessageAge < messageTimeout) 0x3000ff00 else 0x30ff0000),
-                radius = rocketState.hacc.toDouble(),
-                strokeColor = Color(if (lastPreLaunchMessageAge < messageTimeout) 0x8000ff00 else 0x80ff0000),
-                strokeWidth = 1f,
-            )
-            if (flightPath.size >= 2) {
-                Polyline(
-                    points = flightPath.map { (lat, lng, _) -> LatLng(lat, lng) },
-                    color = Color(0xFFFF6600),
-                    width = 8f,
-                )
-            }
-        }
+            },
+            onMapReady = { mapLibre = it },
+            onSizeChanged = { },
+        )
 
         MapCameraController(
-            googleMap = googleMap,
+            map = mapLibre,
             trackerLocation = trackerLocation,
             rocketState = rocketState,
-            cameraPositionState = cameraPositionState,
+            cameraState = cameraState,
             isMapLoaded = isMapLoaded,
             hasCompass = hasCompass,
             compassEnabled = compassEnabled,
@@ -814,7 +748,6 @@ private fun MapWithOverlays(
             autoTargetMode = autoTargetMode,
             autoZoomMode = autoZoomMode,
             is3DView = is3DView,
-            mapSizePx = mapSizePx,
             onBearingUpdate = { viewModel.updateLastHandheldDeviceAzimuth(it) },
         )
 
@@ -843,7 +776,7 @@ private fun MapWithOverlays(
                 .coerceAtLeast(48.dp)
         }
         GenericScaleBar(
-            cameraPositionState = cameraPositionState,
+            cameraState = cameraState,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .offset(x = 8.dp, y = (-36).dp),
@@ -1020,10 +953,10 @@ private fun MapWithOverlays(
  */
 @Composable
 private fun MapCameraController(
-    googleMap: GoogleMap?,
+    map: MapLibreMap?,
     trackerLocation: Location,
     rocketState: RocketState,
-    cameraPositionState: CameraPositionState,
+    cameraState: MapLibreCameraState,
     isMapLoaded: Boolean,
     hasCompass: Boolean,
     compassEnabled: Boolean,
@@ -1032,7 +965,6 @@ private fun MapCameraController(
     autoTargetMode: Boolean,
     autoZoomMode: Boolean,
     is3DView: Boolean,
-    mapSizePx: IntSize,
     onBearingUpdate: (Float) -> Unit,
 ) {
     val kalmanGainTarget  = 0.1f
@@ -1053,18 +985,10 @@ private fun MapCameraController(
         // reason first changes. This keeps lastUserGestureTime rolling forward for the
         // entire duration of a continuous gesture (long pan, slow pinch, etc.) so the
         // 5 s recovery window always starts from the last frame of user input.
-        snapshotFlow { cameraPositionState.cameraMoveStartedReason to cameraPositionState.position }
+        snapshotFlow { cameraState.moveStartedReason to cameraState.position }
             .collect { (reason, _) ->
-                when (reason) {
-                    CameraMoveStartedReason.GESTURE -> {
-                        lastUserGestureTime = System.currentTimeMillis()
-                    }
-                    CameraMoveStartedReason.DEVELOPER_ANIMATION ->
-                        Log.d("ZoomSource", "Programmatic zoom triggered")
-                    CameraMoveStartedReason.API_ANIMATION ->
-                        Log.d("ZoomSource", "Zoom via built-in API animation")
-                    else ->
-                        Log.d("ZoomSource", "Unknown zoom source")
+                if (reason == REASON_GESTURE) {
+                    lastUserGestureTime = System.currentTimeMillis()
                 }
             }
     }
@@ -1072,9 +996,9 @@ private fun MapCameraController(
     // Fix #4: detect a user tilt gesture by watching the native map's tilt diverge from
     // the last value we applied programmatically during an active gesture.
     LaunchedEffect(Unit) {
-        snapshotFlow { cameraPositionState.position.tilt }
+        snapshotFlow { cameraState.position.tilt }
             .collect { nativeTilt ->
-                if (cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE &&
+                if (cameraState.moveStartedReason == REASON_GESTURE &&
                     abs(nativeTilt - lastAppliedTilt) > 2f) {
                     lastUserTiltTime = System.currentTimeMillis()
                 }
@@ -1092,21 +1016,21 @@ private fun MapCameraController(
     // Start at 60° so the horizon is always in view; rise to 67.5° as the rocket climbs.
     val targetTilt = when {
         is3DView && !userTiltRecent -> (60f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(60f, 67.5f)
-        is3DView -> cameraPositionState.position.tilt  // preserve user's manual tilt
+        is3DView -> cameraState.position.tilt  // preserve user's manual tilt
         else -> 0f
     }
     // During any gesture (pan, zoom, or tilt) sync smoothedTilt from the native camera so
     // that Kalman resumes from the actual position when the gesture window expires.
     // Outside gestures, filter smoothedTilt toward targetTilt.
     if (userGestureRecent) {
-        smoothedTarget = cameraPositionState.position.target
-        smoothedZoom   = cameraPositionState.position.zoom + (smoothedTilt / 90f * 1.5f)
-        smoothedTilt   = cameraPositionState.position.tilt
-        onBearingUpdate(cameraPositionState.position.bearing)
+        smoothedTarget = cameraState.position.target
+        smoothedZoom   = cameraState.position.zoom + (smoothedTilt / 90f * 1.5f)
+        smoothedTilt   = cameraState.position.tilt
+        onBearingUpdate(cameraState.position.bearing)
         return   // leave the camera untouched so gestures work freely in both 2D and 3D
     }
     if (userTiltRecent) {
-        smoothedTilt = cameraPositionState.position.tilt
+        smoothedTilt = cameraState.position.tilt
     } else {
         smoothedTilt += (targetTilt - smoothedTilt) * kalmanGainTilt
     }
@@ -1130,23 +1054,28 @@ private fun MapCameraController(
     val trackerHasGps = validLatLng(trackerLocation.latitude, trackerLocation.longitude)
 
     val (autoTarget, autoZoom) = if ((autoTargetMode || autoZoomMode) && rocketHasGps) {
-        val builder = LatLngBounds.builder()
+        val builder = LatLngBounds.Builder()
             .include(LatLng(rocketState.latitude, rocketState.longitude))
         if (trackerHasGps)
             builder.include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
         val bounds = builder.build()
-        if (is3DView && mapSizePx.width > 0 && mapSizePx.height > 0) {
-            // In 3D mode, compute zoom without a probe moveCamera call. The probe resets tilt
-            // to 0 on the native map; since the GL thread renders continuously it can produce
-            // a visible tilt flicker on every compass update while the user is rotating.
-            computeZoomForBounds(bounds, mapSizePx.width, mapSizePx.height, paddingPx = 300)
-                .let { (center, zoom) -> Pair(center, zoom) }
-        } else {
-            // In 2D mode, use the SDK probe. Its null-during-init behaviour guards against
-            // auto-zoom running before the map is ready.
-            googleMap?.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, 300))
-            Pair(googleMap?.cameraPosition?.target, googleMap?.cameraPosition?.zoom)
-        }
+        // Ask the SDK to compute the framing. getCameraForLatLngBounds is a PURE query — it
+        // returns a CameraPosition without touching the map — so unlike the old
+        // moveCamera(newLatLngBounds(...)) "probe" it cannot move the camera mid-frame (that
+        // was the auto-zoom wobble: two native moves per frame, drawn by the continuously
+        // rendering GL thread).
+        //
+        // It also beats hand-rolled Mercator math, which has to get the pixel-density and
+        // tile-size conventions exactly right to land the fit — and silently mis-frames when
+        // it doesn't.
+        //
+        // Fit NORTH-UP and FLAT (bearing 0, tilt 0), matching what Google's newLatLngBounds
+        // always did. The default overload fits for the *current* bearing/tilt, which zooms
+        // out further — a rotated box needs a bigger viewport, and with the compass on the
+        // bearing is arbitrary. Worse, tilt is already compensated below (zoomCorrection),
+        // so letting the SDK account for it too corrects twice and over-zooms out.
+        val cam = map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+        Pair(cam?.target, cam?.zoom?.toFloat())
     } else {
         Pair(null, null)
     }
@@ -1170,10 +1099,10 @@ private fun MapCameraController(
         val delta = ((azimuth - lastAzimuth + 540f) % 360f) - 180f
         onBearingUpdate((lastAzimuth + delta * kalmanGainBearing + 360f) % 360f)
     }
-    val bearing = if (effectiveCompass) lastAzimuth else cameraPositionState.position.bearing
+    val bearing = if (effectiveCompass) lastAzimuth else cameraState.position.bearing
 
     lastAppliedTilt = smoothedTilt
-    cameraPositionState.position = CameraPosition(smoothedTarget, smoothedZoom - zoomCorrection, smoothedTilt, bearing)
+    cameraState.position = CamPos(smoothedTarget, smoothedZoom - zoomCorrection, smoothedTilt, bearing)
 }
 
 // ── Generic scale bar ─────────────────────────────────────────────────────────
@@ -1184,7 +1113,7 @@ private fun MapCameraController(
  */
 @Composable
 private fun GenericScaleBar(
-    cameraPositionState: CameraPositionState,
+    cameraState: MapLibreCameraState,
     modifier: Modifier = Modifier,
     width: Dp = 192.dp,
     barColor: Color = MaterialTheme.colorScheme.primary,
@@ -1193,9 +1122,11 @@ private fun GenericScaleBar(
     val density = LocalDensity.current
     val widthPx = with(density) { width.toPx() }
 
-    val zoom = cameraPositionState.position.zoom
-    val lat  = cameraPositionState.position.target.latitude
-    val metersPerPx = 156543.03392 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble())
+    val zoom = cameraState.position.zoom
+    val lat  = cameraState.position.target.latitude
+    // 78271.516… = half the 256-px-tile constant: MapLibre reports zoom in the 512-px-tile
+    // convention, so its metres/pixel at zoom z is half of Google Maps' at the same z.
+    val metersPerPx = 78271.51696 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble())
     val totalMeters = metersPerPx * widthPx
 
     val niceDistances = listOf(1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -1886,13 +1817,6 @@ private fun rssiColor(rssi: Int): Color = when {
     rssi >= -110 -> Color(0xFFFF9800)  // orange — fair
     else         -> Color(0xFFF44336)  // red    — poor
 }
-
-// ── Utility composable ────────────────────────────────────────────────────────
-
-@Composable
-fun rememberUpdatedMarkerState(newPosition: LatLng) =
-    remember { MarkerState(position = newPosition) }
-        .apply { position = newPosition }
 
 // ── Camera preview (landscape mode) ──────────────────────────────────────────
 

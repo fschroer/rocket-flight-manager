@@ -60,6 +60,7 @@ import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.DevicePickerDialog
+import com.steampigeon.flightmanager.ui.DownloadMapScreen
 import com.steampigeon.flightmanager.ui.FlightProfilesScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorPasswordDialog
@@ -80,6 +81,7 @@ enum class NavDestination(@StringRes val title: Int) {
     DeploymentTest(title = R.string.deployment_test),
     FlightProfiles(title = R.string.flight_profiles),
     Export(title = R.string.export),
+    DownloadMap(title = R.string.download_map),
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +378,9 @@ fun RocketApp(
             composable(route = NavDestination.DeploymentTest.name) {
                 DeploymentTestScreen(viewModel, bluetoothService,
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
+            }
+            composable(route = NavDestination.DownloadMap.name) {
+                DownloadMapScreen(modifier)
             }
         }
     }
