@@ -27,6 +27,10 @@ object Protocol {
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
+    // FlightEvents payload: record (1) + reserved (1) + present_mask (2) +
+    // flight_timestamp_s (4) + event_timestamp_ms[11] (44) + max_altitude_m (4)
+    // + deployment_ch_stats[4] (4) = 60.  On-wire struct is 66 with the header.
+    const val FLIGHT_EVENTS_PAYLOAD_SIZE = 60
     const val FLIGHT_PROFILE_DATA_PAYLOAD_MESSAGE_SIZE = 241
     const val DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE = 1
     const val MAX_PACKET_SIZE = 256
@@ -98,49 +102,129 @@ data class FlightProfileMetadata(
     val timeToDrogue: Float,
 )
 
-data class FlightEventData(
-    val launchDate: ZonedDateTime? = null,
-    val launchTime: Int = 0,
-    val maxAltitude: Float = 0f,
-    val maxAltitudeSampleIndex: Int = 0,
-    val launchDetectAltitude: Float = 0f,
-    val launchDetectSampleIndex: Int = 0,
-    val burnoutAltitude: Float = 0f,
-    val burnoutSampleIndex: Int = 0,
-    val noseOverAltitude: Float = 0f,
-    val noseOverSampleIndex: Int = 0,
-    val droguePrimaryDeployAltitude: Float = 0f,
-    val droguePrimaryDeploySampleIndex: Int = 0,
-    val drogueBackupDeployAltitude: Float = 0f,
-    val drogueBackupDeploySampleIndex: Int = 0,
-    val drogueVelocityThresholdAltitude: Float = 0f,
-    val drogueVelocityThresholdSampleIndex: Int = 0,
-    val mainPrimaryDeployAltitude: Float = 0f,
-    val mainPrimaryDeploySampleIndex: Int = 0,
-    val mainBackupDeployAltitude: Float = 0f,
-    val mainBackupDeploySampleIndex: Int = 0,
-    val mainVelocityThresholdAltitude: Float = 0f,
-    val mainVelocityThresholdSampleIndex: Int = 0,
-    val landingAltitude: Float = 0f,
-    val landingSampleIndex: Int = 0,
-    val channel1Mode: DeployMode? = DeployMode.DroguePrimary,
-    val channel2Mode: DeployMode? = DeployMode.DrogueBackup,
-    val channel3Mode: DeployMode? = DeployMode.MainPrimary,
-    val channel4Mode: DeployMode? = DeployMode.MainBackup,
-    val channel1Fired: Boolean = false,
-    val channel2Fired: Boolean = false,
-    val channel3Fired: Boolean = false,
-    val channel4Fired: Boolean = false,
-    val channel1PreFireContinuity: Boolean = false,
-    val channel2PreFireContinuity: Boolean = false,
-    val channel3PreFireContinuity: Boolean = false,
-    val channel4PreFireContinuity: Boolean = false,
-    val channel1PostFireContinuity: Boolean = false,
-    val channel2PostFireContinuity: Boolean = false,
-    val channel3PostFireContinuity: Boolean = false,
-    val channel4PostFireContinuity: Boolean = false,
-    val gRangeScale: Float = 0f,
-)
+/**
+ * Flight events the locator records per archived flight, in the wire order of
+ * FlightEventsMessage.event_timestamp_ms.  MUST match the firmware's
+ * Communication::FlightEvent enum (MessageProtocol.hpp) on both the locator and
+ * the receiver.
+ */
+enum class FlightEventIndex(val label: String) {
+    Launch("Launch"),
+    Burnout("Burnout"),
+    Apogee("Apogee"),
+    Noseover("Noseover"),
+    DroguePrimaryDeploy("Drogue Primary"),
+    DrogueBackupDeploy("Drogue Backup"),
+    DrogueVelocityThreshold("Drogue Deploy"),
+    MainPrimaryDeploy("Main Primary"),
+    MainBackupDeploy("Main Backup"),
+    MainVelocityThreshold("Main Deploy"),
+    Landing("Landing");
+}
+
+/** Decoded per-channel deployment stat byte from a FlightEvents message. */
+data class DeployChannelStats(
+    val mode: DeployMode = DeployMode.Unused,
+    val fired: Boolean = false,
+    val preFireContinuity: Boolean = false,
+    val postFireContinuity: Boolean = false,
+) {
+    companion object {
+        // Bit layout mirrors the locator's Constants.hpp bit_shift_* values.
+        fun fromByte(raw: Int) = DeployChannelStats(
+            mode               = DeployMode.fromUByte((raw and 0x07).toUByte()),
+            fired              = raw and (1 shl 3) != 0,
+            preFireContinuity  = raw and (1 shl 4) != 0,
+            postFireContinuity = raw and (1 shl 5) != 0,
+        )
+    }
+}
+
+/**
+ * Per-record flight event summary (MsgType.FlightEvents), sent by the locator
+ * alongside the flight profile data for the record being viewed.
+ *
+ * Only event *times* cross the wire.  Altitudes are resolved by the chart
+ * against the profile samples for the same record — see [resolveEvents] — so a
+ * marker always sits exactly on the plotted trace.
+ */
+data class FlightEvents(
+    val record: Int = -1,
+    val presentMask: Int = 0,
+    val flightTimestampS: Long = 0L,
+    val eventTimestampMs: List<Long> = emptyList(),
+    val maxAltitudeM: Float = 0f,
+    val channelStats: List<DeployChannelStats> = emptyList(),
+) {
+    /** Launch wall-clock time, or null if the locator had no GPS fix. */
+    val launchDate: ZonedDateTime?
+        get() = if (flightTimestampS > 0L)
+            java.time.Instant.ofEpochSecond(flightTimestampS)
+                .atZone(java.time.ZoneId.systemDefault())
+        else null
+
+    /** Timestamp for [event], or null when the locator did not record it. */
+    fun timestampMs(event: FlightEventIndex): Long? =
+        if (presentMask and (1 shl event.ordinal) != 0)
+            eventTimestampMs.getOrNull(event.ordinal)
+        else null
+
+    /** The channel assigned to [mode], or null if no channel was configured for it. */
+    fun channelFor(mode: DeployMode): Int? =
+        channelStats.indexOfFirst { it.mode == mode }.takeIf { it >= 0 }?.plus(1)
+
+    val isEmpty: Boolean get() = record < 0 || presentMask == 0
+
+    companion object {
+        /**
+         * Decode a FlightEvents frame (MsgType 19).  Field order and offsets
+         * mirror the firmware's Communication::FlightEventsMessage exactly; the
+         * total is pinned by Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE and
+         * WireLayoutTest.
+         *
+         * Returns null if the frame is short — a truncated frame would
+         * otherwise decode as garbage event times and scatter markers across
+         * the chart.
+         */
+        fun parse(frame: ByteArray): FlightEvents? {
+            val minSize = Protocol.HEADER_SIZE + Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE
+            if (frame.size < minSize) return null
+
+            var o = Protocol.HEADER_SIZE
+
+            val record      = frame[o].toInt() and 0xFF;  o += 1
+            o += 1                                        // reserved
+            val presentMask = le16(frame, o);             o += 2
+            val flightTsS   = le32(frame, o);             o += 4
+
+            val timestamps = List(FlightEventIndex.entries.size) { le32(frame, o + it * 4) }
+            o += FlightEventIndex.entries.size * 4
+
+            val maxAltitude = java.nio.ByteBuffer.wrap(frame, o, 4)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN).float
+            o += 4
+            val channelStats = List(4) { DeployChannelStats.fromByte(frame[o + it].toInt() and 0xFF) }
+
+            return FlightEvents(
+                record           = record,
+                presentMask      = presentMask,
+                flightTimestampS = flightTsS,
+                eventTimestampMs = timestamps,
+                maxAltitudeM     = maxAltitude,
+                channelStats     = channelStats,
+            )
+        }
+
+        private fun le16(b: ByteArray, o: Int): Int =
+            (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+
+        private fun le32(b: ByteArray, o: Int): Long =
+            (b[o].toLong() and 0xFF) or
+                    ((b[o + 1].toLong() and 0xFF) shl 8) or
+                    ((b[o + 2].toLong() and 0xFF) shl 16) or
+                    ((b[o + 3].toLong() and 0xFF) shl 24)
+    }
+}
 
 enum class DeployMode (val deployMode: UByte) {
     DroguePrimary(0u),
@@ -240,7 +324,8 @@ enum class MsgType(val value: UByte) {
     ReceiverInfoRequest(15u),   // Request from the app to the receiver for its current channel and name.
     ReceiverInfo(16u),          // Response from the receiver with its current LoRa channel and device name.
     VersionRequest(17u),        // Request from the app, via the receiver, for both firmware versions.
-    VersionInfo(18u);           // Response: locator version forwarded through receiver, which appends its own version.
+    VersionInfo(18u),           // Response: locator version forwarded through receiver, which appends its own version.
+    FlightEvents(19u);          // Per-record flight event summary sent alongside a FlightData transfer.
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

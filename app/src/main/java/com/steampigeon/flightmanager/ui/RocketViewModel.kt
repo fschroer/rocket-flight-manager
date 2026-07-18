@@ -25,7 +25,11 @@ import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentTestParsed
 import com.steampigeon.flightmanager.data.FlightDataRepository
-import com.steampigeon.flightmanager.data.FlightEventData
+import com.steampigeon.flightmanager.data.DeployChannelStats
+import com.steampigeon.flightmanager.data.FlightEventIndex
+// Aliased: ParsedMessage.FlightEvents (the wire message) would otherwise shadow
+// the data class inside the sealed-class scope.
+import com.steampigeon.flightmanager.data.FlightEvents as FlightEventsData
 import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.FlightSample
 import com.steampigeon.flightmanager.data.RocketState
@@ -33,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -54,6 +59,7 @@ import com.steampigeon.flightmanager.data.TelemetryParsed
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import com.steampigeon.flightmanager.data.Vec3f
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -74,6 +80,7 @@ sealed class ParsedMessage {
     data class FlightDataParity(val frame: ByteArray)        : ParsedMessage()
     data class ReceiverInfo(val msg: ReceiverInfoParsed)     : ParsedMessage()
     data class VersionInfo(val msg: VersionInfoParsed)       : ParsedMessage()
+    data class FlightEvents(val msg: FlightEventsData)       : ParsedMessage()
 }
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -101,6 +108,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         private const val BATTERY_SCALE = 8.0 / 4096
         const val FLIGHT_DATA_MESSAGE_SAMPLES = 30
         const val G_FORCE_MS2 = 9.80665
+
+        // FlightMetadataRequest retry backoff.  The first wait must comfortably
+        // exceed a normal round trip — the locator holds the response ~50 ms and
+        // the receiver may sit on the forward until its next safe window — so a
+        // healthy fetch answers on attempt 1 and never retries.  The cap keeps
+        // retries under the locator's 30 s metadata-idle timeout, so a link that
+        // recovers is picked back up instead of having dropped to Disarmed.
+        const val METADATA_RETRY_INITIAL_MS = 3_000L
+        const val METADATA_RETRY_MAX_MS     = 12_000L
         const val RAD2DEG = 57.295779513082320876
     }
 
@@ -434,7 +450,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearFlightProfileMetadata() {
         _flightProfileMetadata.value = emptyList()
+        _flightProfileMetadataAttempt.value = 0
     }
+
+    // How many times the current fetch has asked the locator for the record list.
+    // Surfaced so a slow fetch reads as "still trying", not as a frozen screen.
+    private val _flightProfileMetadataAttempt = MutableStateFlow(0)
+    val flightProfileMetadataAttempt: StateFlow<Int> = _flightProfileMetadataAttempt.asStateFlow()
 
     private val _flightProfileArchivePosition = MutableStateFlow<Int>(0)
     val flightProfileArchivePosition: StateFlow<Int> = _flightProfileArchivePosition.asStateFlow()
@@ -457,8 +479,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _flightProfileDataDisplayState.value = newFlightProfileDataDisplayState
     }
 
-    private val _flightEventData = MutableStateFlow<FlightEventData>(FlightEventData())
-    val flightEventData: StateFlow<FlightEventData> = _flightEventData.asStateFlow()
+    // Per-record event summary for the flight profile currently being viewed.
+    // Arrives as its own MsgType.FlightEvents frame just ahead of the sample
+    // burst; cleared whenever a new record is requested so the chart never draws
+    // one record's markers over another's data.
+    private val _flightEvents = MutableStateFlow(FlightEventsData())
+    val flightEvents: StateFlow<FlightEventsData> = _flightEvents.asStateFlow()
 
     private val _flightProfileAglData = MutableStateFlow<List<UShort>>(emptyList())
     val flightProfileAglData: StateFlow<List<UShort>> = _flightProfileAglData.asStateFlow()
@@ -469,6 +495,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun clearFlightProfileData() {
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
+        _flightEvents.value = FlightEventsData()
         FlightDataRepository.cancelTransfer()
     }
 
@@ -734,6 +761,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     )
                                 }
                             }
+                        }
+
+                        is ParsedMessage.FlightEvents -> {
+                            // Only adopt the summary for the record the user is
+                            // actually viewing.  The locator repeats this frame,
+                            // and a late one from a previously-selected record
+                            // would otherwise mislabel the current chart.
+                            if (parsed.msg.record == _flightProfileArchivePosition.value)
+                                _flightEvents.value = parsed.msg
                         }
 
                         is ParsedMessage.FlightData -> {
@@ -1161,21 +1197,60 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         return waitForLocatorConfig(stagedLocatorConfig)
     }
 
-    fun updateFlightMetadataState() {
-        viewModelScope.launch {
-            for (i in 1..50) {
-                delay(100)
-                if (_flightProfileMetadataMessageState.value == LocatorMessageState.AckUpdated ||
-                    _flightProfileMetadataMessageState.value == LocatorMessageState.SendFailure)
-                    break
+    /**
+     * Fetch the flight-record list, re-requesting with exponential backoff until
+     * the locator answers.
+     *
+     * A `FlightMetadataRequest` is a single unacknowledged LoRa frame, and the
+     * app used to send exactly one.  Losing it left the screen on "Fetching
+     * flight data…" forever with nothing to retry — most reliably when the
+     * request went out immediately behind a `DisarmRequest`, while the locator
+     * was still transitioning back to its PreLaunchData cycle.
+     *
+     * Call from a composition-scoped coroutine: cancellation (the user leaving
+     * the screen) is what ends the loop.  It also returns on its own once the
+     * list arrives, or once a record is opened.
+     */
+    suspend fun fetchFlightProfileMetadata(service: BluetoothService) {
+        var backoffMs = METADATA_RETRY_INITIAL_MS
+        var attempt = 0
+
+        // Exits by cancellation, or by an explicit return below.
+        while (true) {
+            // Opening a record takes over the link.  A FlightMetadataRequest now
+            // would put the locator back in MetadataRequested and abort the very
+            // transfer the user just started, so stop retrying.
+            if (_flightProfileDataDisplayState.value) return
+
+            attempt++
+            _flightProfileMetadataAttempt.value = attempt
+            _flightProfileMetadataMessageState.value = LocatorMessageState.SendRequested
+            val sent = service.requestFlightProfileMetadata()
+            // Don't clobber a response that landed while we were sending.
+            _flightProfileMetadataMessageState.update { current ->
+                when {
+                    !sent -> LocatorMessageState.SendFailure
+                    current == LocatorMessageState.SendRequested -> LocatorMessageState.Sent
+                    else -> current
+                }
             }
-            if (_flightProfileMetadataMessageState.value == LocatorMessageState.SendRequested ||
-                _flightProfileMetadataMessageState.value == LocatorMessageState.Sent) {
-                _flightProfileMetadataMessageState.value = LocatorMessageState.NotAcknowledged
+
+            val answered = withTimeoutOrNull(backoffMs) {
+                flightProfileMetadataMessageState.first { it == LocatorMessageState.AckUpdated }
+            } != null
+            if (answered) {
+                Log.d(TAG, "Flight metadata received on attempt $attempt")
+                return
             }
-            // State is NOT reset to Idle here. FlightProfilesScreen resets it via
-            // DisposableEffect.onDispose so the list stays visible while the user is
-            // on the screen, and a fresh fetch is triggered on the next entry.
+
+            Log.d(TAG, "Flight metadata attempt $attempt unanswered after ${backoffMs}ms — retrying")
+            _flightProfileMetadataMessageState.update { current ->
+                if (current == LocatorMessageState.Sent) LocatorMessageState.NotAcknowledged
+                else current
+            }
+            // Capped so a long wait still refreshes the locator's 30 s
+            // metadata-idle timeout rather than letting it drop to Disarmed.
+            backoffMs = (backoffMs * 2).coerceAtMost(METADATA_RETRY_MAX_MS)
         }
     }
 
@@ -1200,6 +1275,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             MsgType.ReceiverInfo     -> ParsedMessage.ReceiverInfo(parseReceiverInfo(frame))
             MsgType.VersionInfo      -> ParsedMessage.VersionInfo(parseVersionInfo(frame))
             MsgType.FlightMetadata   -> ParsedMessage.FlightMetadata(frame)
+            MsgType.FlightEvents     ->
+                FlightEventsData.parse(frame)?.let { ParsedMessage.FlightEvents(it) }
             MsgType.FlightData       -> ParsedMessage.FlightData(frame)
             MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
             else                     -> null

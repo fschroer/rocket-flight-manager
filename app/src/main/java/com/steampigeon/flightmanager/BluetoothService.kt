@@ -243,6 +243,7 @@ class BluetoothService : Service() {
             MsgType.TelemetryData    -> Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE
             MsgType.DeploymentTest   -> Protocol.DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE
             MsgType.FlightMetadata   -> FLIGHT_METADATA_PAYLOAD_SIZE
+            MsgType.FlightEvents     -> Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE
             MsgType.ReceiverInfo     -> Protocol.RECEIVER_INFO_PAYLOAD_SIZE
             MsgType.VersionInfo      -> Protocol.VERSION_INFO_PAYLOAD_SIZE
             MsgType.FlightData -> {

@@ -2,6 +2,7 @@ package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
+import com.steampigeon.flightmanager.data.FlightEventIndex
 import com.steampigeon.flightmanager.data.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -37,6 +38,15 @@ class WireLayoutTest {
 
     // FlightMetadata: 10 records × 10 bytes = 100 payload
     @Test fun flightMetadataPayloadSize() = assertEquals(100, FLIGHT_METADATA_PAYLOAD_SIZE)
+
+    // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + reserved 1 +
+    // present_mask 2 + flight_timestamp_s 4 + event_timestamp_ms[11] 44 +
+    // max_altitude_m 4 + deployment_ch_stats[4] 4)
+    @Test fun flightEventsPayloadSize() = assertEquals(60, Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE)
+
+    // The event count is baked into the payload size above and into the wire
+    // order shared with the firmware's Communication::FlightEvent enum.
+    @Test fun flightEventCount() = assertEquals(11, FlightEventIndex.entries.size)
 
     // FlightDataPacket: max LoRa frame = 256 on the app side
     @Test fun maxPacketSize() = assertEquals(256, Protocol.MAX_PACKET_SIZE)
