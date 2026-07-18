@@ -724,7 +724,9 @@ private fun MapWithOverlays(
             rocketLatLng = locatorLatLng,
             rocketFresh = rocketFresh,
             accuracyRadiusM = rocketState.hacc.toDouble(),
-            flightPath = flightPath.map { (lat, lng, _) -> LatLng(lat, lng) },
+            // Altitude is carried through, not dropped: it drives the 3D
+            // altitude curtain under the track.
+            flightPath = flightPath.map { (lat, lng, agl) -> PathPoint(lat, lng, agl) },
             userLocation = trackerLocation,
             onMapLoaded = onMapLoaded,
             onMapClick = {
@@ -985,12 +987,38 @@ private fun MapCameraController(
         // reason first changes. This keeps lastUserGestureTime rolling forward for the
         // entire duration of a continuous gesture (long pan, slow pinch, etc.) so the
         // 5 s recovery window always starts from the last frame of user input.
-        snapshotFlow { cameraState.moveStartedReason to cameraState.position }
-            .collect { (reason, _) ->
-                if (reason == REASON_GESTURE) {
+        // Keyed on isGesturing, not moveStartedReason: our own programmatic
+        // moves fire onCameraMoveStarted with REASON_API_ANIMATION and used to
+        // overwrite the user's REASON_API_GESTURE within milliseconds, so this
+        // collector frequently never saw the gesture at all.
+        snapshotFlow { cameraState.isGesturing to cameraState.position }
+            .collect { (gesturing, _) ->
+                // ONLY isGesturing. moveStartedReason must not be consulted here:
+                // it is stale-sticky — a real gesture sets it to REASON_GESTURE and
+                // nothing clears it — while this flow re-emits on every camera
+                // position change, including our own writes. That let a
+                // long-finished gesture re-arm the backoff one frame after it was
+                // cleared, so the controller got a single frame of camera motion
+                // per 5 s cycle: tilt froze part-way, each isolated write showed
+                // as a jump, and auto-zoom crawled. isGesturing is latched on a
+                // real gesture and cleared on camera idle, so it cannot go stale.
+                if (gesturing) {
                     lastUserGestureTime = System.currentTimeMillis()
                 }
             }
+    }
+
+    // Tapping a camera control is an explicit command, not something to defer to.
+    //
+    // The gesture backoff exists so the auto-camera doesn't fight your fingers,
+    // but its early-return blocks EVERY camera change — so after a manual
+    // pan/zoom/rotate, hitting 3D (or auto-center, auto-zoom, compass) did
+    // nothing at all until the 5 s window expired. targetTilt is gated a second
+    // time by userTiltRecent, so both windows have to be cleared for the tilt to
+    // take effect immediately.
+    LaunchedEffect(is3DView, autoTargetMode, autoZoomMode, compassEnabled) {
+        lastUserGestureTime = 0L
+        lastUserTiltTime = 0L
     }
 
     // Fix #4: detect a user tilt gesture by watching the native map's tilt diverge from
@@ -998,7 +1026,7 @@ private fun MapCameraController(
     LaunchedEffect(Unit) {
         snapshotFlow { cameraState.position.tilt }
             .collect { nativeTilt ->
-                if (cameraState.moveStartedReason == REASON_GESTURE &&
+                if (cameraState.isGesturing &&
                     abs(nativeTilt - lastAppliedTilt) > 2f) {
                     lastUserTiltTime = System.currentTimeMillis()
                 }
@@ -1074,7 +1102,16 @@ private fun MapCameraController(
         // out further — a rotated box needs a bigger viewport, and with the compass on the
         // bearing is arbitrary. Worse, tilt is already compensated below (zoomCorrection),
         // so letting the SDK account for it too corrects twice and over-zooms out.
-        val cam = map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+        // Cached on the inputs. This is a native JNI query, and the controller
+        // re-runs every display frame (~120/s measured), but the answer only
+        // changes when one of the two positions does — roughly once a second.
+        val cam = remember(
+            rocketState.latitude, rocketState.longitude,
+            trackerLocation.latitude, trackerLocation.longitude,
+            trackerHasGps, map,
+        ) {
+            map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+        }
         Pair(cam?.target, cam?.zoom?.toFloat())
     } else {
         Pair(null, null)
