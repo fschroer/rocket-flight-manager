@@ -67,9 +67,11 @@ import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
-import kotlin.math.hypot
 import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.hypot
 
 // The gesture reason constant, surfaced so MapCameraController can compare against it
 // exactly as it compared against Google's CameraMoveStartedReason.GESTURE.
@@ -213,31 +215,56 @@ fun loadSatelliteStyleJson(context: Context): String =
 
 // Layer / source ids
 /**
- * One recorded point of the rocket's track: ground position plus altitude above
- * ground level, in metres.
+ * One recorded point of the rocket's track: ground position, altitude above
+ * ground level in metres, and the wall-clock time the fix was received.
  *
  * The altitude used to be discarded at the map boundary, which is why the path
  * drew flat on the terrain in 3D.
+ *
+ * [timestampMs] is what lets the second markers land on real one-second
+ * boundaries.  Point index is not a substitute: these are live radio fixes, so
+ * a dropped packet would slide every later mark forward by an interval.
  */
-data class PathPoint(val latitude: Double, val longitude: Double, val altitudeM: Float)
+data class PathPoint(
+    val latitude: Double,
+    val longitude: Double,
+    val altitudeM: Float,
+    val timestampMs: Long,
+)
 
 private const val SRC_ACCURACY = "accuracy-src"
 private const val SRC_PATH = "path-src"
 private const val SRC_PATH_CURTAIN = "path-curtain-src"
+private const val SRC_PATH_TICKS = "path-ticks-src"
 private const val SRC_ROCKET = "rocket-src"
 private const val LYR_ACCURACY_FILL = "accuracy-fill"
 private const val LYR_ACCURACY_LINE = "accuracy-line"
 private const val LYR_PATH = "path-line"
 private const val LYR_PATH_CURTAIN = "path-curtain"
+private const val LYR_PATH_TICKS = "path-ticks"
 private const val LYR_ROCKET = "rocket-dot"
 
 // Altitude curtain under the flight path.  MapLibre's line layer is strictly
 // ground-plane — the style spec has no 3D polyline — so lifting the track into
 // the air means extruded polygons: one quad per segment, extruded from the
 // ground to that segment's AGL.  fill-extrusion base/height are constant per
-// feature, so the profile is a staircase; CURTAIN_SUBDIVISIONS interpolates
-// between telemetry fixes to make the steps small enough to read as a curve.
-private const val CURTAIN_SUBDIVISIONS = 8
+// feature, so the wall's top edge is always a staircase; the only lever is how
+// tall each riser is, and each telemetry interval is therefore split into
+// linearly interpolated sub-segments to shrink them.
+//
+// The split is driven by altitude change, not by a fixed count.  A fixed count
+// divides the *ground* track evenly, which is the wrong axis: on a near-vertical
+// boost the track barely advances while altitude climbs hundreds of metres, so
+// the risers stay large no matter how finely the ground run is chopped.
+// Budgeting by riser height instead spends subdivisions where the profile is
+// actually steep and emits a single quad across level flight.  Feature count
+// over a whole flight should come out near the old flat 8× — boost costs more,
+// but the much longer coast and descent cost far less.
+private const val CURTAIN_MAX_RISER_M = 1.0f
+
+// Ceiling on the split, so one wild altitude jump (a garbled fix, or the first
+// sample after a radio dropout) can't emit thousands of quads for one interval.
+private const val CURTAIN_MAX_SUBDIVISIONS = 64
 
 // Half-width of each curtain quad, in metres.  Wide enough that the wall stays
 // visible edge-on when the camera looks along the track, narrow enough not to
@@ -247,6 +274,21 @@ private const val CURTAIN_HALF_WIDTH_M = 0.75
 // A segment whose peak is below this contributes no useful height information
 // and would just add z-fighting clutter over the ground line.
 private const val CURTAIN_MIN_ALT_M = 0.5f
+
+// One-second markers: full-height posts standing on the ground track up to the
+// path's altitude at each whole second of recording, turning the curtain into a
+// ruler you can read climb rate off directly.
+private const val TICK_INTERVAL_MS = 1_000L
+
+// Wider than the curtain (and given a little length along the track) so the post
+// protrudes from the wall on both faces.  Coincident geometry would z-fight
+// instead of reading as a mark.
+private const val TICK_HALF_WIDTH_M = 1.6
+private const val TICK_HALF_LENGTH_M = 0.4
+
+// Ceiling on marker count.  A recording left running for an hour would otherwise
+// emit 3600 posts, all rebuilt on every telemetry message.
+private const val TICK_MAX_COUNT = 600
 
 // Rocket marker icons, pre-tinted for the two freshness states.  Two images
 // rather than one SDF: an SDF would flatten the drawable to a tintable
@@ -263,6 +305,9 @@ private const val COLOR_GREEN = 0xFF00FF00.toInt()
 private const val COLOR_RED = 0xFFFF0000.toInt()
 private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
 private const val COLOR_PATH = 0xFFFF6600.toInt()
+// Cyan against the path's orange: near-complementary, so the second markers
+// stay legible where they cross the curtain and over satellite imagery alike.
+private const val COLOR_PATH_TICK = 0xFF00E5FF.toInt()
 
 /**
  * MapLibre map hosting the satellite style, with the rocket marker, GPS-accuracy ring,
@@ -410,6 +455,7 @@ private fun setupContentLayers(style: Style) {
     style.addSource(GeoJsonSource(SRC_ACCURACY, preciseGeometry))
     style.addSource(GeoJsonSource(SRC_PATH, preciseGeometry))
     style.addSource(GeoJsonSource(SRC_PATH_CURTAIN, preciseGeometry))
+    style.addSource(GeoJsonSource(SRC_PATH_TICKS, preciseGeometry))
     style.addSource(GeoJsonSource(SRC_ROCKET))
 
     style.addLayer(
@@ -447,6 +493,17 @@ private fun setupContentLayers(style: Style) {
             // as a ladder. Higher opacity hides them behind the front face while
             // still letting terrain show through enough to keep bearings.
             PropertyFactory.fillExtrusionOpacity(0.75f),
+        )
+    )
+    // One-second markers, added after the curtain so they sort in front of it
+    // where the two overlap.  Fully opaque: these are the reference marks the
+    // curtain is read against, so they must not pick up the wall's colour.
+    style.addLayer(
+        FillExtrusionLayer(LYR_PATH_TICKS, SRC_PATH_TICKS).withProperties(
+            PropertyFactory.fillExtrusionColor(COLOR_PATH_TICK),
+            PropertyFactory.fillExtrusionHeight(Expression.get("height")),
+            PropertyFactory.fillExtrusionBase(0f),
+            PropertyFactory.fillExtrusionOpacity(1.0f),
         )
     )
     style.addLayer(
@@ -524,6 +581,7 @@ private fun updateContentLayers(
         LineString.fromLngLats(emptyList())
     (style.getSourceAs<GeoJsonSource>(SRC_PATH))?.setGeoJson(pathGeo)
     (style.getSourceAs<GeoJsonSource>(SRC_PATH_CURTAIN))?.setGeoJson(altitudeCurtain(flightPath))
+    (style.getSourceAs<GeoJsonSource>(SRC_PATH_TICKS))?.setGeoJson(secondMarkers(flightPath))
 
     // Rocket marker
     (style.getSourceAs<GeoJsonSource>(SRC_ROCKET))?.setGeoJson(
@@ -540,9 +598,10 @@ private fun updateContentLayers(
  *
  * Each output feature is a thin rectangle in plan view carrying a `height`
  * property (metres AGL) for `fill-extrusion-height`.  Because that height is
- * constant across a feature, consecutive segments form steps; each telemetry
- * interval is therefore split into [CURTAIN_SUBDIVISIONS] pieces with linearly
- * interpolated altitude so the steps read as a smooth arc.
+ * constant across a feature, consecutive features form steps; each telemetry
+ * interval is therefore split into linearly interpolated sub-segments, as many
+ * as it takes to keep every riser under [CURTAIN_MAX_RISER_M], so the steps read
+ * as a smooth arc.
  *
  * Returns an empty collection for a path with no meaningful altitude, so a
  * pad-bound or ground-level track doesn't draw a degenerate wall.
@@ -550,16 +609,17 @@ private fun updateContentLayers(
 internal fun altitudeCurtain(path: List<PathPoint>): FeatureCollection {
     if (path.size < 2) return FeatureCollection.fromFeatures(emptyList())
 
-    val features = ArrayList<Feature>((path.size - 1) * CURTAIN_SUBDIVISIONS)
+    val features = ArrayList<Feature>(path.size - 1)
     val metersPerDegLat = 111_320.0
 
     for (i in 0 until path.size - 1) {
         val a = path[i]
         val b = path[i + 1]
+        val subdivisions = curtainSubdivisions(a.altitudeM, b.altitudeM)
 
-        for (s in 0 until CURTAIN_SUBDIVISIONS) {
-            val t0 = s.toDouble() / CURTAIN_SUBDIVISIONS
-            val t1 = (s + 1).toDouble() / CURTAIN_SUBDIVISIONS
+        for (s in 0 until subdivisions) {
+            val t0 = s.toDouble() / subdivisions
+            val t1 = (s + 1).toDouble() / subdivisions
 
             val lat0 = a.latitude + (b.latitude - a.latitude) * t0
             val lon0 = a.longitude + (b.longitude - a.longitude) * t0
@@ -601,6 +661,100 @@ internal fun altitudeCurtain(path: List<PathPoint>): FeatureCollection {
                 }
             )
         }
+    }
+    return FeatureCollection.fromFeatures(features)
+}
+
+/**
+ * How many pieces one telemetry interval must be split into to keep each
+ * fill-extrusion riser under [CURTAIN_MAX_RISER_M].
+ *
+ * Level flight needs exactly one quad — subdividing it would emit identical
+ * heights and buy nothing — so the floor is 1, not a fixed count.
+ */
+internal fun curtainSubdivisions(altFromM: Float, altToM: Float): Int =
+    ceil(abs(altToM - altFromM) / CURTAIN_MAX_RISER_M)
+        .toInt()
+        .coerceIn(1, CURTAIN_MAX_SUBDIVISIONS)
+
+/**
+ * Builds the one-second markers: contrasting posts standing on the ground track,
+ * each extruded from the ground to the path's interpolated altitude at a whole
+ * second of recording time.
+ *
+ * Marks are placed at real elapsed time from the first recorded fix, found by
+ * interpolating between the two samples that bracket each boundary — so they
+ * stay on true seconds through a dropped packet or a variable radio interval,
+ * which counting samples would not.
+ *
+ * The mark at t=0 is skipped: the rocket is on the pad, so its post would have
+ * no height to draw.
+ */
+internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
+    if (path.size < 2) return FeatureCollection.fromFeatures(emptyList())
+
+    val startMs = path.first().timestampMs
+    val endMs = path.last().timestampMs
+    // Non-monotonic timestamps (a clock adjustment mid-recording) leave no
+    // meaningful time axis to mark up.
+    if (endMs <= startMs) return FeatureCollection.fromFeatures(emptyList())
+
+    val features = ArrayList<Feature>()
+    val metersPerDegLat = 111_320.0
+    var index = 0            // walks forward with the marks; both are ordered
+
+    var elapsed = TICK_INTERVAL_MS
+    while (startMs + elapsed <= endMs && features.size < TICK_MAX_COUNT) {
+        val markMs = startMs + elapsed
+        elapsed += TICK_INTERVAL_MS
+
+        while (index < path.size - 2 && path[index + 1].timestampMs < markMs) index++
+        val a = path[index]
+        val b = path[index + 1]
+
+        val span = (b.timestampMs - a.timestampMs).toDouble()
+        val f = if (span > 0.0) ((markMs - a.timestampMs) / span).coerceIn(0.0, 1.0) else 0.0
+
+        val alt = a.altitudeM + (b.altitudeM - a.altitudeM) * f.toFloat()
+        if (alt < CURTAIN_MIN_ALT_M) continue
+
+        val lat = a.latitude + (b.latitude - a.latitude) * f
+        val lon = a.longitude + (b.longitude - a.longitude) * f
+
+        // Orient the post across the direction of travel, matching the curtain.
+        val cosLat = cos(lat * PI / 180.0).coerceAtLeast(1e-6)
+        val dxM = (b.longitude - a.longitude) * metersPerDegLat * cosLat
+        val dyM = (b.latitude - a.latitude) * metersPerDegLat
+        val lenM = hypot(dxM, dyM)
+        // A rocket descending under canopy in still air can hold one lat/lon
+        // across the whole interval.  It still has altitude worth marking, so
+        // fall back to a north-aligned post rather than dropping the mark.
+        val ux = if (lenM < 1e-6) 0.0 else dxM / lenM
+        val uy = if (lenM < 1e-6) 1.0 else dyM / lenM
+
+        // Half-diagonals of the rectangle: along-track length, across-track width.
+        val alongX = ux * TICK_HALF_LENGTH_M
+        val alongY = uy * TICK_HALF_LENGTH_M
+        val acrossX = -uy * TICK_HALF_WIDTH_M
+        val acrossY = ux * TICK_HALF_WIDTH_M
+
+        fun corner(sx: Int, sy: Int): Point {
+            val mx = alongX * sx + acrossX * sy
+            val my = alongY * sx + acrossY * sy
+            return Point.fromLngLat(
+                lon + mx / (metersPerDegLat * cosLat),
+                lat + my / metersPerDegLat,
+            )
+        }
+
+        val ring = listOf(
+            corner(-1, +1), corner(+1, +1), corner(+1, -1), corner(-1, -1), corner(-1, +1),
+        )
+        features.add(
+            Feature.fromGeometry(Polygon.fromLngLats(listOf(ring))).apply {
+                addNumberProperty("height", alt)
+            }
+        )
     }
     return FeatureCollection.fromFeatures(features)
 }

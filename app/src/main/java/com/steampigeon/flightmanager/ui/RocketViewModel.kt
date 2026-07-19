@@ -515,8 +515,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         FlightDataRepository.cancelTransfer()
     }
 
-    private val _flightPath = MutableStateFlow<List<Triple<Double, Double, Float>>>(emptyList())
-    val flightPath: StateFlow<List<Triple<Double, Double, Float>>> = _flightPath.asStateFlow()
+    private val _flightPath = MutableStateFlow<List<PathPoint>>(emptyList())
+    val flightPath: StateFlow<List<PathPoint>> = _flightPath.asStateFlow()
     private var _previousFlightState = FlightStates.WaitingLaunch
 
     private val _isFlightPathRecording = MutableStateFlow(true)
@@ -529,14 +529,27 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         loadFlightPath()
     }
 
+    /**
+     * Restores the last recorded path.  Rows are `lat,lng,agl,timestampMs`.
+     *
+     * Rows from the earlier three-column format are dropped rather than
+     * back-filled: they carry no capture time, and inventing one would put the
+     * map's one-second markers at times the rocket was never at.  The cost is
+     * losing a cached path once, on the first run after upgrading.
+     */
     private fun loadFlightPath() {
         val file = flightPathFile
         if (!file.exists()) return
         try {
             val points = file.readLines().mapNotNull { line ->
                 val parts = line.split(",")
-                if (parts.size == 3) {
-                    Triple(parts[0].toDouble(), parts[1].toDouble(), parts[2].toFloat())
+                if (parts.size == 4) {
+                    PathPoint(
+                        parts[0].toDouble(),
+                        parts[1].toDouble(),
+                        parts[2].toFloat(),
+                        parts[3].toLong(),
+                    )
                 } else null
             }
             if (points.isNotEmpty()) _flightPath.value = points
@@ -547,7 +560,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 flightPathFile.writeText(
-                    _flightPath.value.joinToString("\n") { (lat, lng, agl) -> "$lat,$lng,$agl" }
+                    _flightPath.value.joinToString("\n") {
+                        "${it.latitude},${it.longitude},${it.altitudeM},${it.timestampMs}"
+                    }
                 )
             } catch (_: Exception) {}
         }
@@ -732,8 +747,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             if (_isFlightPathRecording.value &&
                                 newFlightState > FlightStates.WaitingLaunch &&
                                 (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0)) {
-                                _flightPath.value = _flightPath.value +
-                                    Triple(parsed.msg.latitude, parsed.msg.longitude, parsed.msg.agl)
+                                // Wall-clock, not elapsedRealtime: the path is
+                                // persisted and reloaded across process restarts,
+                                // where a monotonic clock's zero has moved.
+                                _flightPath.value = _flightPath.value + PathPoint(
+                                    parsed.msg.latitude,
+                                    parsed.msg.longitude,
+                                    parsed.msg.agl,
+                                    System.currentTimeMillis(),
+                                )
                                 saveFlightPath()
                             }
                             _previousFlightState = newFlightState

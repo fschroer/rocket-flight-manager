@@ -667,7 +667,7 @@ private fun MapWithOverlays(
     viewModel: RocketViewModel,
     scaffoldSize: IntSize,
     textToSpeech: TextToSpeech?,
-    flightPath: List<Triple<Double, Double, Float>>,
+    flightPath: List<PathPoint>,
     onMenuClick: () -> Unit,
     modifier: Modifier,
 ) {
@@ -731,9 +731,9 @@ private fun MapWithOverlays(
             rocketLatLng = locatorLatLng,
             rocketFresh = rocketFresh,
             accuracyRadiusM = rocketState.hacc.toDouble(),
-            // Altitude is carried through, not dropped: it drives the 3D
-            // altitude curtain under the track.
-            flightPath = flightPath.map { (lat, lng, agl) -> PathPoint(lat, lng, agl) },
+            // Altitude and capture time are carried through, not dropped: they
+            // drive the 3D altitude curtain and its one-second markers.
+            flightPath = flightPath,
             userLocation = trackerLocation,
             onMapLoaded = onMapLoaded,
             onMapClick = {

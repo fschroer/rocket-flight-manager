@@ -2,6 +2,7 @@ package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.ui.PathPoint
 import com.steampigeon.flightmanager.ui.altitudeCurtain
+import com.steampigeon.flightmanager.ui.curtainSubdivisions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,15 +26,21 @@ class AltitudeCurtainTest {
         const val LAT = 47.6146       // the user's test site — cos(lat) ≈ 0.674
         const val LON = -122.5526
         const val METERS_PER_DEG_LAT = 111_320.0
-        const val SUBDIVISIONS = 8    // CURTAIN_SUBDIVISIONS
-        const val HALF_WIDTH_M = 0.75 // CURTAIN_HALF_WIDTH_M
+        const val MAX_RISER_M = 1.0    // CURTAIN_MAX_RISER_M
+        const val MAX_SUBDIVISIONS = 64 // CURTAIN_MAX_SUBDIVISIONS
+        const val HALF_WIDTH_M = 0.75  // CURTAIN_HALF_WIDTH_M
     }
 
-    /** Offset [northM]/[eastM] metres from the reference point. */
-    private fun offset(northM: Double, eastM: Double, altM: Float): PathPoint {
+    /**
+     * Offset [northM]/[eastM] metres from the reference point.  Timestamps are
+     * irrelevant to the curtain, so they default to a 50 ms cadence by index.
+     */
+    private fun offset(
+        northM: Double, eastM: Double, altM: Float, timestampMs: Long = 0L,
+    ): PathPoint {
         val dLat = northM / METERS_PER_DEG_LAT
         val dLon = eastM / (METERS_PER_DEG_LAT * cos(LAT * PI / 180.0))
-        return PathPoint(LAT + dLat, LON + dLon, altM)
+        return PathPoint(LAT + dLat, LON + dLon, altM, timestampMs)
     }
 
     private fun heights(fc: org.maplibre.geojson.FeatureCollection): List<Double> =
@@ -81,14 +88,41 @@ class AltitudeCurtainTest {
     // ── Subdivision ─────────────────────────────────────────────────────────
 
     @Test
-    fun eachSegmentIsSubdivided() {
+    fun subdivisionIsBudgetedByAltitudeChangeNotSegmentCount() {
+        // The whole point of the adaptive split: a steep interval must be cut
+        // finer than a shallow one covering the same ground.  A fixed count
+        // divides the ground run evenly and gives both the same treatment,
+        // which is what left the boost phase looking like stairs.
+        assertEquals(1, curtainSubdivisions(100f, 100f))
+        assertEquals(1, curtainSubdivisions(100f, 100.5f))
+        assertEquals(10, curtainSubdivisions(100f, 110f))
+        assertEquals(10, curtainSubdivisions(110f, 100f))   // descent is symmetric
+        assertEquals(MAX_SUBDIVISIONS, curtainSubdivisions(0f, 5000f))
+    }
+
+    @Test
+    fun everyRiserStaysUnderTheBudget() {
+        // The invariant the smoothness actually depends on: no step in the
+        // wall's top edge taller than CURTAIN_MAX_RISER_M, across a segment
+        // whose split is not capped.
+        val path = listOf(offset(0.0, 0.0, 0f), offset(20.0, 0.0, 40f))
+        val h = heights(altitudeCurtain(path))
+        h.zipWithNext { a, b ->
+            assertTrue("riser ${b - a} exceeds budget: $h", abs(b - a) <= MAX_RISER_M + 1e-6)
+        }
+    }
+
+    @Test
+    fun levelFlightIsNotSubdividedAtAll() {
+        // Sub-segments of a level interval would all carry the same height, so
+        // splitting it buys nothing and just multiplies the feature count on a
+        // source that is rebuilt on every telemetry message.
         val path = listOf(
-            offset(0.0, 0.0, 100f),
-            offset(100.0, 0.0, 200f),
+            offset(0.0, 0.0, 300f),
+            offset(100.0, 0.0, 300f),
             offset(200.0, 0.0, 300f),
         )
-        // 2 segments × SUBDIVISIONS, all well above the minimum height.
-        assertEquals(2 * SUBDIVISIONS, altitudeCurtain(path).features()!!.size)
+        assertEquals(2, altitudeCurtain(path).features()!!.size)
     }
 
     @Test
@@ -99,12 +133,12 @@ class AltitudeCurtainTest {
         val path = listOf(offset(0.0, 0.0, 0f), offset(100.0, 0.0, 800f))
         val h = heights(altitudeCurtain(path))
 
-        assertEquals(SUBDIVISIONS, h.size)
+        assertEquals(MAX_SUBDIVISIONS, h.size)   // 800 m of climb hits the cap
         h.zipWithNext { a, b -> assertTrue("heights not increasing: $h", b > a) }
         assertTrue("first step too low: ${h.first()}", h.first() > 0.0)
         assertTrue("last step exceeds apogee: ${h.last()}", h.last() < 800.0)
         // Mid-segment should sit near the midpoint altitude.
-        assertEquals(400.0, h[SUBDIVISIONS / 2 - 1] / 2 + h[SUBDIVISIONS / 2] / 2, 60.0)
+        assertEquals(400.0, h[h.size / 2 - 1] / 2 + h[h.size / 2] / 2, 60.0)
     }
 
     @Test
