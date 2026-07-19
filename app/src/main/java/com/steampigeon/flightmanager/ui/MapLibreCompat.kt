@@ -224,12 +224,20 @@ fun loadSatelliteStyleJson(context: Context): String =
  * [timestampMs] is what lets the second markers land on real one-second
  * boundaries.  Point index is not a substitute: these are live radio fixes, so
  * a dropped packet would slide every later mark forward by an interval.
+ *
+ * [timeSynthetic] marks a point restored from a recording made before capture
+ * times existed.  Its position and altitude are real and draw normally; only its
+ * timestamp is a placeholder, so [secondMarkers] steps over it rather than
+ * standing a post at a second the rocket was never at.  Keeping the geometry and
+ * dropping only the marks is the right trade — the track is where the rocket
+ * went, which is recovery data; the marks are a reading aid.
  */
 data class PathPoint(
     val latitude: Double,
     val longitude: Double,
     val altitudeM: Float,
     val timestampMs: Long,
+    val timeSynthetic: Boolean = false,
 )
 
 private const val SRC_ACCURACY = "accuracy-src"
@@ -689,19 +697,30 @@ internal fun curtainSubdivisions(altFromM: Float, altToM: Float): Int =
  *
  * The mark at t=0 is skipped: the rocket is on the pad, so its post would have
  * no height to draw.
+ *
+ * Points carrying a synthetic timestamp ([PathPoint.timeSynthetic] — a path
+ * restored from a recording made before capture times existed) are stepped over.
+ * Elapsed time is measured from the first *real* fix, so a path that mixes a
+ * restored prefix with newly received points still marks the live portion
+ * correctly instead of anchoring to a placeholder zero.
  */
 internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
     if (path.size < 2) return FeatureCollection.fromFeatures(emptyList())
 
-    val startMs = path.first().timestampMs
-    val endMs = path.last().timestampMs
+    val firstReal = path.indexOfFirst { !it.timeSynthetic }
+    val lastReal = path.indexOfLast { !it.timeSynthetic }
+    // Nothing carries a real capture time — the whole path predates timestamps.
+    if (firstReal < 0 || lastReal <= firstReal) return FeatureCollection.fromFeatures(emptyList())
+
+    val startMs = path[firstReal].timestampMs
+    val endMs = path[lastReal].timestampMs
     // Non-monotonic timestamps (a clock adjustment mid-recording) leave no
     // meaningful time axis to mark up.
     if (endMs <= startMs) return FeatureCollection.fromFeatures(emptyList())
 
     val features = ArrayList<Feature>()
     val metersPerDegLat = 111_320.0
-    var index = 0            // walks forward with the marks; both are ordered
+    var index = firstReal    // walks forward with the marks; both are ordered
 
     var elapsed = TICK_INTERVAL_MS
     while (startMs + elapsed <= endMs && features.size < TICK_MAX_COUNT) {
@@ -711,6 +730,9 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
         while (index < path.size - 2 && path[index + 1].timestampMs < markMs) index++
         val a = path[index]
         val b = path[index + 1]
+        // Either endpoint's time is a placeholder, so where this second falls
+        // between them is unknowable.
+        if (a.timeSynthetic || b.timeSynthetic) continue
 
         val span = (b.timestampMs - a.timestampMs).toDouble()
         val f = if (span > 0.0) ((markMs - a.timestampMs) / span).coerceIn(0.0, 1.0) else 0.0

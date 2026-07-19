@@ -169,6 +169,60 @@ class SecondMarkersTest {
         }
     }
 
+    // ── Restored (pre-timestamp) recordings ─────────────────────────────────
+
+    /** A fix whose timestamp is a placeholder, as restored from a 3-column row. */
+    private fun legacyFix(tMs: Long, northM: Double, altM: Float) = PathPoint(
+        LAT + northM / METERS_PER_DEG_LAT, LON, altM, tMs, timeSynthetic = true,
+    )
+
+    @Test
+    fun aFullyRestoredPathGetsNoMarksButStillHasItsGeometry() {
+        // The whole point of keeping legacy rows: the track is real and must
+        // survive, but its timestamps are invented, so no post may be stood on
+        // them. altitudeCurtain ignores time entirely and still draws the wall.
+        val path = (0..40).map { legacyFix(it * 200L, it * 2.0, it * 10f) }
+        assertTrue(secondMarkers(path).features()!!.isEmpty())
+        assertTrue(
+            "restored path must still draw a curtain",
+            com.steampigeon.flightmanager.ui.altitudeCurtain(path).features()!!.isNotEmpty()
+        )
+    }
+
+    @Test
+    fun aRestoredPrefixDoesNotAnchorTheLivePortionsMarks() {
+        // Reload a legacy path, then keep recording: placeholder times start near
+        // zero while real ones are wall-clock, so anchoring elapsed time to
+        // path.first() would put every boundary billions of ms away and yield
+        // nothing. Marks must run from the first REAL fix.
+        val restored = (0..9).map { legacyFix(it * 200L, it * 1.0, 50f) }
+        val live = (0..3).map { fix(it * 1000L, 100.0 + it, 200f + it * 100f) }
+        val h = heights(secondMarkers(restored + live))
+
+        assertEquals(3, h.size)
+        assertEquals(300.0, h[0], 1.0)
+        assertEquals(400.0, h[1], 1.0)
+        assertEquals(500.0, h[2], 1.0)
+    }
+
+    @Test
+    fun theIntervalStraddlingTheRestoredToLiveSeamIsSkipped() {
+        // Where a placeholder time meets a real one there is no meaningful span
+        // to interpolate across, so that interval must produce no mark even
+        // though a second boundary falls inside it.
+        val path = listOf(
+            legacyFix(0L, 0.0, 100f),
+            legacyFix(200L, 1.0, 200f),
+            fix(0, 2.0, 300f),        // seam: real time restarts here
+            fix(2000, 3.0, 500f),
+        )
+        val h = heights(secondMarkers(path))
+        // Only the fully-real interval contributes: marks at +1 s and +2 s.
+        assertEquals(2, h.size)
+        assertEquals(400.0, h[0], 1.0)
+        assertEquals(500.0, h[1], 1.0)
+    }
+
     @Test
     fun markCountIsCapped() {
         // An hour-long recording left running must not emit 3600 posts, all

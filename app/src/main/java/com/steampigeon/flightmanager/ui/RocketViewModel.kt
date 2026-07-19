@@ -101,6 +101,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     companion object {
+        // Spacing given to points restored from a pre-timestamp recording. It is
+        // a placeholder to keep the axis monotonic, not a claim about the
+        // original cadence — those points are flagged synthetic and no marker
+        // reads their time.
+        const val LEGACY_PLACEHOLDER_INTERVAL_MS = 200L
         const val SAMPLES_PER_SECOND = 20
         const val HDOP_SCALE = 10
         const val ALTIMETER_SCALE = 10
@@ -532,25 +537,41 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Restores the last recorded path.  Rows are `lat,lng,agl,timestampMs`.
      *
-     * Rows from the earlier three-column format are dropped rather than
-     * back-filled: they carry no capture time, and inventing one would put the
-     * map's one-second markers at times the rocket was never at.  The cost is
-     * losing a cached path once, on the first run after upgrading.
+     * Three-column rows predate capture times.  They are kept, not dropped: the
+     * ground track and altitude profile in them are real, and that is the part
+     * worth having — it is where the rocket went.  Only the timestamp is
+     * invented, and it is flagged [PathPoint.timeSynthetic] so the map suppresses
+     * one-second markers over those points rather than standing posts at times
+     * the rocket was never at.
+     *
+     * The missing fourth column *is* the flag, on disk as well as in memory, so
+     * this round-trips through [saveFlightPath] with no format version to carry.
      */
     private fun loadFlightPath() {
         val file = flightPathFile
         if (!file.exists()) return
         try {
-            val points = file.readLines().mapNotNull { line ->
+            val points = file.readLines().mapIndexedNotNull { index, line ->
                 val parts = line.split(",")
-                if (parts.size == 4) {
-                    PathPoint(
+                when (parts.size) {
+                    4 -> PathPoint(
                         parts[0].toDouble(),
                         parts[1].toDouble(),
                         parts[2].toFloat(),
                         parts[3].toLong(),
                     )
-                } else null
+                    // Placeholder time: kept monotonic so it can't look like a
+                    // clock that ran backwards, but nothing reads it — the
+                    // markers step over synthetic points entirely.
+                    3 -> PathPoint(
+                        parts[0].toDouble(),
+                        parts[1].toDouble(),
+                        parts[2].toFloat(),
+                        index * LEGACY_PLACEHOLDER_INTERVAL_MS,
+                        timeSynthetic = true,
+                    )
+                    else -> null
+                }
             }
             if (points.isNotEmpty()) _flightPath.value = points
         } catch (_: Exception) {}
@@ -561,7 +582,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 flightPathFile.writeText(
                     _flightPath.value.joinToString("\n") {
-                        "${it.latitude},${it.longitude},${it.altitudeM},${it.timestampMs}"
+                        // A synthetic time is written back as the three-column row
+                        // it came from, so a restored path never gets promoted to
+                        // looking like it carries real capture times.
+                        if (it.timeSynthetic)
+                            "${it.latitude},${it.longitude},${it.altitudeM}"
+                        else
+                            "${it.latitude},${it.longitude},${it.altitudeM},${it.timestampMs}"
                     }
                 )
             } catch (_: Exception) {}
