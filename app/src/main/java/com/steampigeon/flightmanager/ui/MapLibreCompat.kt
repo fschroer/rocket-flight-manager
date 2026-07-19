@@ -273,13 +273,28 @@ private const val LYR_ROCKET = "rocket-dot"
 // leaves a chain of straight chords meeting at a visible corner on every
 // telemetry point, which on the ~1 Hz live path is the dominant artefact: a
 // second of boost is ~100 m of climb drawn as one straight line.
-private const val CURTAIN_MIN_RISER_M = 0.25f
+private const val CURTAIN_TARGET_RISER_M = 0.25f
 
-// Total sub-quad budget for one path.  The riser target is relaxed from
-// CURTAIN_MIN_RISER_M as needed to stay under this, so a short hop gets a very
-// fine wall while a big flight degrades gracefully instead of emitting tens of
-// thousands of features into a source rebuilt on every change.
-private const val CURTAIN_MAX_QUADS = 2000
+// Backstop on total sub-quads, relaxing the riser only if a path would otherwise
+// emit an unreasonable number of features.
+//
+// Deliberately set high enough NOT to bind on a normal flight, because the term
+// that drives it — summed |altitude change| — cannot tell signal from noise, and
+// that bit hard.  Raw baro at the 20 Hz archive cadence jitters a few metres
+// sample to sample, and summing ABSOLUTE differences over ~2000 samples turns
+// that jitter into thousands of metres: a 122 m flight measured 244 m of
+// variation clean, but 4000 m with ±3 m of noise.  With the old ceiling of 2000
+// quads that inflated the riser from the intended 0.25 m to ~2 m, and on a
+// longer record to 4-6 m — so the budget was silently undoing the very smoothing
+// it was introduced alongside.  Measured on a real archived record; see the
+// SESSION_HANDOFF entry for the numbers.
+//
+// The cost of a high ceiling is feature count on a noisy archived record
+// (~16k quads at 0.25 m).  That is affordable because an archived path is built
+// once, not per telemetry message.  Genuinely fixing the roughness needs the
+// altitude signal de-noised before it is drawn, which is a fidelity decision
+// (it lowers the drawn apogee) and is deliberately NOT done here.
+private const val CURTAIN_MAX_QUADS = 20_000
 
 // Per-interval safety valve, so one wild altitude jump (a garbled fix, or the
 // first sample after a radio dropout) can't consume the whole budget itself.
@@ -506,19 +521,17 @@ private fun setupContentLayers(style: Style) {
             PropertyFactory.fillExtrusionColor(COLOR_PATH),
             PropertyFactory.fillExtrusionHeight(Expression.get("height")),
             PropertyFactory.fillExtrusionBase(0f),
-            // Fully opaque.  The curtain is a chain of separate prisms, so every
-            // sub-quad carries end-cap faces where it meets its neighbour; at any
-            // opacity below 1 those internal faces show through and the wall
-            // reads as a ladder.  Sub-dividing more finely to smooth the top edge
-            // makes that worse, not better — it multiplies the faces — which is
-            // the likely reason finer risers did not look smoother.
+            // Mostly opaque. The curtain is a chain of separate prisms, so each
+            // segment carries end-cap faces where it meets its neighbour; at low
+            // opacity those internal faces all show through and the wall reads
+            // as a ladder. Higher opacity hides them behind the front face while
+            // still letting terrain show through enough to keep bearings.
             //
-            // The cost is that terrain no longer shows through the wall.  If that
-            // turns out to matter for keeping bearings during a recovery walk,
-            // the alternative is to go back to ~0.75 and accept the ladder, since
-            // hiding the internal faces at partial opacity would mean merging the
-            // prisms into one solid — which fill-extrusion cannot express.
-            PropertyFactory.fillExtrusionOpacity(1.0f),
+            // Full opacity was tried and reverted: it removed the see-through
+            // without making the top edge any smoother, which is what ruled the
+            // end-cap faces out as the cause of the roughness. The cause is the
+            // riser height — see CURTAIN_MAX_QUADS.
+            PropertyFactory.fillExtrusionOpacity(0.75f),
         )
     )
     // One-second markers, added after the curtain so they sort in front of it
@@ -706,19 +719,21 @@ internal fun curtainSubdivisions(altFromM: Float, altToM: Float, riserM: Float):
         .coerceIn(1, CURTAIN_MAX_SUBDIVISIONS)
 
 /**
- * Riser height to aim for across [path], relaxed from [CURTAIN_MIN_RISER_M] only
- * as far as [CURTAIN_MAX_QUADS] requires.
+ * Riser height to aim for across [path]: [CURTAIN_TARGET_RISER_M], relaxed only
+ * if [CURTAIN_MAX_QUADS] would otherwise be exceeded.
  *
- * Total quads land near (total altitude variation / riser), so deriving the riser
- * from that variation bounds the whole path rather than each interval
- * independently — a 100 m hop gets a very fine wall, a 3 km flight gets a coarser
- * one, and neither can blow up the feature count.
+ * Total quads land near (summed altitude change / riser), which is why that sum
+ * is the backstop's input — but see [CURTAIN_MAX_QUADS] for why the ceiling is
+ * set high enough that it does not normally bind.  The sum counts sensor noise
+ * as though it were flight profile, so letting it drive the riser in ordinary
+ * use made the wall coarser precisely on the high-rate data that most needed it
+ * fine.
  */
 internal fun curtainRiser(path: List<PathPoint>): Float {
-    if (path.size < 2) return CURTAIN_MIN_RISER_M
+    if (path.size < 2) return CURTAIN_TARGET_RISER_M
     var variation = 0f
     for (i in 0 until path.size - 1) variation += abs(path[i + 1].altitudeM - path[i].altitudeM)
-    return maxOf(CURTAIN_MIN_RISER_M, variation / CURTAIN_MAX_QUADS)
+    return maxOf(CURTAIN_TARGET_RISER_M, variation / CURTAIN_MAX_QUADS)
 }
 
 /**

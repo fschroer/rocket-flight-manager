@@ -27,7 +27,7 @@ class AltitudeCurtainTest {
         const val LAT = 47.6146       // the user's test site — cos(lat) ≈ 0.674
         const val LON = -122.5526
         const val METERS_PER_DEG_LAT = 111_320.0
-        const val MIN_RISER_M = 0.25f    // CURTAIN_MIN_RISER_M
+        const val TARGET_RISER_M = 0.25f // CURTAIN_TARGET_RISER_M
         const val MAX_SUBDIVISIONS = 512 // CURTAIN_MAX_SUBDIVISIONS
         const val HALF_WIDTH_M = 0.75  // CURTAIN_HALF_WIDTH_M
     }
@@ -104,21 +104,47 @@ class AltitudeCurtainTest {
     }
 
     @Test
-    fun theRiserTargetRelaxesToStayInsideTheQuadBudget() {
-        // A small hop gets the finest riser on offer; a large flight must not
-        // demand tens of thousands of features from a source rebuilt on change.
+    fun anOrdinaryFlightGetsTheFullTargetRiser() {
         val hop = listOf(offset(0.0, 0.0, 0f), offset(50.0, 0.0, 100f))
-        assertEquals("small path should get the minimum riser", 0.25f, curtainRiser(hop), 1e-6f)
+        assertEquals(TARGET_RISER_M, curtainRiser(hop), 1e-6f)
+    }
 
-        // ~6 km of total variation cannot be drawn at 0.25 m per step within
-        // budget, so the target relaxes rather than the count exploding.
-        val big = listOf(
-            offset(0.0, 0.0, 0f), offset(500.0, 0.0, 3000f), offset(1000.0, 0.0, 0f),
+    @Test
+    fun sensorNoiseOnAHighRatePathDoesNotCoarsenTheRiser() {
+        // The regression this guards is subtle and cost several rounds to find.
+        //
+        // The quad backstop is driven by SUMMED |altitude change|, which cannot
+        // distinguish flight profile from sensor noise. Raw baro at the 20 Hz
+        // archive cadence jitters a few metres per sample, so summing absolute
+        // differences over ~2000 samples reports thousands of metres of
+        // "variation" for a flight that only climbed ~120 m. With a low ceiling
+        // that inflated the riser from 0.25 m to several metres — coarsening the
+        // wall precisely on the densest data, which is the opposite of intended.
+        val rng = java.util.Random(7)
+        val noisy = (0..2000).map { i ->
+            val t = i / 20.0
+            val profile = if (t < 12.0) 122.0 * (t / 12.0) else 122.0 * (1 - (t - 12) / 88).coerceAtLeast(0.0)
+            offset(i * 0.1, 0.0, (profile + (rng.nextDouble() - 0.5) * 6.0).toFloat())
+        }
+        val summed = noisy.zipWithNext { a, b -> abs(b.altitudeM - a.altitudeM) }.sum()
+        assertTrue("test data should be noise-dominated, got $summed m", summed > 2000f)
+        assertEquals(
+            "noise must not inflate the riser (summed variation was $summed m)",
+            TARGET_RISER_M, curtainRiser(noisy), 1e-6f
         )
-        assertTrue("riser should relax above the minimum", curtainRiser(big) > 0.25f)
+    }
+
+    @Test
+    fun anExtremePathStillRelaxesRatherThanExploding() {
+        // The backstop is deliberately high, not absent: something pathological
+        // must still be bounded rather than emitting unbounded geometry.
+        val absurd = listOf(
+            offset(0.0, 0.0, 0f), offset(500.0, 0.0, 30_000f), offset(1000.0, 0.0, 0f),
+        )
+        assertTrue("riser should relax on an absurd path", curtainRiser(absurd) > TARGET_RISER_M)
         assertTrue(
-            "quad count should stay near the budget",
-            altitudeCurtain(big).features()!!.size <= 2100
+            "quad count should stay bounded",
+            altitudeCurtain(absurd).features()!!.size <= 21_000
         )
     }
 
@@ -132,7 +158,7 @@ class AltitudeCurtainTest {
         h.zipWithNext { a, b ->
             // Tolerance is float-rounding slack, not budget slack: heights are
             // Float and accumulate ~1e-6 of error across the walk.
-            assertTrue("riser ${b - a} exceeds budget: $h", abs(b - a) <= MIN_RISER_M + 1e-3)
+            assertTrue("riser ${b - a} exceeds budget: $h", abs(b - a) <= TARGET_RISER_M + 1e-3)
         }
     }
 
