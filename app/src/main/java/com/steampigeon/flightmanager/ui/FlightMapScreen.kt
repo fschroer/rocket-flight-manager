@@ -1082,11 +1082,13 @@ private fun MapCameraController(
     val trackerHasGps = validLatLng(trackerLocation.latitude, trackerLocation.longitude)
 
     val (autoTarget, autoZoom) = if ((autoTargetMode || autoZoomMode) && rocketHasGps) {
-        val builder = LatLngBounds.Builder()
-            .include(LatLng(rocketState.latitude, rocketState.longitude))
-        if (trackerHasGps)
-            builder.include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
-        val bounds = builder.build()
+        val rocketLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+        // Bounds need BOTH points. MapLibre's LatLngBounds.Builder — unlike the Google Maps
+        // builder it replaced — throws InvalidLatLngBoundsException from build() when only one
+        // point was included. The tracker has no fix for the first moments after the map is
+        // re-created (e.g. returning here from flight profiles), so that is a routine state,
+        // not an edge case: with only the rocket known, centre on it and don't touch the zoom.
+        //
         // Ask the SDK to compute the framing. getCameraForLatLngBounds is a PURE query — it
         // returns a CameraPosition without touching the map — so unlike the old
         // moveCamera(newLatLngBounds(...)) "probe" it cannot move the camera mid-frame (that
@@ -1110,9 +1112,17 @@ private fun MapCameraController(
             trackerLocation.latitude, trackerLocation.longitude,
             trackerHasGps, map,
         ) {
-            map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+            if (!trackerHasGps) null
+            else {
+                val bounds = LatLngBounds.Builder()
+                    .include(rocketLatLng)
+                    .include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
+                    .build()
+                map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+            }
         }
-        Pair(cam?.target, cam?.zoom?.toFloat())
+        if (trackerHasGps) Pair(cam?.target, cam?.zoom?.toFloat())
+        else Pair(rocketLatLng, null)
     } else {
         Pair(null, null)
     }
