@@ -191,6 +191,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun updateLastHandheldDeviceAzimuth(newLastHandheldDeviceAzimuth: Float) {
         _lastHandheldDeviceAzimuth.value = newLastHandheldDeviceAzimuth
     }
+    // Elevation of the device's screen-normal axis, in signed degrees (−90..+90) — NOT
+    // wrapped to 0..360. Both writers must keep this convention: the AR overlay consumes it
+    // through a wrapping delta and can't tell the difference, but the map's tilt-follow mode
+    // reads it raw and would flip hard at the sign boundary.
     private val _handheldDevicePitch = MutableStateFlow<Float>(0f)
     val handheldDevicePitch: StateFlow<Float> = _handheldDevicePitch.asStateFlow()
     // Camera azimuth: direction the back camera is pointing (landscape-remapped Z axis).
@@ -1050,7 +1054,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         } ?: run {
             _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
         }
-        _handheldDevicePitch.value = ((Math.toDegrees(-orientation[1].toDouble()) + 360) % 360).toFloat()
+        // Signed −90..+90, matching updateOrientation's convention (see the doc on
+        // _handheldDevicePitch). This previously wrapped to 0..360, which read identically
+        // to the signed form through the AR overlay's ((a - b + 540) % 360) - 180 delta but
+        // would break any consumer using the raw value — e.g. the map's tilt-follow mode.
+        _handheldDevicePitch.value = Math.toDegrees(-orientation[1].toDouble()).toFloat()
     }
 
     fun locatorVector(latLng1: LatLng, latLng2: LatLng): Vector {
