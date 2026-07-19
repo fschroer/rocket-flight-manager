@@ -519,11 +519,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * The downloaded archive record as a map path — the fused, GPS-disciplined
      * track described on [archivedPathPoints].  Empty until a record is
      * transferred, which is what gates the map's source control.
+     *
+     * This is a *snapshot*, deliberately not derived from
+     * `FlightDataRepository.samples`.  That flow is the transfer assembly buffer:
+     * `beginTransfer()` empties it, and `clearFlightProfileData()` reaches it via
+     * `cancelTransfer()` when you navigate back from the chart.  Deriving from it
+     * meant the path was always empty by the time the map was on screen — the
+     * chart only survives the same trip because it is copied out too.
+     *
+     * So this outlives the chart on purpose.  The point of the feature is to load
+     * a record and then go look at it on the map, which cannot work if leaving
+     * the profile screen discards it.  It is replaced when the next record
+     * arrives, and cleared with [resetFlightPath].
      */
-    val archivedFlightPath: StateFlow<List<PathPoint>> =
-        FlightDataRepository.samples
-            .map { archivedPathPoints(it) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val _archivedFlightPath = MutableStateFlow<List<PathPoint>>(emptyList())
+    val archivedFlightPath: StateFlow<List<PathPoint>> = _archivedFlightPath.asStateFlow()
 
     /** Which track the map draws.  Live is raw GPS; archived is the EKF solution. */
     private val _showArchivedPath = MutableStateFlow(false)
@@ -531,14 +541,31 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleArchivedPath() { _showArchivedPath.value = !_showArchivedPath.value }
 
+    /**
+     * Snapshots [samples] as the archived map path.
+     *
+     * Logs when a record arrives but yields no drawable point, which is the one
+     * failure this feature can suffer silently: the control simply never appears,
+     * and "the record has no position" is indistinguishable from "the plumbing is
+     * broken" without it.
+     */
+    private fun publishArchivedPath(samples: List<FlightSample>) {
+        val points = archivedPathPoints(samples)
+        if (points.isEmpty() && samples.isNotEmpty()) {
+            Log.w("ArchivedPath",
+                "${samples.size} archived samples carried no usable position " +
+                "(all zero or non-finite lat/lon) — no archived path to draw")
+        }
+        _archivedFlightPath.value = points
+    }
+
     fun clearFlightProfileData() {
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
         _flightEvents.value = FlightEventsData()
-        // The archived path is derived from the samples being cleared, so the map
-        // would fall back to live anyway; resetting here keeps the control's state
-        // honest instead of leaving it latched on for an empty track.
-        _showArchivedPath.value = false
+        // The archived path is NOT cleared here — see _archivedFlightPath. This
+        // runs when you navigate back from the chart, which is exactly the moment
+        // you would be heading to the map to look at the track.
         FlightDataRepository.cancelTransfer()
     }
 
@@ -624,6 +651,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun stopFlightPathRecording() { _isFlightPathRecording.value = false }
     fun resetFlightPath() {
         _flightPath.value = emptyList()
+        // Clear the archived track too, and fall back to live. Reset is the map's
+        // "start clean" control, and leaving a downloaded track drawn after it
+        // would look like the reset had failed.
+        _archivedFlightPath.value = emptyList()
+        _showArchivedPath.value = false
         viewModelScope.launch {
             try { flightPathFile.delete() } catch (_: Exception) {}
         }
@@ -899,6 +931,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     val samples = FlightDataRepository.samples.value
                                     _flightProfileAglData.value    = samples.map { (it.altitudeM * 10).toInt().toUShort() }
                                     _flightProfileAccelerometerData.value = samples.map { it.accel }
+                                    publishArchivedPath(samples)
                                 }
                             }
                         }
@@ -912,6 +945,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 if (samples.isNotEmpty()) {
                                     _flightProfileAglData.value           = samples.map { (it.altitudeM * 10).toInt().toUShort() }
                                     _flightProfileAccelerometerData.value = samples.map { it.accel }
+                                    publishArchivedPath(samples)
                                 }
                             }
                         }
