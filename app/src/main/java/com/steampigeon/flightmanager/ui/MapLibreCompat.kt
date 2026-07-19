@@ -75,6 +75,12 @@ import kotlin.math.cos
 // exactly as it compared against Google's CameraMoveStartedReason.GESTURE.
 const val REASON_GESTURE = MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE
 
+// MapLibre's hard tilt ceiling (MapLibreConstants.MAXIMUM_PITCH). Camera tilt above this is
+// silently clamped, and setMaxPitchPreference refuses any value outside 0..60 — it logs
+// "value is in unsupported range" and leaves the limit untouched. Surfaced here so
+// MapCameraController can keep its tilt range inside what the SDK will actually honour.
+const val MAPLIBRE_MAX_PITCH = 60f
+
 /**
  * A lightweight mirror of Google CameraPosition's fields (all Float, like Google's)
  * so the camera-controller math needs no numeric-type churn. Converted to/from
@@ -303,7 +309,9 @@ fun MapLibreMapView(
                         isLogoEnabled = false           // avoid overlap w/ app's bottom-left overlays
                         isAttributionEnabled = false
                     }
-                    map.setMaxPitchPreference(85.0)     // allow the 60–67.5° 3D tilt range
+                    // No setMaxPitchPreference call: 60° is already the default ceiling and
+                    // also the highest value the setter accepts, so raising it isn't possible
+                    // (see MAPLIBRE_MAX_PITCH). The previous 85.0 here was rejected outright.
                     map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
                         // Register the sprites first — the symbol layer created by
                         // setupContentLayers references them by name.

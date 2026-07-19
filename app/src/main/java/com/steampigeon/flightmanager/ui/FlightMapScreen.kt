@@ -1044,10 +1044,15 @@ private fun MapCameraController(
     val userTiltRecent    = now - lastUserTiltTime   <= 5000
 
     // Compute the target tilt for this frame.
-    // Google Maps tilt: 0° = straight down, 67.5° ≈ horizon (SDK maximum at most zoom levels).
-    // Start at 60° so the horizon is always in view; rise to 67.5° as the rocket climbs.
+    // Tilt: 0° = straight down, larger = closer to the horizon. MapLibre's hard ceiling is
+    // MapLibreConstants.MAXIMUM_PITCH = 60°, and it silently clamps anything above that —
+    // so the range must live entirely below 60, not straddle it. (The pre-MapLibre code
+    // ramped 60→67.5° against Google's 67.5° limit; ported over, every value above 60 was
+    // clamped away and the tilt sat at a constant 60°.)
+    // Open up toward the horizon as the rocket climbs: 45° on the pad, reaching the 60°
+    // ceiling at 450 m AGL.
     val targetTilt = when {
-        is3DView && !userTiltRecent -> (60f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(60f, 67.5f)
+        is3DView && !userTiltRecent -> (45f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(45f, MAPLIBRE_MAX_PITCH)
         is3DView -> cameraState.position.tilt  // preserve user's manual tilt
         else -> 0f
     }
