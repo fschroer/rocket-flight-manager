@@ -65,6 +65,7 @@ import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -514,10 +515,30 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _flightProfileAccelerometerData = MutableStateFlow<List<Vec3f>>(emptyList())
     val flightProfileAccelerometerData: StateFlow<List<Vec3f>> = _flightProfileAccelerometerData.asStateFlow()
 
+    /**
+     * The downloaded archive record as a map path — the fused, GPS-disciplined
+     * track described on [archivedPathPoints].  Empty until a record is
+     * transferred, which is what gates the map's source control.
+     */
+    val archivedFlightPath: StateFlow<List<PathPoint>> =
+        FlightDataRepository.samples
+            .map { archivedPathPoints(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Which track the map draws.  Live is raw GPS; archived is the EKF solution. */
+    private val _showArchivedPath = MutableStateFlow(false)
+    val showArchivedPath: StateFlow<Boolean> = _showArchivedPath.asStateFlow()
+
+    fun toggleArchivedPath() { _showArchivedPath.value = !_showArchivedPath.value }
+
     fun clearFlightProfileData() {
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
         _flightEvents.value = FlightEventsData()
+        // The archived path is derived from the samples being cleared, so the map
+        // would fall back to live anyway; resetting here keeps the control's state
+        // honest instead of leaving it latched on for an empty track.
+        _showArchivedPath.value = false
         FlightDataRepository.cancelTransfer()
     }
 
@@ -1594,6 +1615,38 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
  * for a tolerance to absorb — and a tolerance would silently discard real slow
  * movement, like a rocket drifting under canopy.
  */
+/**
+ * Converts downloaded archive samples into map path points.
+ *
+ * Three differences from the live path are worth knowing before reading one.
+ *
+ * 1. **This is the fused track, not raw GPS.**  The locator fills a sample's
+ *    position from `nav_solution.pos` — the EKF's solution, which is
+ *    dead-reckoned through powered flight (steam-pigeon-locator#27).  The live
+ *    path uses the raw GPS fix.  ADR-0005 retired the EKF from the authoritative
+ *    path and ADR-0013 keeps it observational, so this track is an estimate and
+ *    is least validated over boost, which is the part most worth looking at.
+ * 2. **Timestamps are real flight time.**  The archive clock is GPS-disciplined
+ *    (ADR-0007) and counts from the start of the record, so the one-second
+ *    markers on an archived path mean what they say — unlike the live path,
+ *    whose points are stamped on arrival at the phone.
+ * 3. **Altitude is raw baro AGL**, the signal deployment decisions were made on
+ *    (ADR-0003), matching the flight-profile chart.
+ *
+ * Samples without a usable position are dropped rather than plotted: the record
+ * starts before GPS necessarily has a fix, and a zero or non-finite coordinate
+ * would otherwise run the path to null island and blow up the map's bounds.
+ */
+internal fun archivedPathPoints(samples: List<FlightSample>): List<PathPoint> =
+    samples.mapNotNull { s ->
+        val lat = s.latRad * 180.0 / PI
+        val lon = s.lonRad * 180.0 / PI
+        val usable = lat.isFinite() && lon.isFinite() &&
+            abs(lat) <= 90.0 && abs(lon) <= 180.0 &&
+            (lat != 0.0 || lon != 0.0)
+        if (usable) PathPoint(lat, lon, s.altitudeM, s.timestampMs) else null
+    }
+
 internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, altitudeM: Float): Boolean {
     if (last == null) return false
     return last.latitude == latitude &&

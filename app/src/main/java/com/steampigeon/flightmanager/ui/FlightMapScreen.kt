@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SignalCellularAlt
@@ -167,6 +168,11 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 private const val messageTimeout = 2000
+
+// Tint for the archived-path control when it is engaged.  Cyan matches the
+// curtain's one-second markers, which are the reason to look at an archived
+// track in the first place: its timestamps are real flight time.
+private const val COLOR_ARCHIVED_ACTIVE = 0xFF00E5FF
 private const val actionPanelCollapseDelay = 5000L   // auto-collapse the Rescan/Arm action panel after this idle time
 
 // Consistent semi-transparent overlay background used for all map UI panels and buttons.
@@ -673,6 +679,9 @@ private fun MapWithOverlays(
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
+        // Downloaded archive record, if any, plus which track the map should draw.
+        val archivedFlightPath = viewModel.archivedFlightPath.collectAsState().value
+        val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
         // Password gating: only a recognised locator may be armed from the app.
         val locatorRecognized = viewModel.locatorRecognized.collectAsState().value
         var autoTargetMode by remember { mutableStateOf(true) }
@@ -733,7 +742,15 @@ private fun MapWithOverlays(
             accuracyRadiusM = rocketState.hacc.toDouble(),
             // Altitude and capture time are carried through, not dropped: they
             // drive the 3D altitude curtain and its one-second markers.
-            flightPath = flightPath,
+            //
+            // The archived track substitutes for the live one rather than drawing
+            // alongside it: they are the same quantity measured two ways (EKF vs
+            // raw GPS), so overlaying them at the same colour would read as one
+            // noisy path rather than two estimates.
+            flightPath = if (showArchivedPath && archivedFlightPath.isNotEmpty())
+                archivedFlightPath
+            else
+                flightPath,
             userLocation = trackerLocation,
             onMapLoaded = onMapLoaded,
             onMapClick = {
@@ -937,6 +954,23 @@ private fun MapWithOverlays(
                         contentDescription = if (isFlightPathRecording) "Stop recording flight path" else "Start recording flight path",
                         tint = if (isFlightPathRecording) Color.Red else Color.White.copy(alpha = 0.35f),
                     )
+                }
+                // Only offered once a record has been downloaded — otherwise there
+                // is no archived track to switch to and the control would be a
+                // dead button.
+                if (archivedFlightPath.isNotEmpty()) {
+                    IconButton(
+                        onClick = { viewModel.toggleArchivedPath() },
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = if (showArchivedPath)
+                                "Show live GPS path" else "Show archived (fused) path",
+                            tint = if (showArchivedPath) Color(COLOR_ARCHIVED_ACTIVE)
+                                   else Color.White.copy(alpha = 0.35f),
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { viewModel.resetFlightPath() },
