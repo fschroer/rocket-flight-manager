@@ -506,12 +506,19 @@ private fun setupContentLayers(style: Style) {
             PropertyFactory.fillExtrusionColor(COLOR_PATH),
             PropertyFactory.fillExtrusionHeight(Expression.get("height")),
             PropertyFactory.fillExtrusionBase(0f),
-            // Mostly opaque. The curtain is a chain of separate prisms, so each
-            // segment carries end-cap faces where it meets its neighbour; at low
-            // opacity those internal faces all show through and the wall reads
-            // as a ladder. Higher opacity hides them behind the front face while
-            // still letting terrain show through enough to keep bearings.
-            PropertyFactory.fillExtrusionOpacity(0.75f),
+            // Fully opaque.  The curtain is a chain of separate prisms, so every
+            // sub-quad carries end-cap faces where it meets its neighbour; at any
+            // opacity below 1 those internal faces show through and the wall
+            // reads as a ladder.  Sub-dividing more finely to smooth the top edge
+            // makes that worse, not better — it multiplies the faces — which is
+            // the likely reason finer risers did not look smoother.
+            //
+            // The cost is that terrain no longer shows through the wall.  If that
+            // turns out to matter for keeping bearings during a recovery walk,
+            // the alternative is to go back to ~0.75 and accept the ladder, since
+            // hiding the internal faces at partial opacity would mean merging the
+            // prisms into one solid — which fill-extrusion cannot express.
+            PropertyFactory.fillExtrusionOpacity(1.0f),
         )
     )
     // One-second markers, added after the curtain so they sort in front of it
