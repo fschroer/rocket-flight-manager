@@ -595,6 +595,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun repeatsLastPathPoint(msg: TelemetryParsed): Boolean =
+        repeatsFix(_flightPath.value.lastOrNull(), msg.latitude, msg.longitude, msg.agl)
+
     fun startFlightPathRecording() { _isFlightPathRecording.value = true }
     fun stopFlightPathRecording() { _isFlightPathRecording.value = false }
     fun resetFlightPath() {
@@ -773,7 +776,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             if (_isFlightPathRecording.value &&
                                 newFlightState > FlightStates.WaitingLaunch &&
-                                (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0)) {
+                                (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0) &&
+                                !repeatsLastPathPoint(parsed.msg)) {
                                 // Wall-clock, not elapsedRealtime: the path is
                                 // persisted and reloaded across process restarts,
                                 // where a monotonic clock's zero has moved.
@@ -1539,4 +1543,32 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         return Vec3f(x, y, z)
     }
 
+}
+
+/**
+ * True when an incoming fix repeats the one [last] already holds, and so adds
+ * nothing to the recorded path.
+ *
+ * In flight the locator transmits at ~5 Hz while its position/altitude payload
+ * refreshes at ~1 Hz, so roughly five consecutive frames carry one fix
+ * bit-for-bit.  Recording all five stored a path five times larger than the
+ * information in it, rewrote the whole CSV five times a second, and made the map
+ * rebuild the curtain from five times the points.
+ *
+ * Dropping the repeats loses nothing.  A repeated vertex adds no shape to a
+ * polyline, and the point that is kept carries the timestamp of when the fix was
+ * *first* seen — the moment the rocket was actually there.  It makes the curtain
+ * more faithful rather than less: an interval now interpolates smoothly across
+ * the second instead of drawing flat and then jumping at its end.
+ *
+ * Exact equality is the right test here.  These are copies of a single payload,
+ * not independent measurements that happen to agree, so there is no sensor noise
+ * for a tolerance to absorb — and a tolerance would silently discard real slow
+ * movement, like a rocket drifting under canopy.
+ */
+internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, altitudeM: Float): Boolean {
+    if (last == null) return false
+    return last.latitude == latitude &&
+        last.longitude == longitude &&
+        last.altitudeM == altitudeM
 }
