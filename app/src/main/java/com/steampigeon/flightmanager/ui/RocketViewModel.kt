@@ -58,6 +58,7 @@ import com.steampigeon.flightmanager.data.VersionInfoParsed
 import com.steampigeon.flightmanager.data.TelemetryParsed
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import com.steampigeon.flightmanager.data.Vec3f
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -639,14 +640,36 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         context.stopService(intent)
     }
 
+    /**
+     * Collectors started by the most recent [collectInboundMessageData] call, held
+     * so a later call can cancel them.
+     */
+    private var inboundJobs: List<Job> = emptyList()
+
     @OptIn(ExperimentalUnsignedTypes::class)
     fun collectInboundMessageData(service: BluetoothService) {
+        // Cancel the previous collectors before starting new ones.
+        //
+        // This runs from onServiceConnected, which fires again on every Activity
+        // recreation: BindBluetoothService's DisposableEffect unbinds and rebinds,
+        // while the ViewModel deliberately survives.  Rotation is covered by
+        // MainActivity's configChanges, but uiMode is NOT — a light/dark switch
+        // alone recreates the Activity, as does a locale or font-scale change.
+        //
+        // Without this cancel every recreation left another live collector behind,
+        // and each one handles every packet: N duplicate flight-path points, N
+        // evaluateRecognition calls, and N runs of the windowed FlightData
+        // transfer/ACK handling.  Measured on a Pixel 9 Pro XL — four theme
+        // toggles produced four collectors on one ViewModel instance, handling
+        // 29/28/23/19 packets concurrently.
+        inboundJobs.forEach { it.cancel() }
+
         // Keep the service's send gate in sync with recognition so only an authorized
         // (recognised) locator can be commanded.
-        viewModelScope.launch {
+        val recognitionJob = viewModelScope.launch {
             recognizedLocatorId.collect { service.locatorAuthorized = it != null }
         }
-        viewModelScope.launch {
+        val packetJob = viewModelScope.launch {
             service.packets.collect { locatorMessage ->
 //                Log.d("Collector", "Received packet size=${locatorMessage.size} bytes")
                 val currentTime = System.currentTimeMillis()
@@ -882,7 +905,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // Re-request version info until it is received.  Only sends when the locator
         // is actively sending PreLaunchData (i.e. the LoRa link is up), so the
         // VersionRequest can be timed around prelaunch messages by the receiver.
-        viewModelScope.launch {
+        val versionJob = viewModelScope.launch {
             while (_locatorVersion.value.isEmpty()) {
                 delay(1_000L)
                 val age = System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime
@@ -892,6 +915,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+
+        // All three are cancelled together on the next call.  The version loop
+        // matters as much as the packet collector: it transmits, so a leaked copy
+        // is a redundant VersionRequest on the air every few seconds, forever.
+        inboundJobs = listOf(recognitionJob, packetJob, versionJob)
     }
 
 /*
