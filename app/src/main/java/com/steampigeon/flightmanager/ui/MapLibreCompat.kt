@@ -255,24 +255,35 @@ private const val LYR_ROCKET = "rocket-dot"
 // Altitude curtain under the flight path.  MapLibre's line layer is strictly
 // ground-plane — the style spec has no 3D polyline — so lifting the track into
 // the air means extruded polygons: one quad per segment, extruded from the
-// ground to that segment's AGL.  fill-extrusion base/height are constant per
-// feature, so the wall's top edge is always a staircase; the only lever is how
-// tall each riser is, and each telemetry interval is therefore split into
-// linearly interpolated sub-segments to shrink them.
+// ground to that segment's AGL.
 //
-// The split is driven by altitude change, not by a fixed count.  A fixed count
-// divides the *ground* track evenly, which is the wrong axis: on a near-vertical
-// boost the track barely advances while altitude climbs hundreds of metres, so
-// the risers stay large no matter how finely the ground run is chopped.
-// Budgeting by riser height instead spends subdivisions where the profile is
-// actually steep and emits a single quad across level flight.  Feature count
-// over a whole flight should come out near the old flat 8× — boost costs more,
-// but the much longer coast and descent cost far less.
-private const val CURTAIN_MAX_RISER_M = 1.0f
+// fill-extrusion height is constant per feature (a data-driven expression varies
+// it BETWEEN features, never across one), and the SDK offers no sloped-top
+// option — fill-extrusion-vertical-gradient is shading, not geometry.  A truly
+// angled top would need a CustomLayer, i.e. native GL.  So the wall's top edge
+// is necessarily a staircase, and smoothness comes from two independent levers.
+//
+// Lever 1 — riser height.  Each interval is split into sub-quads, budgeted by
+// ALTITUDE change rather than a fixed count.  A fixed count divides the *ground*
+// run evenly, which is the wrong axis: on a near-vertical boost the track barely
+// advances while altitude climbs hundreds of metres, so risers stay tall no
+// matter how finely the run is chopped.
+//
+// Lever 2 — the shape between points, see [PathSpline].  Shrinking risers alone
+// leaves a chain of straight chords meeting at a visible corner on every
+// telemetry point, which on the ~1 Hz live path is the dominant artefact: a
+// second of boost is ~100 m of climb drawn as one straight line.
+private const val CURTAIN_MIN_RISER_M = 0.25f
 
-// Ceiling on the split, so one wild altitude jump (a garbled fix, or the first
-// sample after a radio dropout) can't emit thousands of quads for one interval.
-private const val CURTAIN_MAX_SUBDIVISIONS = 64
+// Total sub-quad budget for one path.  The riser target is relaxed from
+// CURTAIN_MIN_RISER_M as needed to stay under this, so a short hop gets a very
+// fine wall while a big flight degrades gracefully instead of emitting tens of
+// thousands of features into a source rebuilt on every change.
+private const val CURTAIN_MAX_QUADS = 2000
+
+// Per-interval safety valve, so one wild altitude jump (a garbled fix, or the
+// first sample after a radio dropout) can't consume the whole budget itself.
+private const val CURTAIN_MAX_SUBDIVISIONS = 512
 
 // Half-width of each curtain quad, in metres.  Wide enough that the wall stays
 // visible edge-on when the camera looks along the track, narrow enough not to
@@ -619,25 +630,27 @@ internal fun altitudeCurtain(path: List<PathPoint>): FeatureCollection {
 
     val features = ArrayList<Feature>(path.size - 1)
     val metersPerDegLat = 111_320.0
+    val spline = PathSpline(path)
+    val riser = curtainRiser(path)
 
     for (i in 0 until path.size - 1) {
         val a = path[i]
         val b = path[i + 1]
-        val subdivisions = curtainSubdivisions(a.altitudeM, b.altitudeM)
+        val subdivisions = curtainSubdivisions(a.altitudeM, b.altitudeM, riser)
 
         for (s in 0 until subdivisions) {
             val t0 = s.toDouble() / subdivisions
             val t1 = (s + 1).toDouble() / subdivisions
 
-            val lat0 = a.latitude + (b.latitude - a.latitude) * t0
-            val lon0 = a.longitude + (b.longitude - a.longitude) * t0
-            val lat1 = a.latitude + (b.latitude - a.latitude) * t1
-            val lon1 = a.longitude + (b.longitude - a.longitude) * t1
+            val lat0 = spline.latitudeAt(i, t0)
+            val lon0 = spline.longitudeAt(i, t0)
+            val lat1 = spline.latitudeAt(i, t1)
+            val lon1 = spline.longitudeAt(i, t1)
 
             // Height of this sub-segment: the mean of its endpoints, so the
             // staircase straddles the true profile instead of lagging it.
-            val alt0 = a.altitudeM + (b.altitudeM - a.altitudeM) * t0.toFloat()
-            val alt1 = a.altitudeM + (b.altitudeM - a.altitudeM) * t1.toFloat()
+            val alt0 = spline.altitudeAt(i, t0)
+            val alt1 = spline.altitudeAt(i, t1)
             val height = (alt0 + alt1) / 2f
             if (height < CURTAIN_MIN_ALT_M) continue
 
@@ -675,15 +688,147 @@ internal fun altitudeCurtain(path: List<PathPoint>): FeatureCollection {
 
 /**
  * How many pieces one telemetry interval must be split into to keep each
- * fill-extrusion riser under [CURTAIN_MAX_RISER_M].
+ * fill-extrusion riser under [riserM].
  *
  * Level flight needs exactly one quad — subdividing it would emit identical
  * heights and buy nothing — so the floor is 1, not a fixed count.
  */
-internal fun curtainSubdivisions(altFromM: Float, altToM: Float): Int =
-    ceil(abs(altToM - altFromM) / CURTAIN_MAX_RISER_M)
+internal fun curtainSubdivisions(altFromM: Float, altToM: Float, riserM: Float): Int =
+    ceil(abs(altToM - altFromM) / riserM)
         .toInt()
         .coerceIn(1, CURTAIN_MAX_SUBDIVISIONS)
+
+/**
+ * Riser height to aim for across [path], relaxed from [CURTAIN_MIN_RISER_M] only
+ * as far as [CURTAIN_MAX_QUADS] requires.
+ *
+ * Total quads land near (total altitude variation / riser), so deriving the riser
+ * from that variation bounds the whole path rather than each interval
+ * independently — a 100 m hop gets a very fine wall, a 3 km flight gets a coarser
+ * one, and neither can blow up the feature count.
+ */
+internal fun curtainRiser(path: List<PathPoint>): Float {
+    if (path.size < 2) return CURTAIN_MIN_RISER_M
+    var variation = 0f
+    for (i in 0 until path.size - 1) variation += abs(path[i + 1].altitudeM - path[i].altitudeM)
+    return maxOf(CURTAIN_MIN_RISER_M, variation / CURTAIN_MAX_QUADS)
+}
+
+/**
+ * Smooth interpolation through the recorded points, replacing the straight chords
+ * that used to join them.
+ *
+ * Cubic Hermite throughout, but with **different tangent rules for altitude and
+ * for position**, because they have different failure modes.
+ *
+ * *Altitude* uses Fritsch–Carlson monotone tangents.  A plain Catmull-Rom spline
+ * overshoots near a sharp extremum, and the sharpest feature in a flight profile
+ * is apogee — so it would draw the rocket higher than it ever flew, and a reader
+ * measuring apogee off the curtain would get a number the rocket never reached.
+ * Smoothing may not invent altitude.  Monotone tangents guarantee the curve stays
+ * within the recorded values on every interval: no overshoot, and any flat run
+ * stays exactly flat.
+ *
+ * *Position* uses ordinary Catmull-Rom tangents.  A ground track has no
+ * meaningful extremum to preserve, and its overshoot is sub-metre on a curve of
+ * hundreds — well under the GPS accuracy the points themselves carry — while
+ * monotone limiting there would flatten genuine curvature in a turn.
+ *
+ * Parameterised by point index, matching how the curtain walks intervals, so a
+ * caller with a *time* fraction inside interval `i` can pass it straight in.
+ */
+internal class PathSpline(private val path: List<PathPoint>) {
+    private val n = path.size
+    private val mLat = DoubleArray(n)
+    private val mLon = DoubleArray(n)
+    private val mAlt = FloatArray(n)
+
+    init {
+        if (n >= 2) {
+            catmullRomTangents({ path[it].latitude }, mLat)
+            catmullRomTangents({ path[it].longitude }, mLon)
+            monotoneTangents()
+        }
+    }
+
+    /** Centred differences, one-sided at the ends. */
+    private inline fun catmullRomTangents(value: (Int) -> Double, out: DoubleArray) {
+        for (i in 0 until n) {
+            val prev = value(if (i == 0) 0 else i - 1)
+            val next = value(if (i == n - 1) n - 1 else i + 1)
+            // Halved for interior points (span of 2 intervals), full at the ends
+            // where the span is 1.
+            out[i] = if (i == 0 || i == n - 1) next - prev else (next - prev) / 2.0
+        }
+    }
+
+    /**
+     * Fritsch–Carlson: start from centred differences, then clamp so no interval
+     * can overshoot the values bracketing it.
+     */
+    private fun monotoneTangents() {
+        val d = FloatArray(n - 1)                       // secant slopes
+        for (i in 0 until n - 1) d[i] = path[i + 1].altitudeM - path[i].altitudeM
+
+        for (i in 0 until n) {
+            mAlt[i] = when (i) {
+                0 -> d[0]
+                n - 1 -> d[n - 2]
+                else -> (d[i - 1] + d[i]) / 2f
+            }
+        }
+        for (i in 0 until n - 1) {
+            if (d[i] == 0f) {
+                // A flat interval must stay exactly flat — a rocket sitting on the
+                // ground may not bulge upward between two identical readings.
+                mAlt[i] = 0f
+                mAlt[i + 1] = 0f
+            } else {
+                val a = mAlt[i] / d[i]
+                val b = mAlt[i + 1] / d[i]
+                // Negative ratio means the tangent points against the interval, so
+                // the curve would leave the bracket immediately.
+                if (a < 0f) mAlt[i] = 0f
+                if (b < 0f) mAlt[i + 1] = 0f
+                val s = a * a + b * b
+                if (s > 9f) {
+                    val tau = 3f / kotlin.math.sqrt(s)
+                    mAlt[i] = tau * a * d[i]
+                    mAlt[i + 1] = tau * b * d[i]
+                }
+            }
+        }
+    }
+
+    /** Altitude at fraction [t] through interval [i]. */
+    fun altitudeAt(i: Int, t: Double): Float {
+        if (n < 2) return path.firstOrNull()?.altitudeM ?: 0f
+        val tf = t.toFloat()
+        val t2 = tf * tf
+        val t3 = t2 * tf
+        return (2 * t3 - 3 * t2 + 1) * path[i].altitudeM +
+            (t3 - 2 * t2 + tf) * mAlt[i] +
+            (-2 * t3 + 3 * t2) * path[i + 1].altitudeM +
+            (t3 - t2) * mAlt[i + 1]
+    }
+
+    fun latitudeAt(i: Int, t: Double): Double = hermite(
+        path[i].latitude, mLat[i], path[i + 1].latitude, mLat[i + 1], t
+    )
+
+    fun longitudeAt(i: Int, t: Double): Double = hermite(
+        path[i].longitude, mLon[i], path[i + 1].longitude, mLon[i + 1], t
+    )
+
+    private fun hermite(p0: Double, m0: Double, p1: Double, m1: Double, t: Double): Double {
+        val t2 = t * t
+        val t3 = t2 * t
+        return (2 * t3 - 3 * t2 + 1) * p0 +
+            (t3 - 2 * t2 + t) * m0 +
+            (-2 * t3 + 3 * t2) * p1 +
+            (t3 - t2) * m1
+    }
+}
 
 /**
  * Builds the one-second markers: contrasting posts standing on the ground track,
@@ -720,6 +865,10 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
 
     val features = ArrayList<Feature>()
     val metersPerDegLat = 111_320.0
+    // The same curve the curtain is built from.  Interpolating a mark linearly
+    // while the wall beside it curves would stand the post's top off the wall's
+    // top edge — by metres, where the two disagree most.
+    val spline = PathSpline(path)
     var index = firstReal    // walks forward with the marks; both are ordered
 
     var elapsed = TICK_INTERVAL_MS
@@ -737,11 +886,11 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
         val span = (b.timestampMs - a.timestampMs).toDouble()
         val f = if (span > 0.0) ((markMs - a.timestampMs) / span).coerceIn(0.0, 1.0) else 0.0
 
-        val alt = a.altitudeM + (b.altitudeM - a.altitudeM) * f.toFloat()
+        val alt = spline.altitudeAt(index, f)
         if (alt < CURTAIN_MIN_ALT_M) continue
 
-        val lat = a.latitude + (b.latitude - a.latitude) * f
-        val lon = a.longitude + (b.longitude - a.longitude) * f
+        val lat = spline.latitudeAt(index, f)
+        val lon = spline.longitudeAt(index, f)
 
         // Orient the post across the direction of travel, matching the curtain.
         val cosLat = cos(lat * PI / 180.0).coerceAtLeast(1e-6)

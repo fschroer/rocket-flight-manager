@@ -66,7 +66,13 @@ class SecondMarkersTest {
     fun marksInterpolateBetweenSamplesRatherThanSnappingToOne() {
         // Elapsed time runs from the first fix. Samples straddle the one-second
         // boundary at 0.4 s and 1.4 s, so none sits near it; snapping to the
-        // nearest would put the mark at 1400 m, but it belongs at 1000 m.
+        // nearest would put the mark at 1400 m.
+        //
+        // The exact height is the smoothed curve's value, not the chord's, so
+        // this asserts the discriminating property — the mark sits well inside
+        // the bracketing samples — rather than pinning a linear value the curve
+        // no longer takes. marksLandOnTrueSecondsAtASteadyClimbRate covers exact
+        // placement, on the evenly-spaced samples where it is well defined.
         val path = listOf(
             fix(0, 0.0, 0f),
             fix(400, 4.0, 400f),
@@ -74,7 +80,7 @@ class SecondMarkersTest {
         )
         val h = heights(secondMarkers(path))
         assertEquals(1, h.size)
-        assertEquals(1000.0, h.first(), 1.0)
+        assertTrue("snapped to a sample: ${h.first()}", h.first() > 700.0 && h.first() < 1300.0)
     }
 
     @Test
@@ -105,9 +111,12 @@ class SecondMarkersTest {
         )
         val h = heights(secondMarkers(path))
         assertEquals(3, h.size)
-        assertEquals(50.0, h[0], 1.0)
-        assertEquals(100.0, h[1], 1.0)
-        assertEquals(150.0, h[2], 1.0)
+        // Tolerance covers the smoothed curve's departure from the chord on
+        // deliberately uneven samples; a broken time axis would miss by far more
+        // than this, since the sample spacing here varies by 25x.
+        assertEquals(50.0, h[0], 5.0)
+        assertEquals(100.0, h[1], 5.0)
+        assertEquals(150.0, h[2], 5.0)
     }
 
     @Test
@@ -217,10 +226,13 @@ class SecondMarkersTest {
             fix(2000, 3.0, 500f),
         )
         val h = heights(secondMarkers(path))
-        // Only the fully-real interval contributes: marks at +1 s and +2 s.
+        // The assertion that matters is the COUNT: only the fully-real interval
+        // contributes, so two marks rather than three. Heights are the smoothed
+        // curve's, checked loosely just to confirm they came from the right
+        // interval.
         assertEquals(2, h.size)
-        assertEquals(400.0, h[0], 1.0)
-        assertEquals(500.0, h[1], 1.0)
+        assertEquals(400.0, h[0], 10.0)
+        assertEquals(500.0, h[1], 10.0)
     }
 
     @Test

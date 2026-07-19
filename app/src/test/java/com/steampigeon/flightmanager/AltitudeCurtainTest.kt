@@ -2,6 +2,7 @@ package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.ui.PathPoint
 import com.steampigeon.flightmanager.ui.altitudeCurtain
+import com.steampigeon.flightmanager.ui.curtainRiser
 import com.steampigeon.flightmanager.ui.curtainSubdivisions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -26,8 +27,8 @@ class AltitudeCurtainTest {
         const val LAT = 47.6146       // the user's test site — cos(lat) ≈ 0.674
         const val LON = -122.5526
         const val METERS_PER_DEG_LAT = 111_320.0
-        const val MAX_RISER_M = 1.0    // CURTAIN_MAX_RISER_M
-        const val MAX_SUBDIVISIONS = 64 // CURTAIN_MAX_SUBDIVISIONS
+        const val MIN_RISER_M = 0.25f    // CURTAIN_MIN_RISER_M
+        const val MAX_SUBDIVISIONS = 512 // CURTAIN_MAX_SUBDIVISIONS
         const val HALF_WIDTH_M = 0.75  // CURTAIN_HALF_WIDTH_M
     }
 
@@ -93,22 +94,45 @@ class AltitudeCurtainTest {
         // finer than a shallow one covering the same ground.  A fixed count
         // divides the ground run evenly and gives both the same treatment,
         // which is what left the boost phase looking like stairs.
-        assertEquals(1, curtainSubdivisions(100f, 100f))
-        assertEquals(1, curtainSubdivisions(100f, 100.5f))
-        assertEquals(10, curtainSubdivisions(100f, 110f))
-        assertEquals(10, curtainSubdivisions(110f, 100f))   // descent is symmetric
-        assertEquals(MAX_SUBDIVISIONS, curtainSubdivisions(0f, 5000f))
+        assertEquals(1, curtainSubdivisions(100f, 100f, 1f))
+        assertEquals(1, curtainSubdivisions(100f, 100.5f, 1f))
+        assertEquals(10, curtainSubdivisions(100f, 110f, 1f))
+        assertEquals(10, curtainSubdivisions(110f, 100f, 1f))   // descent is symmetric
+        assertEquals(MAX_SUBDIVISIONS, curtainSubdivisions(0f, 5000f, 1f))
+        // A relaxed riser buys back proportionally fewer quads.
+        assertEquals(5, curtainSubdivisions(100f, 110f, 2f))
+    }
+
+    @Test
+    fun theRiserTargetRelaxesToStayInsideTheQuadBudget() {
+        // A small hop gets the finest riser on offer; a large flight must not
+        // demand tens of thousands of features from a source rebuilt on change.
+        val hop = listOf(offset(0.0, 0.0, 0f), offset(50.0, 0.0, 100f))
+        assertEquals("small path should get the minimum riser", 0.25f, curtainRiser(hop), 1e-6f)
+
+        // ~6 km of total variation cannot be drawn at 0.25 m per step within
+        // budget, so the target relaxes rather than the count exploding.
+        val big = listOf(
+            offset(0.0, 0.0, 0f), offset(500.0, 0.0, 3000f), offset(1000.0, 0.0, 0f),
+        )
+        assertTrue("riser should relax above the minimum", curtainRiser(big) > 0.25f)
+        assertTrue(
+            "quad count should stay near the budget",
+            altitudeCurtain(big).features()!!.size <= 2100
+        )
     }
 
     @Test
     fun everyRiserStaysUnderTheBudget() {
         // The invariant the smoothness actually depends on: no step in the
-        // wall's top edge taller than CURTAIN_MAX_RISER_M, across a segment
+        // wall's top edge taller than the path's riser target, across a segment
         // whose split is not capped.
         val path = listOf(offset(0.0, 0.0, 0f), offset(20.0, 0.0, 40f))
         val h = heights(altitudeCurtain(path))
         h.zipWithNext { a, b ->
-            assertTrue("riser ${b - a} exceeds budget: $h", abs(b - a) <= MAX_RISER_M + 1e-6)
+            // Tolerance is float-rounding slack, not budget slack: heights are
+            // Float and accumulate ~1e-6 of error across the walk.
+            assertTrue("riser ${b - a} exceeds budget: $h", abs(b - a) <= MIN_RISER_M + 1e-3)
         }
     }
 
