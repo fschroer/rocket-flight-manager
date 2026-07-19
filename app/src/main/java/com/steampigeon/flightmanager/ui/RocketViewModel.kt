@@ -219,6 +219,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _rocketState = MutableStateFlow(RocketState())
     val rocketState: StateFlow<RocketState> = _rocketState.asStateFlow()
 
+    // The handheld device's own GPS fix. Held here rather than in FlightMapScreen so it
+    // survives navigation: a composable-scoped `remember` is discarded on the way to the
+    // flight profiles screen, and the map would come back with no tracker position until
+    // the next fix arrived — re-framing the camera, and (before the bounds guard in
+    // MapCameraController) crashing on a one-point LatLngBounds.
+    // Null means "no fix yet"; callers substitute a 0,0 stand-in that reads as absent.
+    private val _trackerLocation = MutableStateFlow<Location?>(null)
+    val trackerLocation: StateFlow<Location?> = _trackerLocation.asStateFlow()
+    fun updateTrackerLocation(newTrackerLocation: Location) {
+        _trackerLocation.value = newTrackerLocation
+    }
+
     private val _remoteLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
     val remoteLocatorConfig: StateFlow<LocatorConfig> = _remoteLocatorConfig.asStateFlow()
 

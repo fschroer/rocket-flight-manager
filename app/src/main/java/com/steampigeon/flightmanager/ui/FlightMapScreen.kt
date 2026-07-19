@@ -259,7 +259,8 @@ fun HomeScreen(
     val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-    var trackerLocation by remember { mutableStateOf<Location?>(null) }
+    // ViewModel-scoped so the fix survives navigation to the flight profiles screen and back.
+    val trackerLocation by viewModel.trackerLocation.collectAsState()
     // Stand-in used until the first fix so the map can render right away; its 0,0
     // coordinates read as "no tracker GPS" everywhere downstream (validLatLng).
     val fallbackTrackerLocation = remember { Location("fallback") }
@@ -268,7 +269,7 @@ fun HomeScreen(
     val locationCallback = remember {
         object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { trackerLocation = it }
+                result.lastLocation?.let { viewModel.updateTrackerLocation(it) }
             }
         }
     }
@@ -277,8 +278,11 @@ fun HomeScreen(
             // Seed from the cached fix so the map can render immediately instead of
             // waiting for the first live GPS update (which can take many seconds, or
             // never arrive indoors / with GPS off).
+            // Read through the flow, not the captured composable value, so a fix that landed
+            // between this call and its callback isn't overwritten by an older cached one.
             fusedLocationClient.lastLocation.addOnSuccessListener { cached ->
-                if (trackerLocation == null && cached != null) trackerLocation = cached
+                if (viewModel.trackerLocation.value == null && cached != null)
+                    viewModel.updateTrackerLocation(cached)
             }
             val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3_000L).build()
             fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
