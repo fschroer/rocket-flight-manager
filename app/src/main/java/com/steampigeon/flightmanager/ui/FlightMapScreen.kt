@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ZoomOutMap
@@ -380,6 +381,7 @@ fun HomeScreen(
                         hasCompass = hasCompass,
                         azimuth = azimuth,
                         lastAzimuth = lastAzimuth,
+                        handheldDevicePitch = handheldDevicePitch,
                         lastPreLaunchMessageAge = lastPreLaunchMessageAge,
                         distanceToLocator = distanceToLocator,
                         viewModel = viewModel,
@@ -659,6 +661,7 @@ private fun MapWithOverlays(
     hasCompass: Boolean,
     azimuth: Float,
     lastAzimuth: Float,
+    handheldDevicePitch: Float,
     lastPreLaunchMessageAge: Long,
     distanceToLocator: Int,
     viewModel: RocketViewModel,
@@ -682,7 +685,7 @@ private fun MapWithOverlays(
         // Handle used only for pure camera queries (getCameraForLatLngBounds) — never to
         // move the camera from the controller.
         var mapLibre by remember { mutableStateOf<MapLibreMap?>(null) }
-        var is3DView by remember { mutableStateOf(false) }
+        var tiltMode by remember { mutableStateOf(MapTiltMode.Flat) }
 
         val context = LocalContext.current
         // Live map uses whichever satellite provider the user selected in the download
@@ -751,9 +754,10 @@ private fun MapWithOverlays(
             compassEnabled = compassEnabled,
             azimuth = azimuth,
             lastAzimuth = lastAzimuth,
+            handheldDevicePitch = handheldDevicePitch,
             autoTargetMode = autoTargetMode,
             autoZoomMode = autoZoomMode,
-            is3DView = is3DView,
+            tiltMode = tiltMode,
             onBearingUpdate = { viewModel.updateLastHandheldDeviceAzimuth(it) },
         )
 
@@ -861,17 +865,35 @@ private fun MapWithOverlays(
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                // Cycles Flat -> Altitude -> FollowDevice. The icon shows the mode currently
+                // in effect; the description names the one a tap will switch to.
                 IconButton(
-                    onClick = { is3DView = !is3DView },
+                    onClick = { tiltMode = tiltMode.next() },
                     modifier = Modifier.size(48.dp),
                 ) {
-                    Image(
-                        painter = painterResource(
-                            id = if (is3DView) R.drawable.ic_view_3d else R.drawable.ic_view_2d
-                        ),
-                        contentDescription = if (is3DView) "Switch to 2D view" else "Switch to 3D view",
-                        modifier = Modifier.size(32.dp),
-                    )
+                    val nextMode = tiltMode.next()
+                    val switchTo = when (nextMode) {
+                        MapTiltMode.Flat -> "2D view"
+                        MapTiltMode.Altitude -> "3D view"
+                        MapTiltMode.FollowDevice -> "phone-tilt view"
+                    }
+                    if (tiltMode == MapTiltMode.FollowDevice) {
+                        Icon(
+                            imageVector = Icons.Default.ScreenRotation,
+                            contentDescription = "Switch to $switchTo",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    } else {
+                        Image(
+                            painter = painterResource(
+                                id = if (tiltMode == MapTiltMode.Altitude) R.drawable.ic_view_3d
+                                else R.drawable.ic_view_2d
+                            ),
+                            contentDescription = "Switch to $switchTo",
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { autoTargetMode = !autoTargetMode },
@@ -947,15 +969,55 @@ private fun MapWithOverlays(
 // ── Map camera controller ─────────────────────────────────────────────────────
 
 /**
+ * What drives the map camera's tilt. Cycled by the view button in the map's control column.
+ */
+enum class MapTiltMode {
+    /** Flat, straight down. */
+    Flat,
+
+    /** Tilted toward the horizon, opening up as the rocket climbs. */
+    Altitude,
+
+    /** Tilt follows the physical pitch of the phone — raise it to look toward the horizon. */
+    FollowDevice;
+
+    fun next(): MapTiltMode = entries[(ordinal + 1) % entries.size]
+}
+
+// |pitch| at or above this reads as "lying flat" and maps to a top-down view. Doubles as the
+// dead zone: the last 10° before flat all resolve to 0 rather than hunting near it.
+private const val TILT_FOLLOW_FLAT_DEG = 80f
+
+/**
+ * Map the phone's physical pitch to a camera tilt for [MapTiltMode.FollowDevice].
+ *
+ * `handheldDevicePitch` is the elevation of the device's screen-normal axis. Measured on a
+ * Pixel 9 Pro XL: ~−88° lying flat (normal pointing at the zenith), ~−7° held upright. Only
+ * the magnitude is used, so the mapping doesn't depend on the sign convention — and leaning
+ * past vertical eases the tilt back down symmetrically rather than jumping.
+ *
+ * Flat reads as top-down (0°); raising the phone toward vertical opens the view out to
+ * MapLibre's 60° ceiling. Smoothing is left to the caller's Kalman tilt filter.
+ */
+private fun tiltFromDevicePitch(pitchDeg: Float): Float {
+    val fromUpright = abs(pitchDeg).coerceIn(0f, 90f)
+    if (fromUpright >= TILT_FOLLOW_FLAT_DEG) return 0f
+    return ((1f - fromUpright / TILT_FOLLOW_FLAT_DEG) * MAPLIBRE_MAX_PITCH)
+        .coerceIn(0f, MAPLIBRE_MAX_PITCH)
+}
+
+/**
  * Headless composable that keeps the map camera smoothly framing both the tracker
  * and the rocket using a Kalman filter. Backs off for 5 s after a user gesture
  * so that manual panning is not immediately overridden.
  *
- * In 3D mode:
+ * When tilted (see [MapTiltMode]):
  * - Tilt is merged into the final CameraPosition so only one native map move occurs per frame.
  * - Tilt resumes immediately after a pan/zoom gesture while target/zoom still defer 5 s.
  * - Zoom is corrected for perspective foreshortening at high tilt.
- * - A separate 5 s window lets the user manually tilt the map without being overridden.
+ *
+ * Tilt is never user-driven by gesture: tilt gestures are disabled on the map (the
+ * control is the mode button), so the camera owns tilt outright.
  */
 @Composable
 private fun MapCameraController(
@@ -968,9 +1030,10 @@ private fun MapCameraController(
     compassEnabled: Boolean,
     azimuth: Float,
     lastAzimuth: Float,
+    handheldDevicePitch: Float,
     autoTargetMode: Boolean,
     autoZoomMode: Boolean,
-    is3DView: Boolean,
+    tiltMode: MapTiltMode,
     onBearingUpdate: (Float) -> Unit,
 ) {
     val kalmanGainTarget  = 0.1f
@@ -979,12 +1042,9 @@ private fun MapCameraController(
     val kalmanGainBearing = 0.01f
 
     var lastUserGestureTime by remember { mutableLongStateOf(0L) }
-    var lastUserTiltTime by remember { mutableLongStateOf(0L) }
     var smoothedTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
     var smoothedZoom by remember { mutableFloatStateOf(12f) }
     var smoothedTilt by remember { mutableFloatStateOf(0f) }
-    // Tracks the tilt we last applied programmatically so we can detect user tilt gestures.
-    var lastAppliedTilt by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(Unit) {
         // Include position so the flow re-emits on every camera frame, not just when the
@@ -1017,31 +1077,15 @@ private fun MapCameraController(
     // The gesture backoff exists so the auto-camera doesn't fight your fingers,
     // but its early-return blocks EVERY camera change — so after a manual
     // pan/zoom/rotate, hitting 3D (or auto-center, auto-zoom, compass) did
-    // nothing at all until the 5 s window expired. targetTilt is gated a second
-    // time by userTiltRecent, so both windows have to be cleared for the tilt to
-    // take effect immediately.
-    LaunchedEffect(is3DView, autoTargetMode, autoZoomMode, compassEnabled) {
+    // nothing at all until the 5 s window expired.
+    LaunchedEffect(tiltMode, autoTargetMode, autoZoomMode, compassEnabled) {
         lastUserGestureTime = 0L
-        lastUserTiltTime = 0L
-    }
-
-    // Fix #4: detect a user tilt gesture by watching the native map's tilt diverge from
-    // the last value we applied programmatically during an active gesture.
-    LaunchedEffect(Unit) {
-        snapshotFlow { cameraState.position.tilt }
-            .collect { nativeTilt ->
-                if (cameraState.isGesturing &&
-                    abs(nativeTilt - lastAppliedTilt) > 2f) {
-                    lastUserTiltTime = System.currentTimeMillis()
-                }
-            }
     }
 
     if (!isMapLoaded) return
 
     val now = System.currentTimeMillis()
     val userGestureRecent = now - lastUserGestureTime <= 5000
-    val userTiltRecent    = now - lastUserTiltTime   <= 5000
 
     // Compute the target tilt for this frame.
     // Tilt: 0° = straight down, larger = closer to the horizon. MapLibre's hard ceiling is
@@ -1051,12 +1095,13 @@ private fun MapCameraController(
     // clamped away and the tilt sat at a constant 60°.)
     // Open up toward the horizon as the rocket climbs: 45° on the pad, reaching the 60°
     // ceiling at 450 m AGL.
-    val targetTilt = when {
-        is3DView && !userTiltRecent -> (45f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(45f, MAPLIBRE_MAX_PITCH)
-        is3DView -> cameraState.position.tilt  // preserve user's manual tilt
-        else -> 0f
+    val targetTilt = when (tiltMode) {
+        MapTiltMode.FollowDevice -> tiltFromDevicePitch(handheldDevicePitch)
+        MapTiltMode.Altitude ->
+            (45f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(45f, MAPLIBRE_MAX_PITCH)
+        MapTiltMode.Flat -> 0f
     }
-    // During any gesture (pan, zoom, or tilt) sync smoothedTilt from the native camera so
+    // During a gesture (pan, zoom, rotate) sync the smoothed state from the native camera so
     // that Kalman resumes from the actual position when the gesture window expires.
     // Outside gestures, filter smoothedTilt toward targetTilt.
     if (userGestureRecent) {
@@ -1064,15 +1109,11 @@ private fun MapCameraController(
         smoothedZoom   = cameraState.position.zoom + (smoothedTilt / 90f * 1.5f)
         smoothedTilt   = cameraState.position.tilt
         onBearingUpdate(cameraState.position.bearing)
-        return   // leave the camera untouched so gestures work freely in both 2D and 3D
+        return   // leave the camera untouched so gestures work freely in every tilt mode
     }
-    if (userTiltRecent) {
-        smoothedTilt = cameraState.position.tilt
-    } else {
-        smoothedTilt += (targetTilt - smoothedTilt) * kalmanGainTilt
-    }
+    smoothedTilt += (targetTilt - smoothedTilt) * kalmanGainTilt
     // zoomCorrection is driven by smoothedTilt so it fades in/out with the tilt transition
-    // rather than snapping to 0 the instant is3DView flips.
+    // rather than snapping to 0 the instant the tilt mode changes.
     val zoomCorrection = smoothedTilt / 90f * 1.5f
 
     // No recent gesture — safe to probe/compute ideal bounds.
@@ -1157,7 +1198,6 @@ private fun MapCameraController(
     }
     val bearing = if (effectiveCompass) lastAzimuth else cameraState.position.bearing
 
-    lastAppliedTilt = smoothedTilt
     cameraState.position = CamPos(smoothedTarget, smoothedZoom - zoomCorrection, smoothedTilt, bearing)
 }
 
