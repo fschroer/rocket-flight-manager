@@ -20,6 +20,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.LocatorAuth
+import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
@@ -681,6 +682,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _receiverVersion = MutableStateFlow("")
     val receiverVersion: StateFlow<String> = _receiverVersion.asStateFlow()
 
+    /**
+     * Whether the cached firmware stamps are still trustworthy.
+     *
+     * A peer that drops off the link and comes back may have been reflashed in
+     * between, so both reconnect paths set this: the LoRa link returning (the
+     * locator power-cycled or was reflashed) and a Bluetooth disconnect (the
+     * receiver did).  Cleared when a fresh VersionInfo lands.
+     *
+     * Deliberately separate from the version strings themselves — blanking those
+     * on every brief LoRa dropout would flicker the settings screens, since both
+     * hide the row while empty.  The stale stamp stays on screen until a newer
+     * one replaces it.
+     */
+    private val versionInfoStale = MutableStateFlow(true)
+
     fun startService() {
         val context = getApplication<Application>().applicationContext
         val intent = Intent(context, BluetoothService()::class.java)
@@ -887,6 +903,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         is ParsedMessage.VersionInfo -> {
                             _locatorVersion.value = parsed.msg.locatorVersion
                             _receiverVersion.value = parsed.msg.receiverVersion
+                            versionInfoStale.value = false
                         }
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
@@ -957,24 +974,48 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Re-request version info until it is received.  Only sends when the locator
-        // is actively sending PreLaunchData (i.e. the LoRa link is up), so the
-        // VersionRequest can be timed around prelaunch messages by the receiver.
+        // Re-request version info whenever the cached stamps go stale.  Only sends
+        // when the locator is actively sending PreLaunchData (i.e. the LoRa link is
+        // up), so the VersionRequest can be timed around prelaunch messages by the
+        // receiver.
+        //
+        // The loop runs for the collector's lifetime rather than exiting on first
+        // success: a locator reflashed mid-session would otherwise keep reporting
+        // the version it booted with until the app was restarted.  A rising edge on
+        // the link (silent -> sending again) is the reflash signal, since flashing
+        // takes the locator off the air.  It still transmits only while stale, so
+        // the steady state is silent.
         val versionJob = viewModelScope.launch {
-            while (_locatorVersion.value.isEmpty()) {
+            // Seed from the live link rather than false: this function re-runs on
+            // every Activity recreation, and a false seed would read the already-up
+            // link as a rising edge and re-request on each theme or locale change.
+            var linkWasUp =
+                System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime < 5_000L
+            while (true) {
                 delay(1_000L)
                 val age = System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime
-                if (age < 5_000L) {
+                val linkUp = age < 5_000L
+                if (linkUp && !linkWasUp) versionInfoStale.value = true
+                linkWasUp = linkUp
+                if (linkUp && versionInfoStale.value) {
                     service.requestVersionInfo()
                     delay(5_000L)
                 }
             }
         }
 
-        // All three are cancelled together on the next call.  The version loop
+        // The receiver can only be reflashed across a Bluetooth drop, which the LoRa
+        // edge above cannot see — the locator may keep transmitting throughout.
+        val connectionJob = viewModelScope.launch {
+            BluetoothManagerRepository.bluetoothConnectionState.collect { state ->
+                if (state == BluetoothConnectionState.Disconnected) versionInfoStale.value = true
+            }
+        }
+
+        // All four are cancelled together on the next call.  The version loop
         // matters as much as the packet collector: it transmits, so a leaked copy
         // is a redundant VersionRequest on the air every few seconds, forever.
-        inboundJobs = listOf(recognitionJob, packetJob, versionJob)
+        inboundJobs = listOf(recognitionJob, packetJob, versionJob, connectionJob)
     }
 
 /*
