@@ -324,11 +324,11 @@ private const val TICK_HALF_LENGTH_M = 0.4
 // emit 3600 posts, all rebuilt on every telemetry message.
 private const val TICK_MAX_COUNT = 600
 
-// Rocket marker icons, pre-tinted for the two freshness states.  Two images
-// rather than one SDF: an SDF would flatten the drawable to a tintable
-// silhouette, and the sprite is only ~72 px square, so carrying both costs
-// nothing.
+// Rocket marker icons, pre-tinted per marker state.  Separate images rather than
+// one SDF: an SDF would flatten the drawable to a tintable silhouette, and the
+// sprite is only ~72 px square, so carrying all three costs nothing.
 private const val IMG_ROCKET_FRESH = "rocket-icon-fresh"
+private const val IMG_ROCKET_DEGRADED = "rocket-icon-degraded"
 private const val IMG_ROCKET_STALE = "rocket-icon-stale"
 private const val ROCKET_ICON_PX = 72
 
@@ -337,6 +337,10 @@ private const val MAX_GEOJSON_ZOOM = 22
 
 private const val COLOR_GREEN = 0xFF00FF00.toInt()
 private const val COLOR_RED = 0xFFFF0000.toInt()
+// Neutral mid-grey: reads as "no colour signal" against both the green and red
+// states, and stays legible over satellite imagery behind the white outline the
+// sprite already draws.
+private const val COLOR_GREY = 0xFF9E9E9E.toInt()
 private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
 private const val COLOR_PATH = 0xFFFF6600.toInt()
 // Cyan against the path's orange: near-complementary, so the second markers
@@ -344,12 +348,32 @@ private const val COLOR_PATH = 0xFFFF6600.toInt()
 private const val COLOR_PATH_TICK = 0xFF00E5FF.toInt()
 
 /**
+ * How much the displayed rocket position can be trusted, which drives the marker
+ * and accuracy-ring colour.
+ *
+ * The two ways a position goes bad are independent and need to be told apart:
+ * the link can go quiet (we stop hearing anything), or the link can be perfectly
+ * healthy while the locator itself reports that its GPS fix is no longer live.
+ * The second case is invisible without [Degraded] — the locator keeps sending
+ * packets carrying a latched lat/lon, which renders exactly like a stationary
+ * rocket.
+ */
+enum class RocketMarkerState {
+    /** Recent packet and the locator reports a healthy GPS — position is live. */
+    Live,
+    /** Recent packet, but the locator reports GPS health other than Ok — the
+     *  position it is sending is latched or degraded, not a current fix. */
+    Degraded,
+    /** No recent packet; whatever is drawn is however old the last one was. */
+    Stale,
+}
+
+/**
  * MapLibre map hosting the satellite style, with the rocket marker, GPS-accuracy ring,
  * and flight-path polyline drawn as GeoJSON style layers. Compose overlays (compass,
  * scale bar, gauges) sit on top exactly as they did over GoogleMap.
  *
- * @param rocketFresh drives green (recent pre-launch message) vs red styling, mirroring
- *        the old BitmapDescriptorFactory HUE_GREEN/HUE_RED marker + circle colors.
+ * @param markerState drives green / grey / red styling of the marker and accuracy ring.
  */
 @SuppressLint("MissingPermission") // guarded by an explicit ACCESS_FINE_LOCATION check
 @Composable
@@ -358,7 +382,7 @@ fun MapLibreMapView(
     styleJson: String,
     cameraState: MapLibreCameraState,
     rocketLatLng: LatLng,
-    rocketFresh: Boolean,
+    markerState: RocketMarkerState,
     accuracyRadiusM: Double,
     flightPath: List<PathPoint>,
     userLocation: Location?,
@@ -438,9 +462,9 @@ fun MapLibreMapView(
     )
 
     // Push dynamic content into the style layers whenever it changes.
-    LaunchedEffect(styleReady, rocketLatLng, rocketFresh, accuracyRadiusM, flightPath) {
+    LaunchedEffect(styleReady, rocketLatLng, markerState, accuracyRadiusM, flightPath) {
         val style = mapRef?.style?.takeIf { styleReady && it.isFullyLoaded } ?: return@LaunchedEffect
-        updateContentLayers(style, rocketLatLng, rocketFresh, accuracyRadiusM, flightPath)
+        updateContentLayers(style, rocketLatLng, markerState, accuracyRadiusM, flightPath)
     }
 
     // Feed the app's fused-location fixes into the my-location component. Skip the 0,0
@@ -561,10 +585,10 @@ private fun setupContentLayers(style: Style) {
 }
 
 /**
- * Rasterises the rocket vector drawable twice — tinted for the fresh and stale
- * states — and registers both with the style.  Must run before the symbol layer
- * references them, and again on every style reload (a style change drops its
- * image sprite).
+ * Rasterises the rocket vector drawable once per [RocketMarkerState] — tinted
+ * green, grey, and red — and registers all three with the style.  Must run before
+ * the symbol layer references them, and again on every style reload (a style
+ * change drops its image sprite).
  */
 private fun addRocketIcons(context: Context, style: Style) {
     fun sprite(bodyColor: Int): Bitmap {
@@ -589,9 +613,10 @@ private fun addRocketIcons(context: Context, style: Style) {
         draw(bodyColor, (ROCKET_ICON_PX * 0.08f).toInt())
         return bitmap
     }
-    // Tinted rather than full-colour so the fresh/stale distinction the dot
-    // carried survives — a stale fix means the position can't be trusted.
+    // Tinted rather than full-colour so the trust distinction the dot carried
+    // survives — anything but green means the position can't be relied on.
     style.addImage(IMG_ROCKET_FRESH, sprite(COLOR_GREEN))
+    style.addImage(IMG_ROCKET_DEGRADED, sprite(COLOR_GREY))
     style.addImage(IMG_ROCKET_STALE, sprite(COLOR_RED))
 }
 
@@ -599,11 +624,18 @@ private fun addRocketIcons(context: Context, style: Style) {
 private fun updateContentLayers(
     style: Style,
     rocketLatLng: LatLng,
-    rocketFresh: Boolean,
+    markerState: RocketMarkerState,
     accuracyRadiusM: Double,
     flightPath: List<PathPoint>,
 ) {
-    val color = if (rocketFresh) COLOR_GREEN else COLOR_RED
+    // The accuracy ring is coloured from the same state as the marker: its radius
+    // comes from hAcc, which latches along with lat/lon, so a green ring around a
+    // grey marker would assert a precision the fix no longer has.
+    val color = when (markerState) {
+        RocketMarkerState.Live     -> COLOR_GREEN
+        RocketMarkerState.Degraded -> COLOR_GREY
+        RocketMarkerState.Stale    -> COLOR_RED
+    }
 
     // Accuracy ring: a geographic polygon (meters radius) — MapLibre circle-radius is
     // in pixels, so a meters ring must be an actual polygon.
@@ -627,7 +659,13 @@ private fun updateContentLayers(
         Point.fromLngLat(rocketLatLng.longitude, rocketLatLng.latitude)
     )
     (style.getLayer(LYR_ROCKET) as? SymbolLayer)?.setProperties(
-        PropertyFactory.iconImage(if (rocketFresh) IMG_ROCKET_FRESH else IMG_ROCKET_STALE)
+        PropertyFactory.iconImage(
+            when (markerState) {
+                RocketMarkerState.Live     -> IMG_ROCKET_FRESH
+                RocketMarkerState.Degraded -> IMG_ROCKET_DEGRADED
+                RocketMarkerState.Stale    -> IMG_ROCKET_STALE
+            }
+        )
     )
 }
 

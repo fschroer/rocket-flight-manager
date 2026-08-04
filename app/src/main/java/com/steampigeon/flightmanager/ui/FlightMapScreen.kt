@@ -702,6 +702,16 @@ private fun MapWithOverlays(
         val styleJson = remember { MapProviderPrefs.get(context).styleJson(context) }
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
         val rocketFresh = lastPreLaunchMessageAge < messageTimeout
+        // Link age is checked first: if we are not hearing from the locator, its
+        // last-reported gpsStatus is itself stale and cannot qualify anything.
+        // Only with a live link does a non-Ok gpsStatus mean what it says — the
+        // locator is talking to us and telling us its own fix is not current, so
+        // the lat/lon in those packets is latched rather than tracking the rocket.
+        val markerState = when {
+            !rocketFresh -> RocketMarkerState.Stale
+            rocketState.gpsStatus != SensorHealth.Ok -> RocketMarkerState.Degraded
+            else -> RocketMarkerState.Live
+        }
         val cameraState = remember {
             MapLibreCameraState(
                 CamPos(
@@ -738,7 +748,7 @@ private fun MapWithOverlays(
             styleJson = styleJson,
             cameraState = cameraState,
             rocketLatLng = locatorLatLng,
-            rocketFresh = rocketFresh,
+            markerState = markerState,
             accuracyRadiusM = rocketState.hacc.toDouble(),
             // Altitude and capture time are carried through, not dropped: they
             // drive the 3D altitude curtain and its one-second markers.
