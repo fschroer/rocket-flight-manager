@@ -22,7 +22,11 @@ object Protocol {
     // The password auth_tag is computed over exactly these bytes (with crc and
     // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
     const val PRELAUNCH_BASE_STRUCT_SIZE = 115
-    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 64 // vel_ned (12) + q_bn (16) replaces accel (12) + gyro (12) + velocity (4); + rssi (2)
+    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 72 // TelemetryData payload (70 = 62 + locator_id 4 + auth_tag 4) + rssi (2)
+    // On-wire size of the locator's TelemetryData struct (header 6 + payload 70).
+    // The auth_tag is computed over exactly these bytes (with crc and auth_tag
+    // zeroed); the receiver-appended RSSI sits after and is excluded.
+    const val TELEMETRY_BASE_STRUCT_SIZE = 76
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
@@ -421,6 +425,8 @@ data class TelemetryParsed(
     val velNed: Vec3f,                // Vec3f — fused NED velocity m/s
     val attitude: Quaternionf,        // Quaternionf — body-to-NED quaternion
     val flightState: FlightStates,    // uint8_t enum
+    val locatorId: Long,              // uint32_t — cleartext STM MPU UID
+    val authTag: Long,                // uint32_t — password-seeded checksum from the locator
     val rssi: Int,                    // int16_t
 )
 

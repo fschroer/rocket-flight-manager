@@ -185,10 +185,11 @@ private const val minimumSpokenAGLVelocity = 2 * 9.8
 // fixed poll interval (not the TTS engine's isSpeaking flag) so behavior is consistent
 // across phone hardware.
 private const val announcementIntervalMillis = 500L          // poll cadence for continuous callouts
-private const val descentWarningIntervalMillis = 4000L       // minimum gap between descent warnings
-private const val freefallDescentRate = 30f                  // m/s downward => still in freefall (pre-chute)
+private const val descentWarningIntervalMillis = 10000L      // minimum gap between descent warnings
+private const val freefallDescentRate = 50f                  // m/s downward => still in freefall (pre-chute)
 private const val minDescentRateForPrediction = 1f           // m/s, floor to avoid div-by-zero / noise
 private const val landingLeadTimeSeconds = 3f                // announce landing this long before predicted touchdown
+private const val linkLossTimeout = 3000L                    // telemetry gap (ms) called out as a lost link
 private const val landingLinkLossTimeout = 5000L             // telemetry gap (ms) during descent that triggers the link-loss fallback
 
 // ── Supporting types ──────────────────────────────────────────────────────────
@@ -200,6 +201,72 @@ private data class DrawerItem(val labelRes: Int, val iconRes: Int, val screen: N
 private data class ChannelConfig(val mode: DeployMode?, val isArmed: Boolean)
 
 // ── Helper functions ──────────────────────────────────────────────────────────
+
+/**
+ * True when a reported coordinate is a real fix.
+ *
+ * A coordinate is usable only if finite and in range.  LatLngBounds.build()
+ * throws IllegalArgumentException ("NaN > NaN") if any included point is NaN,
+ * which crashes Compose during recomposition — so NaN must be filtered here,
+ * not just the 0,0 null-island case that the locator reports before it has a fix.
+ *
+ * Shared by the camera framing and the speech announcer: a 0,0 placeholder fed
+ * into a great-circle distance produces a plausible-looking number thousands of
+ * kilometres wide, which the announcer would happily read out loud.
+ */
+private fun validLatLng(lat: Double, lon: Double) =
+    lat.isFinite() && lon.isFinite() &&
+    abs(lat) <= 90.0 && abs(lon) <= 180.0 &&
+    (lat != 0.0 || lon != 0.0)
+
+private fun LatLng.isFix() = validLatLng(latitude, longitude)
+
+/**
+ * The spoken position of the rocket relative to the launch point — " 250 meters
+ * north of launch point." — or null when there is no fix worth quoting.
+ *
+ * Every spoken distance goes through here.  Null means either the locator says
+ * its own fix is bad or one end of [vector] was a 0,0 placeholder, and callers
+ * word the no-position case themselves rather than appending "location unknown"
+ * to a sentence that was about to quote one.
+ */
+private fun launchRelativePhrase(state: RocketState, vector: Vector?): String? =
+    if (state.gpsStatus == SensorHealth.Ok && vector != null)
+        " ${vector.distance} meters ${vector.ordinal} of launch point."
+    else null
+
+/**
+ * Seconds until the rocket reaches the ground at its current descent rate, or
+ * [Float.MAX_VALUE] when the rate is too small to divide by — a rate near zero is
+ * noise or a rocket that isn't descending, not a landing about to happen.
+ */
+internal fun timeToGroundSeconds(aglM: Float, descentRateMs: Float): Float =
+    if (descentRateMs > minDescentRateForPrediction) aglM / descentRateMs
+    else Float.MAX_VALUE
+
+/** True when the rocket is about to touch down according to live telemetry. */
+internal fun landingImminent(aglM: Float, descentRateMs: Float): Boolean =
+    aglM < landingAltitudeThreshold ||
+            timeToGroundSeconds(aglM, descentRateMs) < landingLeadTimeSeconds
+
+/**
+ * True when the rocket must be on the ground despite nothing having been heard
+ * from it.
+ *
+ * The link almost always dies before the landing does — the last few hundred
+ * metres are where line of sight to a rocket across a field runs out — so a
+ * landing callout that waits to *hear* the touchdown mostly never comes.  This
+ * flies the rocket the rest of the way down on the last altitude and descent rate
+ * it managed to send: once that much wall-clock has passed with no contact, it is
+ * down, and the last known position is the one to walk toward.
+ *
+ * The [landingLinkLossTimeout] floor keeps a routine 3 s dropout from concluding
+ * a flight, which is not a decision that can be taken back.
+ */
+internal fun landedThroughBlackout(aglM: Float, descentRateMs: Float, messageAgeMs: Long): Boolean =
+    messageAgeMs >= landingLinkLossTimeout &&
+            (landingImminent(aglM, descentRateMs) ||
+                    messageAgeMs / 1000f >= timeToGroundSeconds(aglM, descentRateMs))
 
 /** Returns the display string for a single deployment channel based on its mode.
  *  Format: "Ch \[n]: [DP|DB|MP|MB|NA] \[value]" */
@@ -428,17 +495,66 @@ private fun FlightSpeechAnnouncer(
     var drogueDeploySpoken by remember { mutableStateOf(false) }
     var mainDeploySpoken by remember { mutableStateOf(false) }
     var landingSpoken by remember { mutableStateOf(false) }
-    var signalLossSpoken by remember { mutableStateOf(false) }
+    // Set once the rocket is down — reported landed, or dead-reckoned to the ground
+    // during a link blackout.  Everything the locator has to say after that point is
+    // history: the events it flew through while out of contact arrive in a burst the
+    // moment the link returns, and announcing "main charge" over a rocket that is
+    // already lying in a field is worse than saying nothing.
+    var flightConcluded by remember { mutableStateOf(false) }
     var receivedState by remember { mutableStateOf(FlightStates.WaitingLaunch) }
     var noseoverTime by remember { mutableLongStateOf(0L) }
     var launchLocation by remember { mutableStateOf(LatLng(0.0, 0.0)) }
 
-    val vectorFromLaunch = viewModel.locatorVector(launchLocation, locatorLatLng)
+    // Null whenever either end of the vector is a 0,0 placeholder rather than a
+    // real fix — a launch point captured with no GPS lock sits on null island, and
+    // the great-circle distance to it is the ~12 000 km the announcer used to read
+    // out as a recovery bearing.  Callers say "location unknown" instead.
+    val vectorFromLaunch = if (launchLocation.isFix() && locatorLatLng.isFix())
+        viewModel.locatorVector(launchLocation, locatorLatLng)
+    else null
 
     // Announces discrete flight state transitions (apogee, drogue/main deploy, landing).
     LaunchedEffect(rocketState.flightState) {
         if (!armedState || rocketState.flightState <= receivedState) return@LaunchedEffect
         receivedState = rocketState.flightState
+
+        // The locator's own landing detection ends the flight, and it is the
+        // authority on the matter.  Handled FIRST, ahead of the per-event checks
+        // below: a link that comes back after the rocket is already down delivers
+        // the whole flight in one step, and running those checks on it read out
+        // every charge and deployment the rocket flew through minutes earlier.
+        if (rocketState.flightState >= FlightStates.Landed) {
+            // Still worth saying once, if the blackout dead-reckoning below hasn't
+            // already — this is the number the user walks toward.
+            if (!landingSpoken) {
+                textToSpeech?.speak(
+                    "Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
+                        ?: ", location unknown."}",
+                    TextToSpeech.QUEUE_FLUSH, null, null
+                )
+            }
+            // Reset all announcement guards for the next flight
+            previousAGL = 0
+            launchedState = false
+            apogeeSpoken = false
+            droguePrimaryState = false
+            drogueBackupState = false
+            mainPrimaryState = false
+            mainBackupState = false
+            drogueDeploySpoken = false
+            mainDeploySpoken = false
+            landingSpoken = false
+            flightConcluded = false
+            receivedState = FlightStates.WaitingLaunch
+            noseoverTime = 0
+            launchLocation = LatLng(0.0, 0.0)
+            return@LaunchedEffect
+        }
+
+        // Landing was already presumed from the last telemetry before the link
+        // dropped, so anything arriving now describes a rocket that is on the
+        // ground.  Stay quiet until the locator confirms Landed above.
+        if (flightConcluded) return@LaunchedEffect
 
         if (rocketState.flightState >= FlightStates.Launched && !launchedState) {
             launchedState = true
@@ -478,23 +594,6 @@ private fun FlightSpeechAnnouncer(
                 locatorConfig.deploymentChannel2Mode == DeployMode.MainBackup && rocketState.channel2Fired)
                 textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
         }
-        if (rocketState.flightState >= FlightStates.Landed) {
-            // Reset all announcement guards for the next flight
-            previousAGL = 0
-            launchedState = false
-            apogeeSpoken = false
-            droguePrimaryState = false
-            drogueBackupState = false
-            mainPrimaryState = false
-            mainBackupState = false
-            drogueDeploySpoken = false
-            mainDeploySpoken = false
-            landingSpoken = false
-            signalLossSpoken = false
-            receivedState = FlightStates.WaitingLaunch
-            noseoverTime = 0
-            launchLocation = LatLng(0.0, 0.0)
-        }
     }
 
     // Continuous ascent/descent callouts, driven from a fixed-cadence poll loop rather than
@@ -507,6 +606,14 @@ private fun FlightSpeechAnnouncer(
     LaunchedEffect(armedState) {
         if (!armedState) return@LaunchedEffect
         var lastDescentWarningTime = 0L
+        // Link and GPS health are edge-triggered: each says something when the
+        // state changes, not while it persists, so a long dropout is one sentence
+        // rather than a chant.  Both start unknown so arming into an already-bad
+        // state doesn't blurt on the first poll — the map's "No GPS" banner is the
+        // display for a condition that was there all along.
+        var linkEverLive = false
+        var linkLostSpoken = false
+        var gpsOkLast: Boolean? = null
         while (true) {
             delay(announcementIntervalMillis)
             val state = currentRocketState
@@ -514,6 +621,44 @@ private fun FlightSpeechAnnouncer(
             val now = System.currentTimeMillis()
             val messageAge = now - state.lastPreLaunchMessageTime
             val descentRate = state.velNed.z   // NED Down component: positive while descending
+            val linkLive = messageAge < linkLossTimeout
+            val fromLaunch = launchRelativePhrase(state, vector)
+
+            // Link health.  Announced only after the link has been live at least
+            // once, so starting the app out of range is silence rather than a
+            // report of something that was never there.
+            if (linkLive) {
+                linkEverLive = true
+                if (linkLostSpoken) {
+                    linkLostSpoken = false
+                    textToSpeech?.speak("Telemetry restored.", TextToSpeech.QUEUE_ADD, null, null)
+                }
+            } else if (linkEverLive && !linkLostSpoken) {
+                linkLostSpoken = true
+                // In the air the last-known position is the part worth hearing; on
+                // the pad or after landing it is just the number already on screen.
+                val airborne = state.flightState > FlightStates.WaitingLaunch &&
+                        state.flightState < FlightStates.Landed
+                textToSpeech?.speak(
+                    if (airborne && fromLaunch != null) "Telemetry lost. Last known$fromLaunch"
+                    else "Telemetry lost.",
+                    TextToSpeech.QUEUE_FLUSH, null, null
+                )
+            }
+
+            // GPS health, reported only while the link is live: with no messages
+            // arriving, the locator's last-sent gpsStatus is stale and says nothing
+            // about whether it has a fix now.
+            if (linkLive) {
+                val gpsOk = state.gpsStatus == SensorHealth.Ok
+                if (gpsOkLast != null && gpsOk != gpsOkLast) {
+                    textToSpeech?.speak(
+                        if (gpsOk) "GPS fix restored." else "GPS fix lost.",
+                        TextToSpeech.QUEUE_ADD, null, null
+                    )
+                }
+                gpsOkLast = gpsOk
+            }
 
             // Ascent altitude callouts every 100 m during coast to apogee.
             if (state.flightState == FlightStates.Burnout) {
@@ -528,79 +673,56 @@ private fun FlightSpeechAnnouncer(
             // Descent: periodic warnings while in freefall, then exactly one landing announcement.
             // Landing is predicted from the vertical descent rate (time-to-ground), with a floor
             // on AGL and a link-loss fallback so a landing is still reported if the link drops.
-            if (state.flightState > FlightStates.Noseover && !landingSpoken) {
-                val location =
-                    if (state.gpsStatus == SensorHealth.Ok)
-                        " ${vector.distance} meters ${vector.ordinal} of launch point."
-                    else ", location unknown."
-                val predictedTimeToGround =
-                    if (descentRate > minDescentRateForPrediction)
-                        state.altitudeAboveGroundLevel / descentRate
-                    else Float.MAX_VALUE
-                val landingImminent =
-                    state.altitudeAboveGroundLevel < landingAltitudeThreshold ||
-                            predictedTimeToGround < landingLeadTimeSeconds
-                val linkStale = messageAge >= landingLinkLossTimeout
-
+            if (state.flightState > FlightStates.Noseover && state.flightState.isAirborne() &&
+                !landingSpoken) {
+                val agl = state.altitudeAboveGroundLevel
                 when {
-                    // Link lost while the rocket was already near landing — the last-known
-                    // position is effectively the landing site, so treat it as a final landing.
-                    linkStale && landingImminent -> {
+                    landedThroughBlackout(agl, descentRate, messageAge) -> {
                         landingSpoken = true
+                        flightConcluded = true
                         textToSpeech?.speak(
-                            "Landing. Last known$location",
+                            "Landing." + (fromLaunch?.let { " Last known$it" }
+                                ?: " Location unknown."),
                             TextToSpeech.QUEUE_FLUSH, null, null
                         )
                     }
-                    // Link lost well above the ground — likely a transient dropout, not a
-                    // landing. Announce it once but do not latch, so descent warnings and the
-                    // real landing call resume if the signal comes back.
-                    linkStale -> {
-                        if (!signalLossSpoken) {
-                            signalLossSpoken = true
-                            textToSpeech?.speak(
-                                "Signal lost. Last known$location",
-                                TextToSpeech.QUEUE_FLUSH, null, null
-                            )
-                        }
+                    // Everything below needs a live link: altitude and descent rate out of a
+                    // stale packet describe where the rocket was, not where it is.
+                    !linkLive -> {}
+                    landingImminent(agl, descentRate) -> {
+                        landingSpoken = true
+                        flightConcluded = true
+                        textToSpeech?.speak(
+                            "Landing${fromLaunch ?: ", location unknown."}",
+                            TextToSpeech.QUEUE_FLUSH, null, null
+                        )
                     }
-                    // Link healthy: re-arm the dropout notice, then handle landing / warnings.
-                    else -> {
-                        signalLossSpoken = false
-                        when {
-                            landingImminent -> {
-                                landingSpoken = true
-                                textToSpeech?.speak(
-                                    "Landing$location",
-                                    TextToSpeech.QUEUE_FLUSH, null, null
-                                )
-                            }
-                            descentRate >= freefallDescentRate &&
-                                    now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
-                                lastDescentWarningTime = now
-                                textToSpeech?.speak(
-                                    "Descent warning, ${descentRate.toInt()} meters per second${
-                                        if (state.gpsStatus == SensorHealth.Ok)
-                                            " ${vector.distance} meters ${vector.ordinal} of launch point."
-                                        else ""
-                                    }",
-                                    TextToSpeech.QUEUE_FLUSH, null, null
-                                )
-                            }
-                        }
+                    descentRate >= freefallDescentRate &&
+                            now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
+                        lastDescentWarningTime = now
+                        textToSpeech?.speak(
+                            "Descent warning, ${descentRate.toInt()} meters per second" +
+                                    (fromLaunch ?: ""),
+                            TextToSpeech.QUEUE_FLUSH, null, null
+                        )
                     }
                 }
             }
 
-            // Physical deployment detections.
-            if (state.flightState >= FlightStates.DroguePrimaryEvent && !drogueDeploySpoken && state.drogueDeployDetected) {
-                drogueDeploySpoken = true
-                textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
-            }
-            if (state.flightState >= FlightStates.MainPrimaryEvent && !mainDeploySpoken && state.mainDeployDetected) {
-                mainDeploySpoken = true
-                drogueDeploySpoken = true
-                textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
+            // Physical deployment detections.  Suppressed once the rocket is down:
+            // these flags arrive latched in the telemetry, so the first packet after
+            // a blackout that outlasted the flight would otherwise report a main
+            // deployment that happened on the way to a landing already announced.
+            if (!flightConcluded) {
+                if (state.flightState >= FlightStates.DroguePrimaryEvent && !drogueDeploySpoken && state.drogueDeployDetected) {
+                    drogueDeploySpoken = true
+                    textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
+                }
+                if (state.flightState >= FlightStates.MainPrimaryEvent && !mainDeploySpoken && state.mainDeployDetected) {
+                    mainDeploySpoken = true
+                    drogueDeploySpoken = true
+                    textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
+                }
             }
         }
     }
@@ -1163,15 +1285,6 @@ private fun MapCameraController(
     // No recent gesture — safe to probe/compute ideal bounds.
     // Only include the rocket if it has a valid GPS fix — excluding 0,0 prevents the bounds
     // from spanning to null-island and pulling the Kalman zoom filter toward world level.
-    // A coordinate is usable only if finite and in range.  LatLngBounds.build()
-    // throws IllegalArgumentException ("NaN > NaN") if any included point is NaN,
-    // which crashes Compose during recomposition — so NaN must be filtered here,
-    // not just the 0,0 null-island case.
-    fun validLatLng(lat: Double, lon: Double) =
-        lat.isFinite() && lon.isFinite() &&
-        abs(lat) <= 90.0 && abs(lon) <= 180.0 &&
-        (lat != 0.0 || lon != 0.0)
-
     val rocketHasGps  = validLatLng(rocketState.latitude, rocketState.longitude)
     val trackerHasGps = validLatLng(trackerLocation.latitude, trackerLocation.longitude)
 

@@ -27,8 +27,19 @@ class WireLayoutTest {
     @Test fun prelaunchPayloadSize() = assertEquals(134, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
     @Test fun prelaunchBaseStructSize() = assertEquals(115, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
 
-    // TelemetryData: C++ sizeof 68 → payload 62; + rssi 2 = 64
-    @Test fun telemetryPayloadSize() = assertEquals(64, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
+    // TelemetryData: C++ sizeof 76 → payload 70 (62 + locator_id 4 + auth_tag 4);
+    //                + rssi 2 = 72
+    @Test fun telemetryPayloadSize() = assertEquals(72, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
+    @Test fun telemetryBaseStructSize() = assertEquals(76, Protocol.TELEMETRY_BASE_STRUCT_SIZE)
+
+    // Both authenticated broadcasts put auth_tag last, and LocatorAuth locates it
+    // by offset from the end of the base struct — so the base size must be exactly
+    // the payload minus whatever the receiver appends after it.
+    @Test fun telemetryBaseIsPayloadLessAppendedRssi() =
+        assertEquals(
+            Protocol.TELEMETRY_BASE_STRUCT_SIZE,
+            Protocol.HEADER_SIZE + Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE - 2,
+        )
 
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)

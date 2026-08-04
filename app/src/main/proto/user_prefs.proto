@@ -14,6 +14,12 @@ message UserPreferences {
   // Presence + a matching password_key lets the app recognise a locator's
   // PreLaunchData without re-prompting for its password.
   map<uint32, KnownLocator> known_locators = 6;
+  // Field 7 was last_locator_id, a persisted recognition restored at startup so
+  // an app opened while the locator was armed could show telemetry. Retired once
+  // TelemetryData started carrying its own locator_id + auth_tag (ADR-0006), which
+  // authenticates the armed case directly instead of trusting a stored id. Not
+  // reused: an installed app may still have a value written under this number.
+  reserved 7;
 }
 
 message KnownLocator {

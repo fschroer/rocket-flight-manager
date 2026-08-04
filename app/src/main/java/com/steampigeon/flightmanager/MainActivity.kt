@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModelProvider
@@ -22,6 +23,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // Must run before any MapLibre view/offline API is touched (FlightMapScreen's map).
         MapLibre.getInstance(applicationContext)
         super.onCreate(savedInstanceState)
+
+        // Hold the screen on for as long as this window is in the foreground.  A
+        // flight is minutes of watching the map and listening to callouts without
+        // touching the phone, which is exactly the input-idle the system screen
+        // timeout is built to catch — it was blanking the display mid-flight.  The
+        // flag is scoped to this window, so backgrounding the app returns the
+        // device to its normal timeout.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         viewModel = ViewModelProvider(this)[RocketViewModel::class.java]
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager

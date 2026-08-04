@@ -258,9 +258,15 @@ val unspecified_scheme = ColorFamily(
     Color.Unspecified, Color.Unspecified, Color.Unspecified, Color.Unspecified
 )
 
+/**
+ * The app is dark-themed regardless of the system setting.  It is used outdoors on
+ * a launch range, over satellite imagery and a camera feed that are dark to begin
+ * with, and the map overlays are drawn light-on-dark to sit over them — a light
+ * scheme fought both.  [darkTheme] stays a parameter so previews can force either.
+ */
 @Composable
 fun FlightManagerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     // Dynamic color is available on Android 12+
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit

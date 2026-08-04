@@ -306,28 +306,60 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Evaluate recognition for an incoming PreLaunchData [frame].  Called for every
-     * PreLaunchData: recognises known/open locators automatically, raises the
-     * channel-change password challenge when a deliberate channel change lands on
-     * an unrecognised locator, and flags passive conflicting traffic otherwise.
+     * Evaluate recognition for an incoming authenticated broadcast [frame] whose
+     * base struct is [baseSize] bytes — PreLaunchData while the locator is
+     * disarmed, TelemetryData while it is armed.  Called for every one of them:
+     * recognises known/open locators automatically, raises the channel-change
+     * password challenge when a deliberate channel change lands on an unrecognised
+     * locator, and flags passive conflicting traffic otherwise.
+     *
+     * [challengeable] is false for TelemetryData.  An armed locator can be
+     * recognised — that is the point of carrying the tag there — but it cannot be
+     * *connected to* from cold: the password dialog needs a device name to show,
+     * and config/arming is a disarmed-state activity anyway.  An unknown armed
+     * locator therefore raises the conflict warning and waits for it to disarm.
      */
-    private fun evaluateRecognition(frame: ByteArray, locatorId: Long, deviceName: String) {
-        lastPrelaunchFrame = frame
-        lastPrelaunchLocatorId = locatorId
-        lastPrelaunchDeviceName = deviceName
+    private fun evaluateRecognition(
+        frame: ByteArray,
+        locatorId: Long,
+        deviceName: String,
+        baseSize: Int = Protocol.PRELAUNCH_BASE_STRUCT_SIZE,
+        challengeable: Boolean = true,
+    ) {
+        if (challengeable) {
+            lastPrelaunchFrame = frame
+            lastPrelaunchLocatorId = locatorId
+            lastPrelaunchDeviceName = deviceName
+        }
         val knownKey = _knownLocators.value[locatorId]?.passwordKey?.toLong()?.and(0xFFFFFFFFL)
         val recognized =
-            (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey)) ||
-                    LocatorAuth.verifyFrame(frame, 0L)   // open locator (no password)
+            (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey, baseSize)) ||
+                    LocatorAuth.verifyFrame(frame, 0L, baseSize)   // open locator (no password)
 
         // Keep the challenge frame fresh while a dialog for this locator is open.
-        if (_challenge.value?.locatorId == locatorId) challengeFrame = frame
+        if (challengeable && _challenge.value?.locatorId == locatorId) challengeFrame = frame
 
         if (recognized) {
             _recognizedLocatorId.value = locatorId
             _conflictLocatorId.value = null
             awaitingChannelRecognition = false
             if (_challenge.value?.locatorId == locatorId) _challenge.value = null
+            // An armed locator authenticates but carries no config, so the status
+            // panel would have nothing to name it with.  Fall back to the label
+            // stored when this locator was authorized; the first PreLaunchData
+            // overwrites it with the live value as soon as it disarms.
+            if (_remoteLocatorConfig.value.deviceName.isEmpty()) {
+                _knownLocators.value[locatorId]?.label
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { label -> _remoteLocatorConfig.update { it.copy(deviceName = label) } }
+            }
+            return
+        }
+        // Unrecognised.  Drop any standing recognition of a *different* locator only
+        // when this frame could plausibly be the one we care about; an armed
+        // stranger on the channel must not knock out a recognised locator.
+        if (!challengeable) {
+            _conflictLocatorId.value = locatorId
             return
         }
         if (awaitingChannelRecognition) {
@@ -404,8 +436,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun requestConnectToConflict() {
         val id = _conflictLocatorId.value ?: return
         if (_recognizedLocatorId.value == id) return
+        // Only offer the prompt when we hold a PreLaunchData frame from THIS
+        // locator to verify against.  Otherwise challengeFrame would still hold
+        // some other locator's frame, and the typed password would be checked
+        // against the wrong tag — meaningless at best, a false accept at worst.
+        // Reachable since armed locators raise conflicts too: an armed stranger
+        // is only connectable once it disarms and broadcasts its identity and
+        // device name, which is also the only state in which connecting is useful.
+        val frame = lastPrelaunchFrame ?: return
+        if (lastPrelaunchLocatorId != id) return
         declinedLocatorIds.remove(id)
-        if (lastPrelaunchLocatorId == id) challengeFrame = lastPrelaunchFrame
+        challengeFrame = frame
         _challengeError.value = false
         _challenge.value = LocatorChallenge(id, lastPrelaunchDeviceName, null)
     }
@@ -573,6 +614,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _flightPath = MutableStateFlow<List<PathPoint>>(emptyList())
     val flightPath: StateFlow<List<PathPoint>> = _flightPath.asStateFlow()
     private var _previousFlightState = FlightStates.WaitingLaunch
+    // False until a telemetry packet has actually been seen, so the WaitingLaunch
+    // that _previousFlightState is *initialised* to is never mistaken for an
+    // observed ground state.  Without it, an app restarted mid-flight reads its
+    // first packet as a launch and erases the path of the flight it just rejoined.
+    private var flightStateObserved = false
 
     private val _isFlightPathRecording = MutableStateFlow(true)
     val isFlightPathRecording: StateFlow<Boolean> = _isFlightPathRecording.asStateFlow()
@@ -823,9 +869,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                         is ParsedMessage.Telemetry -> {
-                            // Telemetry carries no locator id (kept minimal for range), so it
-                            // is processed only while connected to a recognised locator.
-                            if (_recognizedLocatorId.value != null) {
+                            // Telemetry carries the same identity + auth_tag pair as
+                            // PreLaunchData, so an ARMED locator authenticates itself
+                            // exactly like a disarmed one — which is what lets the app
+                            // start up mid-flight, or with the rocket already on the pad
+                            // armed, and show its telemetry (ADR-0006).
+                            evaluateRecognition(
+                                locatorMessage, parsed.msg.locatorId,
+                                deviceName = "",
+                                baseSize = Protocol.TELEMETRY_BASE_STRUCT_SIZE,
+                                challengeable = false,
+                            )
+                            if (_recognizedLocatorId.value == parsed.msg.locatorId) {
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -859,12 +914,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     rssi = parsed.msg.rssi,
                                 )
                             }
-                            // Reset path on new launch; accumulate during flight
+                            // Reset path on new launch; accumulate during flight.
+                            // See startsNewFlight for why the trigger is any
+                            // grounded → airborne transition.
                             val newFlightState = parsed.msg.flightState
-                            if (_previousFlightState == FlightStates.WaitingLaunch &&
-                                newFlightState == FlightStates.Launched) {
+                            if (flightStateObserved &&
+                                startsNewFlight(_previousFlightState, newFlightState)) {
                                 _flightPath.value = emptyList()
                                 saveFlightPath()
+                                // Fall back to the live track. An archived record substitutes
+                                // for the live path while displayed, so a new flight left on
+                                // the archived source would draw the old record and none of
+                                // the flight now in the air.  The download itself is kept.
+                                _showArchivedPath.value = false
                             }
                             if (_isFlightPathRecording.value &&
                                 newFlightState > FlightStates.WaitingLaunch &&
@@ -882,6 +944,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 saveFlightPath()
                             }
                             _previousFlightState = newFlightState
+                            flightStateObserved = true
                             } // end recognised-locator gate
                         }
                         is ParsedMessage.DeploymentTest -> {
@@ -1582,6 +1645,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val attitude = Quaternionf(qW, qX, qY, qZ)
 
         val flightState = FlightStates.fromUByte(frame[o].toUByte()); o += 1
+        val locatorId = Bytes.u32(frame, o); o += 4     // last base fields, before receiver-appended metadata
+        val authTag = Bytes.u32(frame, o); o += 4
         val rssi = Bytes.i16(frame, o)
 
         return TelemetryParsed(
@@ -1591,7 +1656,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deploymentCh3Stats, deploymentCh4Stats,
             physicalDeploymentStats, agl,
             velNed, attitude,
-            flightState, rssi
+            flightState, locatorId, authTag, rssi
         )
     }
 
@@ -1728,3 +1793,35 @@ internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, a
         last.longitude == longitude &&
         last.altitudeM == altitudeM
 }
+
+/**
+ * On the ground: waiting for a launch, or landed from the last one.
+ *
+ * NoSignal is deliberately NOT grounded.  [FlightStates.fromUByte] falls back to
+ * it for any state byte the app does not recognise, so a state added to the
+ * firmware later would decode as NoSignal on an older app — and treating that as
+ * "on the ground" would make the next real packet look like a fresh launch and
+ * wipe the track of the flight still in the air.
+ */
+internal fun FlightStates.isGrounded() =
+    this == FlightStates.WaitingLaunch || this == FlightStates.Landed
+
+/** In the air: anywhere between launch detection and landing detection. */
+internal fun FlightStates.isAirborne() =
+    this >= FlightStates.Launched && this <= FlightStates.MainBackupEvent
+
+/**
+ * True when the state pair marks the start of a flight, and so the moment to
+ * clear the recorded path and its altitude curtain.
+ *
+ * Any grounded → airborne transition, rather than the WaitingLaunch → Launched
+ * edge specifically.  Note what this is *not*: the narrower rule was not defeated
+ * by losing a packet or two, because the locator reports Launched for the whole
+ * boost — several packets at 5 Hz — and any one of them fires the reset.  It
+ * takes losing that entire window, which is a bad-but-possible way for boost to
+ * go.  This is hardening for that case; the flight path surviving into the next
+ * flight in ordinary use was a symptom of the recognition gate dropping all
+ * telemetry (see restoreProvisionalRecognition), not of this rule.
+ */
+internal fun startsNewFlight(previous: FlightStates, current: FlightStates) =
+    previous.isGrounded() && current.isAirborne()
