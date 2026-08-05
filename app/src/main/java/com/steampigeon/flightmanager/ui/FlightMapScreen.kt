@@ -1614,12 +1614,25 @@ private fun MapControlsColumn(
                             tint = rssiColor(rocketState.rssi)
                         )
                     }
-                    Text(
-                        text = "${rocketState.rssi} dBm",
+                    Row(
                         modifier = Modifier.width(nameWidth),
-                        color = rssiColor(rocketState.rssi),
-                        maxLines = 1,
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "${rocketState.rssi} dBm",
+                            color = rssiColor(rocketState.rssi),
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = "  ",
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = "SNR ${rocketState.snr} dB",
+                            color = snrColor(rocketState.snr),
+                            maxLines = 1,
+                        )
+                    }
                 }
                 // Interference verdict (ADR-0019). Sits under the RSSI readout
                 // rather than in its own banner: it qualifies that number, and a
@@ -2106,6 +2119,24 @@ private fun rssiColor(rssi: Int): Color = when {
     rssi >= -100 -> Color(0xFFFFC107)  // amber  — good
     rssi >= -110 -> Color(0xFFFF9800)  // orange — fair
     else         -> Color(0xFFF44336)  // red    — poor
+}
+
+// ── SNR margin color ──────────────────────────────────────────────────────────
+
+// How much room is left above the SF7 demodulator floor (about -7.5 dB) — i.e.
+// how close the link is to dropping packets, whatever the cause.
+//
+// Deliberately NOT the interference rule. Low SNR at range is normal and expected
+// near apogee, so this reads as "margin is thinning", not "something is wrong".
+// Whether the cause is distance or another emitter is the separate, quieter
+// verdict under this row, which stays silent unless the signal is *also* strong
+// (ADR-0019). Colouring SNR by the interference rule would put the apogee false
+// alarm back in, as colour instead of text.
+private fun snrColor(snr: Int): Color = when {
+    snr >= 5  -> Color(0xFF4CAF50)  // green  — wide margin
+    snr >= 0  -> Color(0xFFFFC107)  // amber  — comfortable
+    snr >= -5 -> Color(0xFFFF9800)  // orange — thinning
+    else      -> Color(0xFFF44336)  // red    — near the demod floor
 }
 
 // ── Camera preview (landscape mode) ──────────────────────────────────────────
