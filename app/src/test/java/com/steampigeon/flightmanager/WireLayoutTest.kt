@@ -22,23 +22,29 @@ class WireLayoutTest {
 
     @Test fun headerSize() = assertEquals(6, Protocol.HEADER_SIZE)
 
+    // Receiver-appended link-quality trailer, present on both broadcasts (ADR-0019):
+    // rssi 2 + snr 1 + noise_floor 2. The receiver pins the extended struct sizes
+    // (143 / 81) with its own static_asserts.
+    private val linkTrailer = 5
+
     // PreLaunchData: C++ sizeof 115 → payload 109 (101 + locator_id 4 + auth_tag 4);
-    //                + channel 1 + recv battery 2 + recv name 20 + rssi 2 = 134
-    @Test fun prelaunchPayloadSize() = assertEquals(134, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
+    //                + channel 1 + recv battery 2 + recv name 20 + link trailer 5 = 137
+    @Test fun prelaunchPayloadSize() = assertEquals(137, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
     @Test fun prelaunchBaseStructSize() = assertEquals(115, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
 
     // TelemetryData: C++ sizeof 76 → payload 70 (62 + locator_id 4 + auth_tag 4);
-    //                + rssi 2 = 72
-    @Test fun telemetryPayloadSize() = assertEquals(72, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
+    //                + link trailer 5 = 75
+    @Test fun telemetryPayloadSize() = assertEquals(75, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
     @Test fun telemetryBaseStructSize() = assertEquals(76, Protocol.TELEMETRY_BASE_STRUCT_SIZE)
 
     // Both authenticated broadcasts put auth_tag last, and LocatorAuth locates it
     // by offset from the end of the base struct — so the base size must be exactly
-    // the payload minus whatever the receiver appends after it.
-    @Test fun telemetryBaseIsPayloadLessAppendedRssi() =
+    // the payload minus whatever the receiver appends after it. Getting this wrong
+    // does not fail to parse; it silently authenticates the wrong bytes.
+    @Test fun telemetryBaseIsPayloadLessAppendedTrailer() =
         assertEquals(
             Protocol.TELEMETRY_BASE_STRUCT_SIZE,
-            Protocol.HEADER_SIZE + Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE - 2,
+            Protocol.HEADER_SIZE + Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE - linkTrailer,
         )
 
     // VersionInfo: locator 64 + receiver 64 = 128

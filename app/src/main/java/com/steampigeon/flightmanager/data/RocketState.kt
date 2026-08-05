@@ -17,15 +17,15 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 134 // PreLaunchData payload (109 = 101 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) = 134
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 137 // PreLaunchData payload (109 = 101 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) = 137
     // On-wire size of the locator's PreLaunchData struct (header 6 + payload 109).
     // The password auth_tag is computed over exactly these bytes (with crc and
     // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
     const val PRELAUNCH_BASE_STRUCT_SIZE = 115
-    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 72 // TelemetryData payload (70 = 62 + locator_id 4 + auth_tag 4) + rssi (2)
+    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 75 // TelemetryData payload (70 = 62 + locator_id 4 + auth_tag 4) + rssi (2) + snr (1) + noise floor (2) = 75
     // On-wire size of the locator's TelemetryData struct (header 6 + payload 70).
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
-    // zeroed); the receiver-appended RSSI sits after and is excluded.
+    // zeroed); the receiver-appended RSSI/SNR/noise floor sit after and are excluded.
     const val TELEMETRY_BASE_STRUCT_SIZE = 76
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
@@ -75,6 +75,11 @@ data class RocketState(
     val receiverBatteryLevel: Int = 0,
     val flightState: FlightStates = FlightStates.WaitingLaunch,
     val rssi: Int = -120,
+    // Link quality / interference (ADR-0019). snr and noiseFloor are the raw
+    // receiver measurements; linkQuality is the classified verdict.
+    val snr: Int = 0,
+    val noiseFloor: Int = LinkQuality.NOISE_FLOOR_UNKNOWN,
+    val linkQuality: LinkQuality.Verdict = LinkQuality.Verdict.Normal,
     val velNed: Vec3f = Vec3f(0f, 0f, 0f),
     val attitude: Quaternionf = Quaternionf.IDENTITY,
 )
@@ -406,6 +411,8 @@ data class PrelaunchParsed(
     val receiverBatteryMv: Int,   // uint16_t
     val receiverName: String,     // char[device_name_length]
     val rssi: Int,                // int16_t
+    val snr: Int,                 // int8_t  — LoRa SNR of this packet, dB (ADR-0019)
+    val noiseFloor: Int,          // int16_t — peak idle-channel RSSI, dBm
 )
 
 data class TelemetryParsed(
@@ -428,6 +435,8 @@ data class TelemetryParsed(
     val locatorId: Long,              // uint32_t — cleartext STM MPU UID
     val authTag: Long,                // uint32_t — password-seeded checksum from the locator
     val rssi: Int,                    // int16_t
+    val snr: Int,                     // int8_t  — LoRa SNR of this packet, dB (ADR-0019)
+    val noiseFloor: Int,              // int16_t — peak idle-channel RSSI, dBm
 )
 
 data class DeploymentTestParsed(

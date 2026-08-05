@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -143,6 +144,7 @@ import com.steampigeon.flightmanager.NavDestination
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
@@ -1619,6 +1621,24 @@ private fun MapControlsColumn(
                         maxLines = 1,
                     )
                 }
+                // Interference verdict (ADR-0019). Sits under the RSSI readout
+                // rather than in its own banner: it qualifies that number, and a
+                // second competing alert on the map is exactly what gets ignored.
+                // Silent on Normal — which includes a distant rocket at apogee,
+                // the case an SNR-only rule would false-alarm on every flight.
+                when (rocketState.linkQuality) {
+                    LinkQuality.Verdict.Interference -> LinkQualityNote(
+                        text = stringResource(R.string.link_interference),
+                        color = MaterialTheme.colorScheme.error,
+                        iconBoxWidth = iconBoxWidth,
+                    )
+                    LinkQuality.Verdict.Congested -> LinkQualityNote(
+                        text = stringResource(R.string.link_congested),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconBoxWidth = iconBoxWidth,
+                    )
+                    LinkQuality.Verdict.Normal -> Unit
+                }
             }
 
             // ── Descending action buttons ─────────────────────────────────────
@@ -2060,6 +2080,22 @@ private fun DrawScope.drawRocket3D(
     for (seg in segs) {
         drawLine(color = seg.color, start = seg.p1, end = seg.p2, strokeWidth = seg.width,
             cap = StrokeCap.Round)
+    }
+}
+
+// ── Link quality note (ADR-0019) ──────────────────────────────────────────────
+
+/** One-line qualifier under the RSSI readout, aligned to the same icon gutter. */
+@Composable
+private fun LinkQualityNote(text: String, color: Color, iconBoxWidth: Dp) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Spacer(modifier = Modifier.width(iconBoxWidth))
+        Text(
+            text = text,
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+        )
     }
 }
 

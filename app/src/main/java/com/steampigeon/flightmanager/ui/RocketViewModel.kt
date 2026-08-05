@@ -19,6 +19,7 @@ import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
+import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.LocatorConnection
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
@@ -284,6 +285,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _connectedLocatorId.map { it != null }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    // Session baseline for the idle-channel noise floor (ADR-0019).  Relative, not
+    // absolute: SX126x RSSI near the floor is uncalibrated and varies unit to unit,
+    // so "elevated" is only meaningful against the quietest reading this receiver
+    // has actually produced.  Reset on a channel change — a different channel's
+    // floor is a different measurement, and carrying the old baseline over would
+    // either mask a busy channel or slander a quiet one.
+    @Volatile private var quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+
+    private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int): LinkQuality.Verdict {
+        quietestNoiseFloor = LinkQuality.updateQuietestFloor(quietestNoiseFloor, noiseFloor)
+        return LinkQuality.classify(rssi, snr, noiseFloor, quietestNoiseFloor)
+    }
+
     // Wall clock of the last frame accepted from the connected locator.  Another
     // authorized locator may take the connection only once this has gone stale by
     // [CONNECTION_HOLD_MS] — that is what keeps a momentary fade from handing the
@@ -440,6 +454,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         awaitingChannelRecognition = true
         _connectedLocatorId.value = null
         lastConnectedFrameMs = 0L
+        quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         _conflictLocatorId.value = null
         _challenge.value = null
         _challengeError.value = false
@@ -904,6 +919,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     locatorBatteryLevel = ((parsed.msg.locatorBatteryMv - 3700) / 400.0f * 8).toInt(),
                                     receiverBatteryLevel = ((parsed.msg.receiverBatteryMv - 3700) / 400.0f * 8).toInt(),
                                     rssi = parsed.msg.rssi,
+                                    snr = parsed.msg.snr,
+                                    noiseFloor = parsed.msg.noiseFloor,
+                                    linkQuality = classifyLink(parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor),
                                 )
                             }
                             _remoteLocatorConfig.update { currentState ->
@@ -986,6 +1004,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     attitude = parsed.msg.attitude,
                                     flightState = parsed.msg.flightState,
                                     rssi = parsed.msg.rssi,
+                                    snr = parsed.msg.snr,
+                                    noiseFloor = parsed.msg.noiseFloor,
+                                    linkQuality = classifyLink(parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor),
                                 )
                             }
                             // Reset path on new launch; accumulate during flight.
@@ -1675,7 +1696,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             .toByteArray()
             .toString(Charsets.UTF_8)
         o += Protocol.DEVICE_NAME_LENGTH
-        val rssi = Bytes.i16(frame, o)
+        val rssi = Bytes.i16(frame, o); o += 2
+        val snr = Bytes.i8(frame[o]); o += 1
+        val noiseFloor = Bytes.i16(frame, o)
 
         return PrelaunchParsed(
             latitude, longitude, rawLatitude, rawLongitude, satellites, hacc,
@@ -1688,7 +1711,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deviceName, locatorBatteryMv,
             locatorId, authTag,
             channel, receiverBatteryMv,
-            receiverName, rssi
+            receiverName, rssi, snr, noiseFloor
         )
     }
 
@@ -1721,7 +1744,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val flightState = FlightStates.fromUByte(frame[o].toUByte()); o += 1
         val locatorId = Bytes.u32(frame, o); o += 4     // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
-        val rssi = Bytes.i16(frame, o)
+        val rssi = Bytes.i16(frame, o); o += 2
+        val snr = Bytes.i8(frame[o]); o += 1
+        val noiseFloor = Bytes.i16(frame, o)
 
         return TelemetryParsed(
             latitude, longitude, satellites, hacc,
@@ -1730,7 +1755,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deploymentCh3Stats, deploymentCh4Stats,
             physicalDeploymentStats, agl,
             velNed, attitude,
-            flightState, locatorId, authTag, rssi
+            flightState, locatorId, authTag, rssi, snr, noiseFloor
         )
     }
 
@@ -1772,6 +1797,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     object Bytes {
         fun u8(b: Byte) = b.toInt() and 0xFF
+
+        // Byte is already signed in Kotlin; named for symmetry with the u8/i16 pair
+        // so the wire type is visible at the call site.
+        fun i8(b: Byte) = b.toInt()
 
         fun u16(bytes: ByteArray, offset: Int): Int =
             (bytes[offset].toInt() and 0xFF) or
