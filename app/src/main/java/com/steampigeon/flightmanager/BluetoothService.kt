@@ -357,17 +357,22 @@ class BluetoothService : Service() {
     fun requestVersionInfo(): Boolean =
         sendMessage(MsgType.VersionRequest, null)
 
-    // Password gate: set by the ViewModel from its recognition state. Until the app
-    // has recognised (been authorised for) the current locator, only receiver-directed
-    // messages are sent — so an unrecognised locator cannot be armed, configured,
-    // deployment-tested, or have its flight data pulled from the standard app.
-    @Volatile var locatorAuthorized: Boolean = false
+    // Send gate: set by the ViewModel from its connection state. Until the app is
+    // connected to a locator, only receiver-directed messages are sent — so a locator
+    // the app is not connected to cannot be armed, configured, deployment-tested, or
+    // have its flight data pulled from the standard app.
+    //
+    // Gated on *connected*, not merely authorized (ADR-0006, "One connection at a
+    // time"). The app can be authorized for several locators at once, and these
+    // messages carry no locator id — they reach whichever locator the receiver is
+    // relaying to. The weaker condition would let an Arm land on the wrong rocket.
+    @Volatile var locatorConnected: Boolean = false
 
     @SuppressLint("MissingPermission")
     private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean {
         val receiverDirected =
             msgType == MsgType.ReceiverCfgChgRequest || msgType == MsgType.ReceiverInfoRequest
-        if (!locatorAuthorized && !receiverDirected) return false
+        if (!locatorConnected && !receiverDirected) return false
         return btManager.sendData(buildMessage(msgType, payload))
     }
 

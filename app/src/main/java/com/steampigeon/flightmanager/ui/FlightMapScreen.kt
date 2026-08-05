@@ -804,8 +804,8 @@ private fun MapWithOverlays(
         // Downloaded archive record, if any, plus which track the map should draw.
         val archivedFlightPath = viewModel.archivedFlightPath.collectAsState().value
         val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
-        // Password gating: only a recognised locator may be armed from the app.
-        val locatorRecognized = viewModel.locatorRecognized.collectAsState().value
+        // Password gating: only the connected locator may be armed from the app.
+        val locatorConnected = viewModel.locatorConnected.collectAsState().value
         var autoTargetMode by remember { mutableStateOf(true) }
         var autoZoomMode by remember { mutableStateOf(true) }
         var compassEnabled by remember { mutableStateOf(true) }
@@ -1001,7 +1001,7 @@ private fun MapWithOverlays(
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
                     textToSpeech = textToSpeech,
-                    locatorRecognized = locatorRecognized,
+                    locatorConnected = locatorConnected,
                     actionsExpanded = actionsExpanded,
                     onActionsExpandedChange = { actionsExpanded = it },
                     modifier = Modifier,
@@ -1423,7 +1423,7 @@ private fun MapControlsColumn(
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
     textToSpeech: TextToSpeech?,
-    locatorRecognized: Boolean = true,
+    locatorConnected: Boolean = true,
     actionsExpanded: Boolean,
     onActionsExpandedChange: (Boolean) -> Unit,
     modifier: Modifier,
@@ -1491,9 +1491,10 @@ private fun MapControlsColumn(
         }
         val rocketIconAlpha = if (armCommandPending) blinkAlpha else 1f
         // Arm/disarm is only accepted once the previous command has settled and
-        // the locator is recognised (password-verified).
+        // the locator is the connected one (password-verified, and the single
+        // holder of the connection — an Arm must not reach a different rocket).
         val armActionEnabled = (locatorArmedMessageState == LocatorMessageState.Idle ||
-            locatorArmedMessageState == LocatorMessageState.AckUpdated) && locatorRecognized
+            locatorArmedMessageState == LocatorMessageState.AckUpdated) && locatorConnected
 
         Column(
             modifier = Modifier

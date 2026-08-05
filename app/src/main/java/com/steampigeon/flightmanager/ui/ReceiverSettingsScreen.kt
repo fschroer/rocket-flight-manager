@@ -49,9 +49,9 @@ fun ReceiverSettingsScreen(
     val receiverVersion by viewModel.receiverVersion.collectAsState()
     val bluetoothConnectionState by BluetoothManagerRepository.bluetoothConnectionState.collectAsState()
     // The password challenge dialog itself is hosted app-wide (see RocketApp); this
-    // screen only arms the channel-change flow and shows the unrecognised-locator banner.
+    // screen only arms the channel-change flow and shows the conflicting-locator banner.
     val conflictLocatorId by viewModel.conflictLocatorId.collectAsState()
-    val locatorRecognized by viewModel.locatorRecognized.collectAsState()
+    val locatorConnected by viewModel.locatorConnected.collectAsState()
 
     // Keep the staged copy in sync with the remote config as long as the user
     // has not made any local edits.  This ensures that arriving PreLaunchData
@@ -101,8 +101,10 @@ fun ReceiverSettingsScreen(
             .fillMaxHeight()
             .padding(16.dp)
     ) {
-        // Conflicting-traffic warning: an unrecognised locator is transmitting on the
-        // current channel.  Non-blocking; the user can switch to an uncontested channel.
+        // Conflicting-traffic warning: another locator is audible and is not the one
+        // being displayed — either unauthorized, or authorized but not connected (the
+        // connection is single-holder and does not change on its own).  Non-blocking;
+        // Connect switches to it, or the user can move to an uncontested channel.
         conflictLocatorId?.let { id ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -110,13 +112,14 @@ fun ReceiverSettingsScreen(
             ) {
                 Text(
                     // When already connected to a different locator, this is genuine
-                    // conflicting traffic → advise switching channel. When not yet
-                    // connected, it's simply a new locator to connect to → invite a password.
-                    text = if (locatorRecognized)
+                    // conflicting traffic → offer the switch or an uncontested channel.
+                    // When not yet connected, it's simply a new locator to connect to
+                    // → invite a password.
+                    text = if (locatorConnected)
                         stringResource(R.string.locator_conflict_warning, "%08X".format(id))
                     else
                         stringResource(R.string.locator_unrecognized_prompt, "%08X".format(id)),
-                    color = if (locatorRecognized)
+                    color = if (locatorConnected)
                         MaterialTheme.colorScheme.error
                     else
                         MaterialTheme.colorScheme.onSurface,

@@ -20,6 +20,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.LocatorAuth
+import com.steampigeon.flightmanager.data.LocatorConnection
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
@@ -116,6 +117,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         private const val BATTERY_SCALE = 8.0 / 4096
         const val FLIGHT_DATA_MESSAGE_SAMPLES = 30
         const val G_FORCE_MS2 = 9.80665
+
+        // How long the connection to a locator survives its silence before another
+        // authorized locator may take it.  Broadcasts arrive at 1 Hz, so this is
+        // ~15 consecutive misses — deliberately longer than the 5 s "link up" test
+        // used elsewhere in this file, because the two failures are asymmetric:
+        // holding too long costs a few seconds after a genuine power-down, while
+        // releasing too early puts another rocket's data on screen mid-flight.
+        const val CONNECTION_HOLD_MS = 15_000L
 
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
@@ -250,23 +259,40 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val remoteReceiverConfig: StateFlow<ReceiverConfig> = _remoteReceiverConfig.asStateFlow()
 
     // -------------------------------------------------------------------------
-    // Locator recognition / password gating
+    // Locator authorization / connection
     //
-    // A locator is "recognised" when the app holds a password key that
-    // authenticates its PreLaunchData auth_tag (or the locator is open, key 0).
-    // Only recognised locators are processed for control and enabled for sending.
+    // Two different questions, deliberately kept apart:
+    //
+    //   authorized — do we hold a password key that verifies this locator's
+    //                auth_tag (or is it open, key 0)?  This is a *set*: any number
+    //                of locators can be authorized at once, and someone who owns
+    //                two normally has both.
+    //   connected  — which single locator are we displaying and commanding?  One
+    //                element of that set, claimed once and held until it goes
+    //                silent or the user switches deliberately.
+    //
+    // Collapsing the two is what let a second authorized locator seize the display
+    // packet by packet (see ADR-0006, "One connection at a time").  An arriving
+    // frame may never reassign the connection on its own.
     // -------------------------------------------------------------------------
     private val _knownLocators = MutableStateFlow<Map<Long, KnownLocator>>(emptyMap())
 
-    // The locator_id the app currently recognises (null = none → sending gated off).
-    private val _recognizedLocatorId = MutableStateFlow<Long?>(null)
-    val recognizedLocatorId: StateFlow<Long?> = _recognizedLocatorId.asStateFlow()
-    val locatorRecognized: StateFlow<Boolean> =
-        _recognizedLocatorId.map { it != null }
+    // The locator_id the app is currently connected to (null = none → sending gated off).
+    private val _connectedLocatorId = MutableStateFlow<Long?>(null)
+    val connectedLocatorId: StateFlow<Long?> = _connectedLocatorId.asStateFlow()
+    val locatorConnected: StateFlow<Boolean> =
+        _connectedLocatorId.map { it != null }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    // An unrecognised locator_id currently heard on the channel. Drives a
-    // non-blocking warning banner; cleared on recognition, dismiss, or channel change.
+    // Wall clock of the last frame accepted from the connected locator.  Another
+    // authorized locator may take the connection only once this has gone stale by
+    // [CONNECTION_HOLD_MS] — that is what keeps a momentary fade from handing the
+    // display to whoever else happens to be audible.
+    @Volatile private var lastConnectedFrameMs = 0L
+
+    // A locator_id heard on the air that is not the connected one — either
+    // unauthorized, or authorized but not the connection holder. Drives a
+    // non-blocking warning banner; cleared on connect, dismiss, or channel change.
     private val _conflictLocatorId = MutableStateFlow<Long?>(null)
     val conflictLocatorId: StateFlow<Long?> = _conflictLocatorId.asStateFlow()
 
@@ -306,15 +332,25 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Evaluate recognition for an incoming authenticated broadcast [frame] whose
-     * base struct is [baseSize] bytes — PreLaunchData while the locator is
-     * disarmed, TelemetryData while it is armed.  Called for every one of them:
-     * recognises known/open locators automatically, raises the channel-change
-     * password challenge when a deliberate channel change lands on an unrecognised
-     * locator, and flags passive conflicting traffic otherwise.
+     * Evaluate an incoming authenticated broadcast [frame] whose base struct is
+     * [baseSize] bytes — PreLaunchData while the locator is disarmed, TelemetryData
+     * while it is armed.  Called for every one of them: claims the connection for a
+     * known/open locator when the slot is free, raises the channel-change password
+     * challenge when a deliberate channel change lands on an unknown locator, and
+     * flags conflicting traffic otherwise.
+     *
+     * Being authorized does **not** entitle a locator to the connection.  A second
+     * authorized locator — the common case for anyone who owns two — is reported as
+     * conflicting traffic while the connected one is still live, and takes over only
+     * on an explicit [requestConnectToConflict] or after [CONNECTION_HOLD_MS] of
+     * silence.  This is reachable at close range *even when the two are on different
+     * LoRa channels*: 200 kHz spacing against a 125 kHz bandwidth gives the receiver
+     * no hope of rejecting a 22 dBm locator a few feet away, and the receiver stamps
+     * its own channel on everything it relays, so nothing downstream can tell the
+     * frame arrived off-channel.
      *
      * [challengeable] is false for TelemetryData.  An armed locator can be
-     * recognised — that is the point of carrying the tag there — but it cannot be
+     * authenticated — that is the point of carrying the tag there — but it cannot be
      * *connected to* from cold: the password dialog needs a device name to show,
      * and config/arming is a disarmed-state activity anyway.  An unknown armed
      * locator therefore raises the conflict warning and waits for it to disarm.
@@ -332,15 +368,29 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             lastPrelaunchDeviceName = deviceName
         }
         val knownKey = _knownLocators.value[locatorId]?.passwordKey?.toLong()?.and(0xFFFFFFFFL)
-        val recognized =
+        val authorized =
             (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey, baseSize)) ||
                     LocatorAuth.verifyFrame(frame, 0L, baseSize)   // open locator (no password)
 
         // Keep the challenge frame fresh while a dialog for this locator is open.
         if (challengeable && _challenge.value?.locatorId == locatorId) challengeFrame = frame
 
-        if (recognized) {
-            _recognizedLocatorId.value = locatorId
+        if (authorized) {
+            val mayConnect = LocatorConnection.mayConnect(
+                connected = _connectedLocatorId.value,
+                sender = locatorId,
+                ageMs = System.currentTimeMillis() - lastConnectedFrameMs,
+                holdMs = CONNECTION_HOLD_MS,
+            )
+            if (!mayConnect) {
+                // A different authorized locator, heard while ours is still live.
+                // Warn, but leave the connection where it is — switching is the
+                // user's call (the banner's Connect action), not this packet's.
+                _conflictLocatorId.value = locatorId
+                return
+            }
+            _connectedLocatorId.value = locatorId
+            lastConnectedFrameMs = System.currentTimeMillis()
             _conflictLocatorId.value = null
             awaitingChannelRecognition = false
             if (_challenge.value?.locatorId == locatorId) _challenge.value = null
@@ -355,9 +405,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
             return
         }
-        // Unrecognised.  Drop any standing recognition of a *different* locator only
-        // when this frame could plausibly be the one we care about; an armed
-        // stranger on the channel must not knock out a recognised locator.
+        // Unauthorized.  Never disturbs a standing connection — an armed stranger on
+        // the channel must not knock out the locator we are connected to.
         if (!challengeable) {
             _conflictLocatorId.value = locatorId
             return
@@ -373,7 +422,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // Passive: unrecognised traffic on the current channel — warn, and (if we are
         // not already connected) prompt to connect on first contact with this locator.
         _conflictLocatorId.value = locatorId
-        if (knownLocatorsLoaded && _recognizedLocatorId.value == null && _challenge.value == null &&
+        if (knownLocatorsLoaded && _connectedLocatorId.value == null && _challenge.value == null &&
             locatorId !in declinedLocatorIds) {
             challengeFrame = frame
             _challengeError.value = false
@@ -382,11 +431,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** Arm the channel-change flow: the next PreLaunchData on the new channel decides
-     *  recognition, or raises a password challenge (cancel reverts to [previousChannel]). */
+     *  recognition, or raises a password challenge (cancel reverts to [previousChannel]).
+     *  Releases the connection outright — the point of the change is to go somewhere
+     *  else, so the first authorized locator heard on the new channel should claim it
+     *  without waiting out [CONNECTION_HOLD_MS]. */
     fun beginChannelChangeRecognition(previousChannel: Int) {
         channelChangePreviousChannel = previousChannel
         awaitingChannelRecognition = true
-        _recognizedLocatorId.value = null
+        _connectedLocatorId.value = null
+        lastConnectedFrameMs = 0L
         _conflictLocatorId.value = null
         _challenge.value = null
         _challengeError.value = false
@@ -401,7 +454,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val ok = LocatorAuth.verifyFrame(frame, key)
         if (ok) {
             rememberLocator(challenge.locatorId, key, challenge.deviceName)
-            _recognizedLocatorId.value = challenge.locatorId
+            _connectedLocatorId.value = challenge.locatorId
+            lastConnectedFrameMs = System.currentTimeMillis()
             _conflictLocatorId.value = null
             declinedLocatorIds.remove(challenge.locatorId)
             _challenge.value = null
@@ -431,21 +485,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearChallengeError() { _challengeError.value = false }
 
-    /** Re-raise the password prompt for the currently-warned unrecognised locator.
-     *  Lets the user connect after having dismissed the automatic prompt. */
+    /** Connect to the locator named in the conflict banner.
+     *
+     *  Two cases.  If we are **already authorized** for it (we hold its password, or
+     *  it is open) this is a deliberate *switch*, and the only way to make one while
+     *  the current locator is still transmitting — the arriving-packet path will not
+     *  move the connection on its own.  Otherwise it re-raises the password prompt,
+     *  letting the user connect after having dismissed the automatic one. */
     fun requestConnectToConflict() {
         val id = _conflictLocatorId.value ?: return
-        if (_recognizedLocatorId.value == id) return
-        // Only offer the prompt when we hold a PreLaunchData frame from THIS
-        // locator to verify against.  Otherwise challengeFrame would still hold
-        // some other locator's frame, and the typed password would be checked
-        // against the wrong tag — meaningless at best, a false accept at worst.
-        // Reachable since armed locators raise conflicts too: an armed stranger
-        // is only connectable once it disarms and broadcasts its identity and
-        // device name, which is also the only state in which connecting is useful.
+        if (_connectedLocatorId.value == id) return
+        // Only act when we hold a PreLaunchData frame from THIS locator to verify
+        // against.  Otherwise challengeFrame would still hold some other locator's
+        // frame, and the typed password would be checked against the wrong tag —
+        // meaningless at best, a false accept at worst.  Reachable since armed
+        // locators raise conflicts too: an armed stranger is only connectable once
+        // it disarms and broadcasts its identity and device name, which is also the
+        // only state in which connecting is useful.
         val frame = lastPrelaunchFrame ?: return
         if (lastPrelaunchLocatorId != id) return
         declinedLocatorIds.remove(id)
+        val knownKey = _knownLocators.value[id]?.passwordKey?.toLong()?.and(0xFFFFFFFFL)
+        val authorized =
+            (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey)) ||
+                    LocatorAuth.verifyFrame(frame, 0L)
+        if (authorized) {
+            // Switch now.  The displayed config/telemetry still belongs to the old
+            // locator until this one's next broadcast lands, which is at most one
+            // 1 Hz period away.
+            _connectedLocatorId.value = id
+            lastConnectedFrameMs = System.currentTimeMillis()
+            _conflictLocatorId.value = null
+            return
+        }
         challengeFrame = frame
         _challengeError.value = false
         _challenge.value = LocatorChallenge(id, lastPrelaunchDeviceName, null)
@@ -779,10 +851,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // 29/28/23/19 packets concurrently.
         inboundJobs.forEach { it.cancel() }
 
-        // Keep the service's send gate in sync with recognition so only an authorized
-        // (recognised) locator can be commanded.
-        val recognitionJob = viewModelScope.launch {
-            recognizedLocatorId.collect { service.locatorAuthorized = it != null }
+        // Keep the service's send gate in sync with the connection, so only the
+        // locator we are connected to can be commanded.  BluetoothService.locatorConnected
+        // carries the reason it is *connected* and not merely authorized.
+        val sendGateJob = viewModelScope.launch {
+            connectedLocatorId.collect { service.locatorConnected = it != null }
         }
         val packetJob = viewModelScope.launch {
             service.packets.collect { locatorMessage ->
@@ -792,11 +865,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                     when (val parsed = parseIncoming(locatorMessage)) {
                         is ParsedMessage.Prelaunch -> {
                             // Gate BEFORE display: identify + authenticate the sender first,
-                            // and surface its telemetry/config only if THIS locator is
-                            // recognised. Dismissing the password prompt leaves the sender
-                            // unrecognised, so its data is never shown (no bypass).
+                            // and surface its telemetry/config only if THIS locator is the
+                            // connected one. Dismissing the password prompt leaves the sender
+                            // unauthorized, so its data is never shown (no bypass); an
+                            // authorized-but-not-connected sender is likewise not shown.
                             evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
-                            if (_recognizedLocatorId.value == parsed.msg.locatorId) {
+                            if (_connectedLocatorId.value == parsed.msg.locatorId) {
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -880,7 +954,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 baseSize = Protocol.TELEMETRY_BASE_STRUCT_SIZE,
                                 challengeable = false,
                             )
-                            if (_recognizedLocatorId.value == parsed.msg.locatorId) {
+                            if (_connectedLocatorId.value == parsed.msg.locatorId) {
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -1078,7 +1152,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // All four are cancelled together on the next call.  The version loop
         // matters as much as the packet collector: it transmits, so a leaked copy
         // is a redundant VersionRequest on the air every few seconds, forever.
-        inboundJobs = listOf(recognitionJob, packetJob, versionJob, connectionJob)
+        inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob)
     }
 
 /*

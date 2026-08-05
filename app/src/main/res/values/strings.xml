@@ -63,6 +63,6 @@
     <string name="incorrect_password">Incorrect password. Try again.</string>
     <string name="locator_password_title">Locator password</string>
     <string name="locator_password_prompt">Enter the password to connect to “%1$s”.</string>
-    <string name="locator_conflict_warning">Another locator (ID %1$s) is transmitting on this channel. Consider switching to an uncontested channel.</string>
+    <string name="locator_conflict_warning">Another locator (ID %1$s) is on the air and is not being displayed. Connect to switch to it, or move to an uncontested channel.</string>
     <string name="locator_unrecognized_prompt">Locator ID %1$s found. Enter its password to connect.</string>
 </resources>
