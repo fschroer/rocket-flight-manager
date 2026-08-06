@@ -125,9 +125,23 @@ object LinkQuality {
      */
     const val LOSS_MEMORY_MS = 10_000L
 
-    /** Wall clock of the most recent observed loss, or [current] if this gap is clean. */
-    fun updateLastLoss(current: Long, nowMs: Long, gapMs: Long): Long =
-        if (gapMs >= LOSSY_GAP_MS) nowMs else current
+    /**
+     * Wall clock of the most recent observed loss, or [current] if nothing was lost.
+     *
+     * Two independent kinds of evidence, and [badFrames] is the better one. A gap
+     * is loss *inferred from absence* — it needs a whole missed period to appear,
+     * and a locator switched off produces the same thing. A frame that arrived and
+     * failed to parse is loss we can *see*: something transmitted and was
+     * destroyed. It also shows up on the very packet that reports it, rather than
+     * one period later.
+     *
+     * The receiver has always detected these — it lights the red LED — and then
+     * discarded them, exactly as it did with the SNR before ADR-0019. Collision
+     * garbage reaches that path because the driver no longer drops hardware CRC
+     * mismatches (#16).
+     */
+    fun updateLastLoss(current: Long, nowMs: Long, gapMs: Long, badFrames: Int = 0): Long =
+        if (gapMs >= LOSSY_GAP_MS || badFrames > 0) nowMs else current
 
     /** Whether a loss is recent enough to still count. */
     fun isLossy(lastLossMs: Long, nowMs: Long): Boolean =

@@ -24,18 +24,18 @@ class WireLayoutTest {
     @Test fun headerSize() = assertEquals(6, Protocol.HEADER_SIZE)
 
     // Receiver-appended link-quality trailer, present on both broadcasts (ADR-0019):
-    // rssi 2 + snr 1 + noise_floor 2. The receiver pins the extended struct sizes
-    // (143 / 81) with its own static_asserts.
-    private val linkTrailer = 5
+    // rssi 2 + snr 1 + noise_floor 2 + bad_frames 1. The receiver pins the extended
+    // struct sizes (144 / 82) with its own static_asserts.
+    private val linkTrailer = 6
 
     // PreLaunchData: C++ sizeof 115 → payload 109 (101 + locator_id 4 + auth_tag 4);
-    //                + channel 1 + recv battery 2 + recv name 20 + link trailer 5 = 137
-    @Test fun prelaunchPayloadSize() = assertEquals(137, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
+    //                + channel 1 + recv battery 2 + recv name 20 + link trailer 6 = 138
+    @Test fun prelaunchPayloadSize() = assertEquals(138, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
     @Test fun prelaunchBaseStructSize() = assertEquals(115, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
 
     // TelemetryData: C++ sizeof 76 → payload 70 (62 + locator_id 4 + auth_tag 4);
-    //                + link trailer 5 = 75
-    @Test fun telemetryPayloadSize() = assertEquals(75, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
+    //                + link trailer 6 = 76
+    @Test fun telemetryPayloadSize() = assertEquals(76, Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE)
     @Test fun telemetryBaseStructSize() = assertEquals(76, Protocol.TELEMETRY_BASE_STRUCT_SIZE)
 
     // Both authenticated broadcasts put auth_tag last, and LocatorAuth locates it

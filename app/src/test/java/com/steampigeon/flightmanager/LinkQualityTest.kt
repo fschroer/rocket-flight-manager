@@ -100,6 +100,30 @@ class LinkQualityTest {
     }
 
     @Test
+    fun `a corrupted frame counts as loss on the packet that reports it`() {
+        // Better evidence than a gap, and a whole period earlier. A gap needs a
+        // missed broadcast to appear and a switched-off locator produces the same
+        // thing; a frame that failed to parse proves something transmitted and was
+        // destroyed. The receiver always detected these and threw them away.
+        assertEquals(5_000L, LinkQuality.updateLastLoss(0L, 5_000L, gapMs = 1_000L, badFrames = 1))
+        assertEquals(0L, LinkQuality.updateLastLoss(0L, 5_000L, gapMs = 1_000L, badFrames = 0))
+    }
+
+    @Test
+    fun `a collision is reported without waiting for a gap to open`() {
+        // The bench case: the spare overtakes the recognized locator and clobbers
+        // it. Frames arrive corrupted while the cadence still looks nominal, so the
+        // gap test alone would say nothing until a whole broadcast went missing.
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        val lastLoss = LinkQuality.updateLastLoss(0L, 1_000L, gapMs = 1_000L, badFrames = 3)
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, elevated, quiet,
+                lossy = LinkQuality.isLossy(lastLoss, 1_000L)),
+        )
+    }
+
+    @Test
     fun `a clean gap leaves the recorded loss untouched`() {
         // Nominal 1 Hz cadence with jitter is not loss, and must not clear an
         // earlier one either -- that is what keeps the verdict stable across the

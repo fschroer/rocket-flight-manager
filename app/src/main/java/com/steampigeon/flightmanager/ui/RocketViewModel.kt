@@ -330,12 +330,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * update lambda may re-run under contention.  It also needs the previous
      * message time, which the update is about to overwrite.
      */
-    private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int, currentTime: Long): LinkQuality.Verdict {
+    private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int, badFrames: Int, currentTime: Long): LinkQuality.Verdict {
         quietestNoiseFloor = LinkQuality.updateQuietestFloor(quietestNoiseFloor, noiseFloor)
         val previous = _rocketState.value.lastPreLaunchMessageTime
         // No previous broadcast (fresh session) is not a gap.
         val gapMs = if (previous == 0L) 0L else currentTime - previous
-        lastLossMs = LinkQuality.updateLastLoss(lastLossMs, currentTime, gapMs)
+        // A corrupted frame is loss we can SEE, not loss inferred from a gap, and it
+        // is available on the very packet that reports it rather than one period
+        // later. Both feed the same memory.
+        lastLossMs = LinkQuality.updateLastLoss(lastLossMs, currentTime, gapMs, badFrames)
         return LinkQuality.classify(
             rssi, snr, noiseFloor, quietestNoiseFloor,
             lossy = LinkQuality.isLossy(lastLossMs, currentTime),
@@ -1057,7 +1060,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     LocatorMessageState.AckUpdated)
                             }
                             val verdict = classifyLink(
-                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
+                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -1153,7 +1156,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     LocatorMessageState.AckUpdated)
                             }
                             val verdict = classifyLink(
-                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
+                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -1892,7 +1895,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         o += Protocol.DEVICE_NAME_LENGTH
         val rssi = Bytes.i16(frame, o); o += 2
         val snr = Bytes.i8(frame[o]); o += 1
-        val noiseFloor = Bytes.i16(frame, o)
+        val noiseFloor = Bytes.i16(frame, o); o += 2
+        val badFrames = Bytes.u8(frame[o])
 
         return PrelaunchParsed(
             latitude, longitude, rawLatitude, rawLongitude, satellites, hacc,
@@ -1905,7 +1909,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deviceName, locatorBatteryMv,
             locatorId, authTag,
             channel, receiverBatteryMv,
-            receiverName, rssi, snr, noiseFloor
+            receiverName, rssi, snr, noiseFloor, badFrames
         )
     }
 
@@ -1940,7 +1944,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val authTag = Bytes.u32(frame, o); o += 4
         val rssi = Bytes.i16(frame, o); o += 2
         val snr = Bytes.i8(frame[o]); o += 1
-        val noiseFloor = Bytes.i16(frame, o)
+        val noiseFloor = Bytes.i16(frame, o); o += 2
+        val badFrames = Bytes.u8(frame[o])
 
         return TelemetryParsed(
             latitude, longitude, satellites, hacc,
@@ -1949,7 +1954,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deploymentCh3Stats, deploymentCh4Stats,
             physicalDeploymentStats, agl,
             velNed, attitude,
-            flightState, locatorId, authTag, rssi, snr, noiseFloor
+            flightState, locatorId, authTag, rssi, snr, noiseFloor, badFrames
         )
     }
 
