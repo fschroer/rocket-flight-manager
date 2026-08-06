@@ -69,7 +69,10 @@
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
     <string name="survey_scanning">Scanning…</string>
-    <string name="survey_use">Use</string>
+    <string name="survey_move_here">Move here</string>
+    <string name="survey_point_receiver">Point receiver</string>
+    <string name="survey_moves_both">Moves your locator to the chosen channel; the receiver follows automatically.</string>
+    <string name="survey_receiver_only">No locator connected, so this only re-points the receiver. Your locator stays where it is.</string>
     <string name="survey_channel_label">Channel %1$d</string>
     <string name="survey_home_rank">Your channel (%1$d) ranks %2$d quietest.</string>
     <string name="survey_all_hot">Every channel is loud. That usually means a transmitter is very close to the receiver — check for another powered locator nearby. Changing channel will not help.</string>

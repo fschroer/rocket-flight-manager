@@ -505,6 +505,15 @@ fun ConfigurationItemNumeric(configItemName: String,
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
     var lastKeyPressed by remember { mutableStateOf("") }
+    // Follow externally-driven changes to the value. `remember` seeds once, so a
+    // value set anywhere other than this text field — the channel survey picking a
+    // channel, or fresh config arriving from the device — updated the staged config
+    // while the field on screen kept showing the old number.
+    // Typing is unaffected: the field's own edits call onConfigUpdate, which makes
+    // initialConfigValue match currentValue, so this is a no-op on that path.
+    LaunchedEffect(initialConfigValue) {
+        if (initialConfigValue != currentValue) currentValue = initialConfigValue
+    }
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,

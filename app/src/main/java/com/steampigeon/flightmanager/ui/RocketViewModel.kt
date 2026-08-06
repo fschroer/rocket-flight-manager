@@ -368,6 +368,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private var lastPrelaunchDeviceName: String = ""
     // Passive challenges the user dismissed this session (don't auto-reprompt).
     private val declinedLocatorIds = mutableSetOf<Long>()
+    // Conflict banners the user dismissed. Distinct from declinedLocatorIds, which
+    // suppresses the password *dialog*; this suppresses the *banner*. Cleared on
+    // re-entering Receiver Settings.
+    private val dismissedConflictIds = mutableSetOf<Long>()
     // True once the known-locator store has loaded, so the first PreLaunchData does not
     // passively prompt for an already-known locator before the store is read.
     @Volatile private var knownLocatorsLoaded = false
@@ -419,6 +423,30 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun clearChannelSurvey() {
         _channelSurvey.value = null
+    }
+
+    /**
+     * Move the whole system to [channel] after a survey.
+     *
+     * This sends a **locator** channel change, not a receiver one. "Find a clean
+     * channel" means "move my rocket and my receiver there", and per
+     * [ADR-0011](docs/adr/0011) invariant 1 that is exactly one message: the locator
+     * moves and the receiver follows after forwarding it. Staging it as a
+     * *receiver-only* change instead — which is what the Receiver Settings channel
+     * field does — points the receiver at an empty channel and kills the link,
+     * leaving the locator behind on the old one.
+     *
+     * Reuses [updateLocatorConfigState] so the confirm-by-inference and
+     * revert-and-retry recovery of ADR-0011 invariants 3 and 4 apply here too,
+     * rather than a second, untested path to the same place.
+     */
+    fun moveLocatorToChannel(service: BluetoothService?, channel: Int) {
+        val target = _remoteLocatorConfig.value.copy(loraChannel = channel)
+        _locatorConfigMessageState.value = LocatorMessageState.SendRequested
+        _locatorConfigMessageState.value =
+            if (service?.changeLocatorConfig(target) == true) LocatorMessageState.Sent
+            else LocatorMessageState.SendFailure
+        updateLocatorConfigState(target, service)
     }
 
     private val _receiverConfigChanged = MutableStateFlow<Boolean>(false)
@@ -483,7 +511,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 // A different authorized locator, heard while ours is still live.
                 // Warn, but leave the connection where it is — switching is the
                 // user's call (the banner's Connect action), not this packet's.
-                _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
+                if (locatorId !in dismissedConflictIds) { _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis() }
                 return
             }
             _connectedLocatorId.value = locatorId
@@ -513,7 +541,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // Unauthorized.  Never disturbs a standing connection — an armed stranger on
         // the channel must not knock out the locator we are connected to.
         if (!challengeable) {
-            _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
+            if (locatorId !in dismissedConflictIds) { _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis() }
             return
         }
         if (awaitingChannelRecognition) {
@@ -526,7 +554,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
         // Passive: unrecognised traffic on the current channel — warn, and (if we are
         // not already connected) prompt to connect on first contact with this locator.
-        _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
+        if (locatorId !in dismissedConflictIds) { _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis() }
         if (knownLocatorsLoaded && _connectedLocatorId.value == null && _challenge.value == null &&
             locatorId !in declinedLocatorIds) {
             challengeFrame = frame
@@ -635,8 +663,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         awaitingChannelRecognition = false
     }
 
+    /** Dismiss the conflicting-traffic banner and keep it dismissed.
+     *
+     *  The conflicting locator keeps broadcasting at 1 Hz, so simply clearing the id
+     *  put the banner straight back on the next packet — dismiss did nothing. The id
+     *  is remembered instead, and only [resetConflictDismissals] (on re-entering
+     *  Receiver Settings) brings it back. */
     fun dismissConflict() {
+        _conflictLocatorId.value?.let { dismissedConflictIds.add(it) }
         _conflictLocatorId.value = null
+    }
+
+    /** Called when Receiver Settings is entered, so a previously dismissed conflict
+     *  is shown again — re-entering the screen is the user asking to see it. */
+    fun resetConflictDismissals() {
+        dismissedConflictIds.clear()
     }
 
     private suspend fun rememberLocator(locatorId: Long, passwordKey: Long, label: String) {

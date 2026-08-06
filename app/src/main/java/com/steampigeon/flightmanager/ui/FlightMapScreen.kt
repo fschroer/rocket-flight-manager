@@ -1634,24 +1634,32 @@ private fun MapControlsColumn(
                         )
                     }
                 }
-                // Interference verdict (ADR-0019). Sits under the RSSI readout
-                // rather than in its own banner: it qualifies that number, and a
-                // second competing alert on the map is exactly what gets ignored.
-                // Silent on Normal — which includes a distant rocket at apogee,
-                // the case an SNR-only rule would false-alarm on every flight.
-                when (rocketState.linkQuality) {
-                    LinkQuality.Verdict.Interference -> LinkQualityNote(
-                        text = stringResource(R.string.link_interference),
-                        color = MaterialTheme.colorScheme.error,
-                        iconBoxWidth = iconBoxWidth,
-                    )
-                    LinkQuality.Verdict.Congested -> LinkQualityNote(
-                        text = stringResource(R.string.link_congested),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        iconBoxWidth = iconBoxWidth,
-                    )
-                    LinkQuality.Verdict.Normal -> Unit
-                }
+            }
+            // Interference verdict (ADR-0019). Sits under the RSSI readout rather
+            // than in its own banner: it qualifies that number, and a second
+            // competing alert on the map is exactly what gets ignored.
+            //
+            // Deliberately OUTSIDE the freshness gate above. When interference is
+            // costing packets the locator goes stale, which hid this note at exactly
+            // the moment it was worth reading — a red rocket and no explanation.
+            // The verdict persists from the last accepted broadcast, which is the
+            // most recent thing actually known about the channel.
+            //
+            // Silent on Normal — which includes a distant rocket at apogee, the case
+            // an SNR-only rule would false-alarm on every flight, and a locator
+            // simply switched off (its channel goes quiet, so no verdict is raised).
+            when (rocketState.linkQuality) {
+                LinkQuality.Verdict.Interference -> LinkQualityNote(
+                    text = stringResource(R.string.link_interference),
+                    color = MaterialTheme.colorScheme.error,
+                    iconBoxWidth = iconBoxWidth,
+                )
+                LinkQuality.Verdict.Congested -> LinkQualityNote(
+                    text = stringResource(R.string.link_congested),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconBoxWidth = iconBoxWidth,
+                )
+                LinkQuality.Verdict.Normal -> Unit
             }
 
             // ── Descending action buttons ─────────────────────────────────────

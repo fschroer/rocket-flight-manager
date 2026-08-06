@@ -74,6 +74,9 @@ fun ReceiverSettingsScreen(
     // The ReceiverInfo response updates remoteReceiverConfig, which the
     // LaunchedEffect above propagates to stagedReceiverConfig automatically.
     LaunchedEffect(Unit) {
+        // Re-entering the screen is the user asking to see conflicts again, so a
+        // dismissal from a previous visit does not persist.
+        viewModel.resetConflictDismissals()
         val lastPreLaunchMessageAge =
             System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
         if (lastPreLaunchMessageAge > 5_000L) {
@@ -152,12 +155,20 @@ fun ReceiverSettingsScreen(
             // what the map screen gates on.
             enabled = bluetoothConnectionState == BluetoothConnectionState.Ready && !surveyInProgress,
             onScan = { viewModel.requestChannelSurvey(service) },
+            locatorConnected = locatorConnected,
             onPick = { channel ->
-                // Stage it rather than sending: the user still presses Update, which
-                // routes through the existing channel-change flow (recognition arming,
-                // password challenge, revert on cancel) instead of a second path.
-                stagedReceiverConfig = stagedReceiverConfig.copy(channel = channel)
-                viewModel.updateReceiverConfigChanged(true)
+                if (locatorConnected) {
+                    // Move the whole system. "Find a clean channel" means the rocket
+                    // goes there too — staging a receiver-only change would point the
+                    // receiver at an empty channel and strand the locator behind on
+                    // the old one (ADR-0011 invariant 1 vs 5).
+                    viewModel.moveLocatorToChannel(service, channel)
+                } else {
+                    // Nothing to move: stage the receiver-only change for the Update
+                    // button, which is the legitimate "go look at that channel" case.
+                    stagedReceiverConfig = stagedReceiverConfig.copy(channel = channel)
+                    viewModel.updateReceiverConfigChanged(true)
+                }
                 viewModel.clearChannelSurvey()
             },
         )
@@ -273,6 +284,7 @@ private fun ChannelSurveySection(
     survey: ChannelSurvey.Result?,
     inProgress: Boolean,
     enabled: Boolean,
+    locatorConnected: Boolean,
     onScan: () -> Unit,
     onPick: (Int) -> Unit,
 ) {
@@ -337,10 +349,25 @@ private fun ChannelSurveySection(
                             modifier = Modifier.weight(1f).padding(end = 8.dp),
                         )
                         TextButton(onClick = { onPick(s.channel) }) {
-                            Text(stringResource(R.string.survey_use))
+                            // Different actions, so different labels: with a locator
+                            // connected this moves the whole system, without one it
+                            // only re-points the receiver.
+                            Text(
+                                stringResource(
+                                    if (locatorConnected) R.string.survey_move_here
+                                    else R.string.survey_point_receiver
+                                )
+                            )
                         }
                     }
                 }
+                SurveyNote(
+                    stringResource(
+                        if (locatorConnected) R.string.survey_moves_both
+                        else R.string.survey_receiver_only
+                    ),
+                    MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 SurveyNote(
                     stringResource(R.string.survey_caveat),
                     MaterialTheme.colorScheme.onSurfaceVariant,
