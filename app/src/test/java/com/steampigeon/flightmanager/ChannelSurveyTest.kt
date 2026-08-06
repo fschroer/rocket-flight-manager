@@ -108,6 +108,51 @@ class ChannelSurveyTest {
             r.suggestions.isNotEmpty())
     }
 
+    // ── The two bench traces, kept as regression cases ───────────────────────────
+    //
+    // Both have every confirmed channel above ALL_HOT_DBM. They mean opposite
+    // things, and the spread is what separates them.
+
+    @Test
+    fun `a flat elevated reading is a uniform floor, not a channel problem`() {
+        // Real trace, locator several feet from the receiver, home channel 22.
+        // Coarse read -115 everywhere; confirmation caught the 1 Hz burst on every
+        // channel because the dwell exceeds one broadcast period. 3 dB of spread —
+        // the transmitter is bleeding across the band and favours nothing.
+        val levels = MutableList(64) { -115 }
+        levels[45] = -71; levels[58] = -74; levels[62] = -72
+        levels[2] = -71;  levels[4] = -71
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 22, confirmedChannels = listOf(45, 58, 62, 2, 4),
+        )
+        assertTrue(r.allChannelsHot)
+        assertTrue("flat + elevated must read as a uniform floor", r.uniformFloor)
+        assertTrue("channels are equivalent, so still offer them", r.suggestions.isNotEmpty())
+    }
+
+    @Test
+    fun `an elevated reading with structure is not a uniform floor`() {
+        // The earlier trace: 19 dB of spread, because channels 1 and 2 sit beside
+        // genuinely occupied channel 0. Here the ranking means something.
+        val levels = MutableList(64) { -71 }
+        levels[1] = -52; levels[2] = -57
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0, confirmedChannels = listOf(1, 2, 22, 23, 24),
+        )
+        assertTrue(r.allChannelsHot)
+        assertFalse("structure means real traffic, not a broadband floor", r.uniformFloor)
+    }
+
+    @Test
+    fun `uniform floor needs the levels to be elevated, not merely flat`() {
+        // A genuinely quiet band is flat too. Flatness alone must not trigger it.
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -115 }, homeChannel = 0, confirmedChannels = listOf(1, 2, 3),
+        )
+        assertFalse(r.allChannelsHot)
+        assertFalse(r.uniformFloor)
+    }
+
     @Test
     fun `the near-field bench case ranks the quietest channels above the adjacent ones`() {
         // Real trace, spare locator ~2 ft from the receiver, both locators on ch 0.

@@ -80,6 +80,7 @@
     <string name="survey_receiver_only">No locator connected, so this only re-points the receiver. Your locator stays where it is.</string>
     <string name="survey_channel_label">Channel %1$d</string>
     <string name="survey_home_rank">Your channel (%1$d) ranks %2$d quietest.</string>
+    <string name="survey_uniform_floor">Every channel reads the same raised level — a transmitter close to the receiver, usually your own locator, spilling across the whole band. It does not favour any channel, so these are all equally good. Move the receiver away from powered locators for a sharper reading.</string>
     <string name="survey_all_hot">Every channel reads loud, which usually means a transmitter is very close to the receiver — check for another powered locator nearby. Move it away and scan again for a true reading. The channels below are still the least affected, and should be clean once it is moved.</string>
     <string name="survey_refused_armed">The locator is armed. Scanning would stop telemetry for about a second, and the channel cannot be changed while armed. Disarm first.</string>
     <string name="survey_refused_busy">A flight data transfer is in progress. Try again when it finishes.</string>

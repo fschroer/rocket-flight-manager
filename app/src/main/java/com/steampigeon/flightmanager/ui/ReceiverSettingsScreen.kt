@@ -358,7 +358,18 @@ private fun ChannelSurveySection(
                 // means a transmitter is very close, which is the important message
                 // — but the ranking below it is still correct, and refusing to show
                 // it leaves a correct warning with no way to act on it.
-                if (survey.allChannelsHot) {
+                // Two different situations, and only one is a problem to solve.
+                // Flat and elevated is a nearby transmitter — usually the user's own
+                // locator on the bench — bleeding equally across the band. It says
+                // nothing about the channels, so it is information, not an error.
+                // Elevated with structure means real per-channel traffic, and the
+                // ranking below is meaningful.
+                if (survey.uniformFloor) {
+                    SurveyNote(
+                        stringResource(R.string.survey_uniform_floor),
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (survey.allChannelsHot) {
                     SurveyNote(
                         stringResource(R.string.survey_all_hot),
                         MaterialTheme.colorScheme.error,
