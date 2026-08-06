@@ -152,6 +152,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // instead of hanging. Must be raised with kSurveyConfirmDwellMs.
         const val SURVEY_TIMEOUT_MS = 15_000L
 
+        // How often the link verdict re-evaluates itself with no packet to trigger
+        // it. Fast enough that the note and the red marker change together.
+        const val LINK_LIVENESS_TICK_MS = 500L
+
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
         // the receiver may sit on the forward until its next safe window — so a
@@ -1054,6 +1058,33 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // value and cannot disagree.
             connectedLocatorId.collect { service.connectedLocatorId = it }
         }
+        // The verdict has to be able to change while NOTHING is arriving.
+        //
+        // Classification runs on packet receipt, so during a dropout it simply does
+        // not run: the note kept showing whatever the last good packet decided,
+        // which was "busy but clean" because no loss had been recorded yet. The
+        // marker went red beside a note saying the link was fine. Recording loss
+        // needs a packet, and a dropout is the absence of packets — so the first
+        // dropout of any epoch could never describe itself.
+        val linkLivenessJob = viewModelScope.launch {
+            while (true) {
+                delay(LINK_LIVENESS_TICK_MS)
+                val st = _rocketState.value
+                if (st.lastPreLaunchMessageTime == 0L) continue
+                val now = System.currentTimeMillis()
+                val gap = now - st.lastPreLaunchMessageTime
+                if (gap < LinkQuality.LOSSY_GAP_MS) continue
+                // We are in a dropout right now, not remembering an old one.
+                lastLossMs = LinkQuality.updateLastLoss(lastLossMs, now, gap)
+                val verdict = LinkQuality.classify(
+                    st.rssi, st.snr, st.noiseFloor, quietestNoiseFloor,
+                    lossy = LinkQuality.isLossy(lastLossMs, now),
+                    foreignLocator = LinkQuality.isLossy(lastForeignBroadcastMs, now),
+                )
+                if (verdict != st.linkQuality)
+                    _rocketState.update { it.copy(linkQuality = verdict) }
+            }
+        }
         val packetJob = viewModelScope.launch {
             service.packets.collect { locatorMessage ->
 //                Log.d("Collector", "Received packet size=${locatorMessage.size} bytes")
@@ -1061,6 +1092,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 try {
                     when (val parsed = parseIncoming(locatorMessage)) {
                         is ParsedMessage.Prelaunch -> {
+                            // Bad frames describe the CHANNEL, not the sender. The
+                            // receiver's counter is drained by whichever broadcast is
+                            // forwarded first, which during contention is usually the
+                            // interfering locator's — so recording them only inside
+                            // the connected-locator gate threw away most of them.
+                            if (parsed.msg.badFrames > 0) lastLossMs = currentTime
                             // Gate BEFORE display: identify + authenticate the sender first,
                             // and surface its telemetry/config only if THIS locator is the
                             // connected one. Dismissing the password prompt leaves the sender
@@ -1153,6 +1190,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                         is ParsedMessage.Telemetry -> {
+                            if (parsed.msg.badFrames > 0) lastLossMs = currentTime
                             // Telemetry carries the same identity + auth_tag pair as
                             // PreLaunchData, so an ARMED locator authenticates itself
                             // exactly like a disarmed one — which is what lets the app
@@ -1386,7 +1424,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // All four are cancelled together on the next call.  The version loop
         // matters as much as the packet collector: it transmits, so a leaked copy
         // is a redundant VersionRequest on the air every few seconds, forever.
-        inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob)
+        inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob, linkLivenessJob)
     }
 
 /*

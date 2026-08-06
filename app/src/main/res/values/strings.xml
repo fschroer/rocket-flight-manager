@@ -65,7 +65,7 @@
     <string name="locator_password_prompt">Enter the password to connect to “%1$s”.</string>
     <string name="locator_conflict_warning">Another locator (ID %1$s) is on the air and is not being displayed. Connect to switch to it, or move to an uncontested channel.</string>
     <string name="locator_unrecognized_prompt">Locator ID %1$s found. Enter its password to connect.</string>
-    <string name="link_interference">Interference on this channel — another transmitter is degrading your link. Consider another channel.</string>
+    <string name="link_interference">Interference — another transmitter on this channel is costing you packets. Try another channel.</string>
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
     <string name="survey_scanning">Scanning… (about 7 seconds)</string>

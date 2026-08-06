@@ -2109,13 +2109,17 @@ private fun DrawScope.drawRocket3D(
 /** One-line qualifier under the RSSI readout, aligned to the same icon gutter. */
 @Composable
 private fun LinkQualityNote(text: String, color: Color, iconBoxWidth: Dp) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.Top) {
         Spacer(modifier = Modifier.width(iconBoxWidth))
         Text(
             text = text,
             color = color,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
+            // Wraps to as many lines as it needs. maxLines = 2 silently truncated
+            // the interference wording mid-sentence, which is the one message here
+            // that has to be read to be acted on. Top alignment so a wrapped note
+            // stays flush with the gutter instead of centring against it.
+            modifier = Modifier.weight(1f).padding(end = 4.dp),
         )
     }
 }
