@@ -69,6 +69,7 @@
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
     <string name="survey_scanning">Scanning… (about 7 seconds)</string>
+    <string name="survey_channel_occupied">Channel %1$d has another locator on it — not offered.</string>
     <string name="survey_confirmed_note">Candidates are listened to for a full second each, so an intermittent transmitter cannot hide between samples.</string>
     <string name="channel_move_in_progress">Moving to channel %1$d… the link drops briefly while both devices switch.</string>
     <string name="channel_move_done">Now on channel %1$d.</string>

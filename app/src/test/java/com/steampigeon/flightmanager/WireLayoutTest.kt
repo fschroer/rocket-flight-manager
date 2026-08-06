@@ -57,15 +57,16 @@ class WireLayoutTest {
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)
 
-    // ChannelSurveyResponse: C++ sizeof 79 → payload 73 (status 1 + channel_count 1
-    // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]).
-    @Test fun channelSurveyPayloadSize() = assertEquals(73, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
+    // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
+    // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
+    // + confirmed_frames[5]).
+    @Test fun channelSurveyPayloadSize() = assertEquals(78, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
     @Test fun surveyChannelCount() = assertEquals(64, Protocol.SURVEY_CHANNEL_COUNT)
     @Test fun surveyConfirmCount() = assertEquals(5, Protocol.SURVEY_CONFIRM_COUNT)
     @Test fun channelSurveyPayloadIsItsParts() =
         assertEquals(
             Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE,
-            3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + Protocol.SURVEY_CONFIRM_COUNT,
+            3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + 2 * Protocol.SURVEY_CONFIRM_COUNT,
         )
 
     // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────

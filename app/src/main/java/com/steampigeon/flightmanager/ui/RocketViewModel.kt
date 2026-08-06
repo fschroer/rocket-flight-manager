@@ -98,6 +98,8 @@ data class ChannelSurveyParsed(
     // Channels that received the long confirmation dwell. Only these are evidence
     // of a free channel — a coarse reading routinely misses a 1 Hz emitter.
     val confirmed: List<Int>,
+    /** Locator frames decoded on each confirmed channel, index-aligned to [confirmed]. */
+    val confirmedFrames: List<Int>,
 )
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -1307,7 +1309,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             _surveyInProgress.value = false
                             _channelSurvey.value = ChannelSurveyData.analyze(
                                 parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
-                                parsed.msg.confirmed,
+                                parsed.msg.confirmed, parsed.msg.confirmedFrames,
                             )
                             // The sweep left the home channel for ~1 s, so the noise-floor
                             // baseline built from before it describes a stale picture of a
@@ -2025,12 +2027,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val levels = (0 until count.coerceAtMost(available)).map { Bytes.i8(frame[o + it]) }
         o += Protocol.SURVEY_CHANNEL_COUNT
         // Confirmed list, bounded against the frame like the levels above.
-        val confirmed = if (o < frame.size) {
+        var confirmed = emptyList<Int>()
+        var confirmedFrames = emptyList<Int>()
+        if (o < frame.size) {
             val confirmedCount = Bytes.u8(frame[o]); o += 1
             val room = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CONFIRM_COUNT)
-            (0 until confirmedCount.coerceAtMost(room)).map { Bytes.u8(frame[o + it]) }
-        } else emptyList()
-        return ChannelSurveyParsed(status, home, levels, confirmed)
+            val n = confirmedCount.coerceAtMost(room)
+            confirmed = (0 until n).map { Bytes.u8(frame[o + it]) }
+            o += Protocol.SURVEY_CONFIRM_COUNT
+            val frameRoom = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CONFIRM_COUNT)
+            confirmedFrames = (0 until n.coerceAtMost(frameRoom)).map { Bytes.u8(frame[o + it]) }
+        }
+        return ChannelSurveyParsed(status, home, levels, confirmed, confirmedFrames)
     }
 
     fun parseDeploymentTest (frame: ByteArray): DeploymentTestParsed {

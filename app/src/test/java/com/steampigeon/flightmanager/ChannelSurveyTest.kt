@@ -240,6 +240,78 @@ class ChannelSurveyTest {
         assertTrue(r.suggestions.zipWithNext().all { (a, b) -> a.level <= b.level })
     }
 
+    // ── Decoded frames: occupancy as fact rather than inference (#33) ────────────
+    //
+    // RSSI cannot separate "a locator is using this channel" from "a locator near me
+    // is loud on every channel" — a near-field locator raises them all at once. A
+    // frame that DECODES on the dwelt channel had to be transmitted on it, because
+    // off-channel bleed does not survive the demodulator.
+
+    @Test
+    fun `a channel with a locator on it is never suggested, however quiet it reads`() {
+        // The acceptance case: a known interferer parked on channel 40. Its level can
+        // sit at the same near-field floor as everything else and it must still be
+        // excluded, because the frames prove what the level cannot.
+        val levels = MutableList(64) { -71 }
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0,
+            confirmedChannels = listOf(40, 12, 19),
+            confirmedFrames   = listOf(2, 0, 0),
+        )
+        assertTrue(r.suggestions.none { it.channel == 40 })
+        assertEquals(listOf(12, 19), r.suggestions.map { it.channel })
+        assertEquals(listOf(40), r.occupied.map { it.channel })
+    }
+
+    @Test
+    fun `frames outrank a quiet level`() {
+        // Channel 5 is the quietest reading in the sweep and still occupied.
+        val levels = MutableList(64) { -100 }
+        levels[5] = -125
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0,
+            confirmedChannels = listOf(5, 9),
+            confirmedFrames   = listOf(1, 0),
+        )
+        assertEquals(listOf(9), r.suggestions.map { it.channel })
+    }
+
+    @Test
+    fun `zero frames does not by itself make a channel good`() {
+        // Frames only ever EXCLUDE. A silent channel still has to survive the level
+        // checks, because a non-locator emitter decodes nothing and is invisible here.
+        val levels = List(64) { -60 }
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0,
+            confirmedChannels = listOf(1, 2, 3),
+            confirmedFrames   = listOf(0, 0, 0),
+        )
+        assertTrue(r.allChannelsHot)
+        assertTrue(r.occupied.isEmpty())
+    }
+
+    @Test
+    fun `frames are matched to their channel by position, not by value`() {
+        val levels = MutableList(64) { -110 }
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0,
+            confirmedChannels = listOf(30, 31, 32),
+            confirmedFrames   = listOf(0, 4, 0),
+        )
+        assertEquals(listOf(31), r.occupied.map { it.channel })
+        assertEquals(4, r.occupied.single().frames)
+    }
+
+    @Test
+    fun `a missing frame list degrades to no exclusions`() {
+        // An older receiver sends no frame counts. Suggestions must still work.
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -120 }, homeChannel = 0, confirmedChannels = listOf(1, 2),
+        )
+        assertEquals(listOf(1, 2), r.suggestions.map { it.channel })
+        assertTrue(r.occupied.isEmpty())
+    }
+
     @Test
     fun `status decodes from the wire byte`() {
         assertEquals(Status.Ok, Status.fromByte(0))

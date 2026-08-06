@@ -420,6 +420,14 @@ private fun ChannelSurveySection(
                     ),
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // Naming the channels that were excluded, and why, so a short list
+                // does not read as a failed scan.
+                survey.occupied.forEach { o ->
+                    SurveyNote(
+                        stringResource(R.string.survey_channel_occupied, o.channel),
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 SurveyNote(
                     stringResource(R.string.survey_confirmed_note),
                     MaterialTheme.colorScheme.onSurfaceVariant,

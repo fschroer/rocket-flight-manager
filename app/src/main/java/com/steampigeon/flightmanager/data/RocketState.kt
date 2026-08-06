@@ -27,10 +27,11 @@ object Protocol {
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
     // zeroed); the receiver-appended RSSI/SNR/noise floor sit after and are excluded.
     const val TELEMETRY_BASE_STRUCT_SIZE = 76
-    // ChannelSurveyResponse: C++ sizeof 79 → payload 73 (status 1 + channel_count 1
-    // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]).
+    // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
+    // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
+    // + confirmed_frames[5]).
     // Receiver-only message; the locator reserves the MsgType values but never sends it.
-    const val CHANNEL_SURVEY_PAYLOAD_SIZE = 73
+    const val CHANNEL_SURVEY_PAYLOAD_SIZE = 78
     const val SURVEY_CHANNEL_COUNT = 64
     const val SURVEY_CONFIRM_COUNT = 5
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1

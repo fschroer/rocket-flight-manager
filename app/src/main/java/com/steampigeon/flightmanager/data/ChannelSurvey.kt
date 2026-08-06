@@ -58,7 +58,21 @@ object ChannelSurvey {
     /** How many channels the recommendation offers. */
     const val SUGGESTION_COUNT = 5
 
-    data class Ranked(val channel: Int, val level: Int)
+    /** [frames] is locator broadcasts DECODED on this channel during its confirm
+     *  dwell, or 0 for channels that were never confirmed. */
+    data class Ranked(val channel: Int, val level: Int, val frames: Int = 0) {
+        /**
+         * A decoded frame had to be transmitted on this exact channel — off-channel
+         * bleed does not survive the demodulator. So this is occupancy as fact
+         * rather than as inference, and it outranks the level completely.
+         *
+         * The converse does not hold: zero frames does not prove empty. The dwell is
+         * one broadcast period, so a sparser emitter slips through, and a non-locator
+         * device is invisible to this test entirely — which is what the level is
+         * still for.
+         */
+        val occupiedByLocator: Boolean get() = frames > 0
+    }
 
     data class Result(
         val status: Status,
@@ -104,7 +118,14 @@ object ChannelSurvey {
          */
         val suggestions: List<Ranked>
             get() = if (status != Status.Ok) emptyList()
-                    else confirmed.take(SUGGESTION_COUNT)
+                    // A channel with a locator decoded on it is occupied, whatever
+                    // its level says. That is the whole point of the frame count:
+                    // RSSI cannot separate "a locator is using this channel" from
+                    // "a locator near me is loud on every channel", and this can.
+                    else confirmed.filterNot { it.occupiedByLocator }.take(SUGGESTION_COUNT)
+
+        /** Confirmed channels that have a locator on them — shown, never suggested. */
+        val occupied: List<Ranked> get() = confirmed.filter { it.occupiedByLocator }
 
         /** Where the current channel sits in the ranking, 1-based. Null if unknown. */
         val homeRank: Int?
@@ -123,6 +144,7 @@ object ChannelSurvey {
         levels: List<Int>,
         homeChannel: Int,
         confirmedChannels: List<Int> = emptyList(),
+        confirmedFrames: List<Int> = emptyList(),
     ): Result {
         if (status != Status.Ok || levels.isEmpty()) {
             return Result(status, emptyList(), allChannelsHot = false, uniformFloor = false,
@@ -134,8 +156,9 @@ object ChannelSurvey {
             // produces an unchanged recommendation rather than shuffling each sweep.
             .sortedWith(compareBy({ it.level }, { it.channel }))
         val confirmed = confirmedChannels
-            .filter { it in levels.indices }
-            .map { Ranked(it, levels[it]) }
+            .withIndex()
+            .filter { (_, ch) -> ch in levels.indices }
+            .map { (i, ch) -> Ranked(ch, levels[ch], confirmedFrames.getOrElse(i) { 0 }) }
             .sortedWith(compareBy({ it.level }, { it.channel }))
         // Judged on the confirmed set, since those are the only readings that mean
         // anything. If every channel we actually verified is loud, the receiver is
