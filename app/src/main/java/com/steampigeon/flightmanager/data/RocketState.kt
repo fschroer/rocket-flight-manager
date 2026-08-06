@@ -27,6 +27,11 @@ object Protocol {
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
     // zeroed); the receiver-appended RSSI/SNR/noise floor sit after and are excluded.
     const val TELEMETRY_BASE_STRUCT_SIZE = 76
+    // ChannelSurveyResponse: C++ sizeof 73 → payload 67
+    // (status 1 + channel_count 1 + home_channel 1 + level[64]).  Receiver-only
+    // message; the locator reserves the MsgType values but never sends it.
+    const val CHANNEL_SURVEY_PAYLOAD_SIZE = 67
+    const val SURVEY_CHANNEL_COUNT = 64
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
@@ -334,7 +339,9 @@ enum class MsgType(val value: UByte) {
     ReceiverInfo(16u),          // Response from the receiver with its current LoRa channel and device name.
     VersionRequest(17u),        // Request from the app, via the receiver, for both firmware versions.
     VersionInfo(18u),           // Response: locator version forwarded through receiver, which appends its own version.
-    FlightEvents(19u);          // Per-record flight event summary sent alongside a FlightData transfer.
+    FlightEvents(19u),          // Per-record flight event summary sent alongside a FlightData transfer.
+    ChannelSurveyRequest(20u),  // Request from the app to the receiver to sweep the band (no locator involved).
+    ChannelSurvey(21u);         // Response from the receiver with per-channel occupancy.
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

@@ -246,6 +246,7 @@ class BluetoothService : Service() {
             MsgType.FlightEvents     -> Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE
             MsgType.ReceiverInfo     -> Protocol.RECEIVER_INFO_PAYLOAD_SIZE
             MsgType.VersionInfo      -> Protocol.VERSION_INFO_PAYLOAD_SIZE
+            MsgType.ChannelSurvey    -> Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE
             MsgType.FlightData -> {
                 // Variable-length: compute the EXACT on-wire length from the packet
                 // header so the framer delimits each packet precisely. Consuming the
@@ -351,6 +352,12 @@ class BluetoothService : Service() {
     fun requestReceiverInfo(): Boolean =
         sendMessage(MsgType.ReceiverInfoRequest, null)
 
+    /** Ask the receiver to sweep channels 0-63 and report per-channel occupancy.
+     *  The receiver refuses while the locator is armed — the sweep is deaf to it
+     *  for about a second (ADR-0019). */
+    fun requestChannelSurvey(): Boolean =
+        sendMessage(MsgType.ChannelSurveyRequest, null)
+
     /** Ask the locator (via the receiver) for firmware version strings.
      *  The receiver forwards the request to the locator, which responds with its
      *  version; the receiver appends its own version before relaying to the app. */
@@ -370,8 +377,14 @@ class BluetoothService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean {
+        // Receiver-directed messages stay open even with no locator connected, so
+        // the user can still find and switch channels. The survey belongs here for
+        // the same reason — and more so: hunting for a clean channel is exactly
+        // what you do when nothing is coming through.
         val receiverDirected =
-            msgType == MsgType.ReceiverCfgChgRequest || msgType == MsgType.ReceiverInfoRequest
+            msgType == MsgType.ReceiverCfgChgRequest ||
+                    msgType == MsgType.ReceiverInfoRequest ||
+                    msgType == MsgType.ChannelSurveyRequest
         if (!locatorConnected && !receiverDirected) return false
         return btManager.sendData(buildMessage(msgType, payload))
     }

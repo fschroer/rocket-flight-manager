@@ -19,6 +19,7 @@ import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
+import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.LocatorConnection
@@ -86,7 +87,15 @@ sealed class ParsedMessage {
     data class ReceiverInfo(val msg: ReceiverInfoParsed)     : ParsedMessage()
     data class VersionInfo(val msg: VersionInfoParsed)       : ParsedMessage()
     data class FlightEvents(val msg: FlightEventsData)       : ParsedMessage()
+    data class ChannelSurvey(val msg: ChannelSurveyParsed)   : ParsedMessage()
 }
+
+/** Decoded ChannelSurveyResponse (ADR-0019 tier 3). Levels are index-by-channel. */
+data class ChannelSurveyParsed(
+    val status: ChannelSurveyData.Status,
+    val homeChannel: Int,
+    val levels: List<Int>,      // dBm, index == channel; empty when refused
+)
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
 
@@ -337,6 +346,29 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     @Volatile private var knownLocatorsLoaded = false
     private var awaitingChannelRecognition = false
     private var channelChangePreviousChannel = 0
+
+    // ── Channel survey (ADR-0019 tier 3) ──────────────────────────────────────
+    // null = never run this session. Sweeping is on demand only: it costs ~1 s of
+    // deafness, and the decision it informs (which channel to use) is made once,
+    // on the ground.
+    private val _channelSurvey = MutableStateFlow<ChannelSurveyData.Result?>(null)
+    val channelSurvey: StateFlow<ChannelSurveyData.Result?> = _channelSurvey.asStateFlow()
+
+    private val _surveyInProgress = MutableStateFlow(false)
+    val surveyInProgress: StateFlow<Boolean> = _surveyInProgress.asStateFlow()
+
+    /** Ask the receiver to sweep. The receiver independently refuses while armed;
+     *  this only avoids sending a request we already know it will reject. */
+    fun requestChannelSurvey(service: BluetoothService?) {
+        if (_surveyInProgress.value) return
+        _channelSurvey.value = null
+        _surveyInProgress.value = true
+        if (service?.requestChannelSurvey() != true) _surveyInProgress.value = false
+    }
+
+    fun clearChannelSurvey() {
+        _channelSurvey.value = null
+    }
 
     private val _receiverConfigChanged = MutableStateFlow<Boolean>(false)
     val receiverConfigChanged: StateFlow<Boolean> = _receiverConfigChanged.asStateFlow()
@@ -1063,6 +1095,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             _receiverVersion.value = parsed.msg.receiverVersion
                             versionInfoStale.value = false
                         }
+                        is ParsedMessage.ChannelSurvey -> {
+                            _surveyInProgress.value = false
+                            _channelSurvey.value = ChannelSurveyData.analyze(
+                                parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
+                            )
+                            // The sweep left the home channel for ~1 s, so the noise-floor
+                            // baseline built from before it describes a stale picture of a
+                            // band we now know more about. Start it over.
+                            quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+                        }
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
                             if (ok) {
@@ -1634,6 +1676,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 FlightEventsData.parse(frame)?.let { ParsedMessage.FlightEvents(it) }
             MsgType.FlightData       -> ParsedMessage.FlightData(frame)
             MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
+            MsgType.ChannelSurvey    -> ParsedMessage.ChannelSurvey(parseChannelSurvey(frame))
             else                     -> null
         }
     }
@@ -1757,6 +1800,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             velNed, attitude,
             flightState, locatorId, authTag, rssi, snr, noiseFloor
         )
+    }
+
+    /** ChannelSurveyResponse: status (1) + channel_count (1) + home_channel (1) + level[64]. */
+    fun parseChannelSurvey(frame: ByteArray): ChannelSurveyParsed {
+        var o = 6
+        val status = ChannelSurveyData.Status.fromByte(Bytes.u8(frame[o])); o += 1
+        val count = Bytes.u8(frame[o]); o += 1
+        val home = Bytes.u8(frame[o]); o += 1
+        // Trust the frame's own count, but never past the buffer: a short or
+        // corrupt frame must not throw inside the packet collector.
+        val available = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CHANNEL_COUNT)
+        val levels = (0 until count.coerceAtMost(available)).map { Bytes.i8(frame[o + it]) }
+        return ChannelSurveyParsed(status, home, levels)
     }
 
     fun parseDeploymentTest (frame: ByteArray): DeploymentTestParsed {

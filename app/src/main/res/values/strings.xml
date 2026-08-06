@@ -67,4 +67,14 @@
     <string name="locator_unrecognized_prompt">Locator ID %1$s found. Enter its password to connect.</string>
     <string name="link_interference">Interference on this channel — signal is strong but noisy. Consider another channel.</string>
     <string name="link_congested">Channel is busy, but your link is clean.</string>
+    <string name="survey_scan">Find a clean channel</string>
+    <string name="survey_scanning">Scanning…</string>
+    <string name="survey_use">Use</string>
+    <string name="survey_channel_label">Channel %1$d</string>
+    <string name="survey_home_rank">Your channel (%1$d) ranks %2$d quietest.</string>
+    <string name="survey_all_hot">Every channel is loud. That usually means a transmitter is very close to the receiver — check for another powered locator nearby. Changing channel will not help.</string>
+    <string name="survey_refused_armed">The locator is armed. Scanning would stop telemetry for about a second, and the channel cannot be changed while armed. Disarm first.</string>
+    <string name="survey_refused_busy">A flight data transfer is in progress. Try again when it finishes.</string>
+    <string name="survey_failed">The scan did not complete. Try again.</string>
+    <string name="survey_caveat">Measured where the receiver is. A channel that is quiet here may be busier at altitude.</string>
 </resources>

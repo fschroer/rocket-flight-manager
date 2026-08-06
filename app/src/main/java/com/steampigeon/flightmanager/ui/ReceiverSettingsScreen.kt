@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -23,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -30,6 +33,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
+import com.steampigeon.flightmanager.data.ChannelSurvey
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.Protocol
@@ -52,6 +56,8 @@ fun ReceiverSettingsScreen(
     // screen only arms the channel-change flow and shows the conflicting-locator banner.
     val conflictLocatorId by viewModel.conflictLocatorId.collectAsState()
     val locatorConnected by viewModel.locatorConnected.collectAsState()
+    val channelSurvey by viewModel.channelSurvey.collectAsState()
+    val surveyInProgress by viewModel.surveyInProgress.collectAsState()
 
     // Keep the staged copy in sync with the remote config as long as the user
     // has not made any local edits.  This ensures that arriving PreLaunchData
@@ -133,6 +139,24 @@ fun ReceiverSettingsScreen(
                 }
             }
         }
+
+        // Channel survey (ADR-0019 tier 3): sweep the band and rank channels by how
+        // quiet they are. On demand only — a sweep costs ~1 s of deafness, and the
+        // decision it informs is made once, on the ground.
+        ChannelSurveySection(
+            survey = channelSurvey,
+            inProgress = surveyInProgress,
+            enabled = bluetoothConnectionState == BluetoothConnectionState.Connected && !surveyInProgress,
+            onScan = { viewModel.requestChannelSurvey(service) },
+            onPick = { channel ->
+                // Stage it rather than sending: the user still presses Update, which
+                // routes through the existing channel-change flow (recognition arming,
+                // password challenge, revert on cancel) instead of a second path.
+                stagedReceiverConfig = stagedReceiverConfig.copy(channel = channel)
+                viewModel.updateReceiverConfigChanged(true)
+                viewModel.clearChannelSurvey()
+            },
+        )
 
         Column(
             modifier = modifier.padding(start = 40.dp),
@@ -224,4 +248,110 @@ fun ReceiverSettingsScreen(
             }
         }
     }
+}
+/**
+ * "Find a clean channel" — the tier-3 channel survey (ADR-0019, #33).
+ *
+ * Three presentation rules come straight from the ADR, and each exists because
+ * the obvious alternative gives wrong advice:
+ *
+ * - **Rank, don't report absolute dBm.** RSSI near the noise floor is uncalibrated
+ *   and varies unit to unit, so a level only means something next to the other
+ *   levels in the same sweep. Levels are shown as a relative bar, not a number.
+ * - **Say nothing when every channel is loud.** That is a transmitter next to the
+ *   receiver, not a busy band, and recommending whichever channel read lowest
+ *   would be confidently wrong.
+ * - **Never imply it predicts the flight.** The sweep measures the receiver's
+ *   location; the rocket at altitude hears a different and busier world.
+ */
+@Composable
+private fun ChannelSurveySection(
+    survey: ChannelSurvey.Result?,
+    inProgress: Boolean,
+    enabled: Boolean,
+    onScan: () -> Unit,
+    onPick: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onScan, enabled = enabled) {
+                Text(
+                    stringResource(
+                        if (inProgress) R.string.survey_scanning else R.string.survey_scan
+                    )
+                )
+            }
+        }
+
+        when {
+            survey == null -> Unit
+
+            survey.status == ChannelSurvey.Status.RefusedArmed -> SurveyNote(
+                stringResource(R.string.survey_refused_armed),
+                MaterialTheme.colorScheme.error,
+            )
+
+            survey.status == ChannelSurvey.Status.RefusedBusy -> SurveyNote(
+                stringResource(R.string.survey_refused_busy),
+                MaterialTheme.colorScheme.error,
+            )
+
+            survey.status != ChannelSurvey.Status.Ok -> SurveyNote(
+                stringResource(R.string.survey_failed),
+                MaterialTheme.colorScheme.error,
+            )
+
+            survey.allChannelsHot -> SurveyNote(
+                stringResource(R.string.survey_all_hot),
+                MaterialTheme.colorScheme.error,
+            )
+
+            else -> {
+                survey.homeRank?.let { rank ->
+                    SurveyNote(
+                        stringResource(R.string.survey_home_rank, survey.homeChannel, rank),
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Relative bar: quietest channel in this sweep is the reference, the
+                // loudest is full scale. Deliberately unlabelled in dBm.
+                val quietest = survey.ranked.first().level
+                val loudest = survey.ranked.last().level
+                val span = (loudest - quietest).coerceAtLeast(1)
+                survey.suggestions.forEach { s ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.survey_channel_label, s.channel),
+                            modifier = Modifier.width(96.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        LinearProgressIndicator(
+                            progress = { ((s.level - quietest).toFloat() / span).coerceIn(0f, 1f) },
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        )
+                        TextButton(onClick = { onPick(s.channel) }) {
+                            Text(stringResource(R.string.survey_use))
+                        }
+                    }
+                }
+                SurveyNote(
+                    stringResource(R.string.survey_caveat),
+                    MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SurveyNote(text: String, color: Color) {
+    Text(
+        text = text,
+        color = color,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
 }
