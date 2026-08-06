@@ -3,6 +3,8 @@ package com.steampigeon.flightmanager
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LinkQuality.Verdict
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -64,7 +66,7 @@ class LinkQualityTest {
         // Pristine packet — the collision survivors always are — but a missed cycle.
         assertEquals(
             Verdict.Interference,
-            LinkQuality.classify(-60, 9, elevated, quiet, gapMs = LinkQuality.LOSSY_GAP_MS),
+            LinkQuality.classify(-60, 9, elevated, quiet, lossy = true),
         )
     }
 
@@ -72,19 +74,78 @@ class LinkQualityTest {
     fun `loss on a quiet channel is not blamed on interference`() {
         // A locator switched off or walked out of range produces gaps too, but it
         // does not raise the noise floor. Requiring both is what keeps this honest.
-        assertEquals(Verdict.Normal, LinkQuality.classify(-60, 9, quiet, quiet, gapMs = 60_000L))
-        assertEquals(Verdict.Normal, LinkQuality.classify(-118, -7, quiet, quiet, gapMs = 60_000L))
+        assertEquals(Verdict.Normal, LinkQuality.classify(-60, 9, quiet, quiet, lossy = true))
+        assertEquals(Verdict.Normal, LinkQuality.classify(-118, -7, quiet, quiet, lossy = true))
     }
 
     @Test
-    fun `a single on-time broadcast on a busy channel stays congested`() {
+    fun `a busy channel with no recent loss stays congested`() {
         val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
-        assertEquals(
-            Verdict.Congested,
-            LinkQuality.classify(-60, 9, elevated, quiet, gapMs = LinkQuality.LOSSY_GAP_MS - 1),
-        )
-        // Nominal 1 Hz cadence with jitter must not read as loss.
-        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, gapMs = 1_100L))
+        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, lossy = false))
+    }
+
+    // ── Loss is remembered, not judged per packet ────────────────────────────────
+    //
+    // The classifier only runs when a packet ARRIVES, and an arriving packet has by
+    // definition just ended the gap. Judged instantaneously, Interference showed for
+    // one broadcast period and the next clean packet flipped it back to Congested --
+    // so the stretch the user was actually looking at, marker red and nothing being
+    // received, never showed anything. Bench report: "when the rocket is red I don't
+    // get an interference message; sometimes it says the link is clean".
+
+    @Test
+    fun `a gap at or over the threshold records a loss`() {
+        assertEquals(5_000L, LinkQuality.updateLastLoss(0L, 5_000L, LinkQuality.LOSSY_GAP_MS))
+        assertEquals(5_000L, LinkQuality.updateLastLoss(0L, 5_000L, 9_999L))
+    }
+
+    @Test
+    fun `a clean gap leaves the recorded loss untouched`() {
+        // Nominal 1 Hz cadence with jitter is not loss, and must not clear an
+        // earlier one either -- that is what keeps the verdict stable across the
+        // clean packets between collisions.
+        assertEquals(1_000L, LinkQuality.updateLastLoss(1_000L, 5_000L, 1_100L))
+        assertEquals(0L, LinkQuality.updateLastLoss(0L, 5_000L, 1_100L))
+    }
+
+    @Test
+    fun `a loss keeps counting for the memory window and then clears`() {
+        val lossAt = 10_000L
+        assertTrue(LinkQuality.isLossy(lossAt, lossAt))
+        assertTrue("must bridge the clean packets inside a bad patch",
+            LinkQuality.isLossy(lossAt, lossAt + LinkQuality.LOSS_MEMORY_MS))
+        assertFalse("and clear once the link has been clean for the window",
+            LinkQuality.isLossy(lossAt, lossAt + LinkQuality.LOSS_MEMORY_MS + 1))
+    }
+
+    @Test
+    fun `no loss ever seen is not lossy`() {
+        assertFalse(LinkQuality.isLossy(0L, 60_000L))
+    }
+
+    @Test
+    fun `the reported bench sequence now shows interference throughout`() {
+        // Two locators drifting through phase: a collision, then clean packets, then
+        // another collision. Every one of these moments must read as Interference,
+        // including the clean packets between them -- those are the ones that used to
+        // reset the verdict to "busy but clean" while the marker was still red.
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        var lastLoss = 0L
+        var now = 0L
+        fun tick(gap: Long): Verdict {
+            now += gap
+            lastLoss = LinkQuality.updateLastLoss(lastLoss, now, gap)
+            return LinkQuality.classify(-60, 9, elevated, quiet,
+                lossy = LinkQuality.isLossy(lastLoss, now))
+        }
+        assertEquals(Verdict.Congested, tick(1_000L))      // healthy
+        assertEquals(Verdict.Interference, tick(3_000L))   // collision: two missed
+        assertEquals(Verdict.Interference, tick(1_000L))   // clean packet, still bad patch
+        assertEquals(Verdict.Interference, tick(1_000L))
+        assertEquals(Verdict.Interference, tick(2_500L))   // another collision
+        // Locators drift apart; after a clean run the verdict relaxes on its own.
+        repeat(11) { tick(1_000L) }
+        assertEquals(Verdict.Congested, tick(1_000L))
     }
 
     // ── Holes found by the second bench run ──────────────────────────────────────
@@ -118,7 +179,7 @@ class LinkQualityTest {
         assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, busy, busy))
         assertEquals(
             Verdict.Interference,
-            LinkQuality.classify(-60, 9, busy, busy, gapMs = LinkQuality.LOSSY_GAP_MS),
+            LinkQuality.classify(-60, 9, busy, busy, lossy = true),
         )
     }
 
@@ -134,12 +195,6 @@ class LinkQualityTest {
         // missed 1 Hz broadcast reddened the rocket at ~2.1 s without counting as
         // loss, which is a red marker with no explanation beside it.
         assertEquals(2_000L, LinkQuality.LOSSY_GAP_MS)
-    }
-
-    @Test
-    fun `first broadcast of a session is not a gap`() {
-        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
-        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, gapMs = 0L))
     }
 
     @Test

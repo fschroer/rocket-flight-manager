@@ -110,20 +110,45 @@ object LinkQuality {
     const val LOSSY_GAP_MS = 2_000L
 
     /**
+     * How long an observed loss keeps counting against the link.
+     *
+     * Without this the verdict is useless for the case it was built for. The
+     * classification only runs when a packet ARRIVES, and an arriving packet has by
+     * definition just ended the gap — so `Interference` showed for a single
+     * broadcast period and the next clean packet flipped it back to `Congested`,
+     * while the stretch the user was actually staring at (marker red, nothing being
+     * received) recomputed nothing at all.
+     *
+     * Two locators sharing a channel drift in and out of phase, so collisions come
+     * in epochs rather than evenly. 10 s bridges the clean packets inside a bad
+     * patch without outlasting the patch itself.
+     */
+    const val LOSS_MEMORY_MS = 10_000L
+
+    /** Wall clock of the most recent observed loss, or [current] if this gap is clean. */
+    fun updateLastLoss(current: Long, nowMs: Long, gapMs: Long): Long =
+        if (gapMs >= LOSSY_GAP_MS) nowMs else current
+
+    /** Whether a loss is recent enough to still count. */
+    fun isLossy(lastLossMs: Long, nowMs: Long): Boolean =
+        lastLossMs != 0L && nowMs - lastLossMs <= LOSS_MEMORY_MS
+
+    /**
      * @param rssi        packet RSSI in dBm
      * @param snr         packet SNR in dB
      * @param noiseFloor  peak idle-channel RSSI in dBm, or [NOISE_FLOOR_UNKNOWN]
      * @param quietestFloor quietest floor observed this session, or
      *                      [NOISE_FLOOR_UNKNOWN] before any sample has arrived
-     * @param gapMs       time since the previous accepted broadcast; 0 or negative
-     *                    when there was no previous one
+     * @param lossy       whether a broadcast has been missed recently — see
+     *                    [isLossy], which is what keeps this from being a
+     *                    single-packet judgement
      */
     fun classify(
         rssi: Int,
         snr: Int,
         noiseFloor: Int,
         quietestFloor: Int,
-        gapMs: Long = 0L,
+        lossy: Boolean = false,
     ): Verdict {
         val degraded = rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
         val haveFloor = noiseFloor != NOISE_FLOOR_UNKNOWN
@@ -134,8 +159,6 @@ object LinkQuality {
                 noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
         val loud = haveFloor && noiseFloor >= BUSY_FLOOR_DBM
         val elevated = risen || loud
-        val lossy = gapMs >= LOSSY_GAP_MS
-
         return when {
             // Loud but dirty. Reported whether or not the floor corroborates: a
             // continuous interferer raises the floor, but one that transmits only

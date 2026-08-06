@@ -318,6 +318,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // either mask a busy channel or slander a quiet one.
     @Volatile private var quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
 
+    // Wall clock of the last missed broadcast.  Loss has to be remembered rather
+    // than judged per packet: the classifier only runs when a packet ARRIVES, and
+    // an arriving packet has just ended the gap, so an instantaneous test reported
+    // the link as healthy for every packet the user could actually see.
+    @Volatile private var lastLossMs = 0L
+
     /**
      * Classify the link for a just-accepted broadcast.  Call this *before* the
      * rocketState update, not inside it: it mutates [quietestNoiseFloor], and an
@@ -329,7 +335,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val previous = _rocketState.value.lastPreLaunchMessageTime
         // No previous broadcast (fresh session) is not a gap.
         val gapMs = if (previous == 0L) 0L else currentTime - previous
-        return LinkQuality.classify(rssi, snr, noiseFloor, quietestNoiseFloor, gapMs)
+        lastLossMs = LinkQuality.updateLastLoss(lastLossMs, currentTime, gapMs)
+        return LinkQuality.classify(
+            rssi, snr, noiseFloor, quietestNoiseFloor,
+            lossy = LinkQuality.isLossy(lastLossMs, currentTime),
+        )
     }
 
     // Wall clock of the last frame accepted from the connected locator.  Another
@@ -589,6 +599,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _connectedLocatorId.value = null
         lastConnectedFrameMs = 0L
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+        lastLossMs = 0L
         lastConflictFrameMs = 0L
         _conflictLocatorId.value = null
         _challenge.value = null
