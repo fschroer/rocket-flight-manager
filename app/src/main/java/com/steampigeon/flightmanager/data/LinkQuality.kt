@@ -68,21 +68,36 @@ object LinkQuality {
     const val ELEVATED_FLOOR_MARGIN_DB = 12
 
     /**
+     * Gap since the previous accepted broadcast that means we missed at least one.
+     * Broadcasts are 1 Hz, so this is one clean miss plus jitter headroom.
+     *
+     * This exists because **a co-channel LoRa peer destroys packets by collision,
+     * not by degradation.** The packets that survive a collision arrive pristine,
+     * so RSSI and SNR both look perfect and the strong-but-noisy rule never fires —
+     * while the user watches the locator drop out. Loss is the only observable.
+     */
+    const val LOSSY_GAP_MS = 2_500L
+
+    /**
      * @param rssi        packet RSSI in dBm
      * @param snr         packet SNR in dB
      * @param noiseFloor  peak idle-channel RSSI in dBm, or [NOISE_FLOOR_UNKNOWN]
      * @param quietestFloor quietest floor observed this session, or
      *                      [NOISE_FLOOR_UNKNOWN] before any sample has arrived
+     * @param gapMs       time since the previous accepted broadcast; 0 or negative
+     *                    when there was no previous one
      */
     fun classify(
         rssi: Int,
         snr: Int,
         noiseFloor: Int,
         quietestFloor: Int,
+        gapMs: Long = 0L,
     ): Verdict {
         val degraded = rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
         val floorKnown = noiseFloor != NOISE_FLOOR_UNKNOWN && quietestFloor != NOISE_FLOOR_UNKNOWN
         val elevated = floorKnown && noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
+        val lossy = gapMs >= LOSSY_GAP_MS
 
         return when {
             // Loud but dirty. Reported whether or not the floor corroborates: a
@@ -90,7 +105,21 @@ object LinkQuality {
             // in bursts can wreck packets while the sampled floor still looks
             // quiet, and that case must not go unreported.
             degraded -> Verdict.Interference
+
+            // Busy channel that is *costing us packets*. This is the co-channel
+            // case — another LoRa transmitter on our frequency collides with our
+            // broadcasts rather than degrading them, so the survivors look perfect
+            // and `degraded` never fires while the locator visibly drops out.
+            //
+            // The conjunction is what keeps it honest. Loss alone is ambiguous (a
+            // locator that was switched off or walked out of range also produces
+            // gaps), but a locator that went away does not raise the noise floor.
+            // Requiring both means only an occupied channel can trigger it.
+            elevated && lossy -> Verdict.Interference
+
+            // Occupied, but we are winning: no packets missed.
             elevated -> Verdict.Congested
+
             else -> Verdict.Normal
         }
     }

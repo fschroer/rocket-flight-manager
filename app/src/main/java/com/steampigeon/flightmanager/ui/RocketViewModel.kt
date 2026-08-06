@@ -136,6 +136,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // releasing too early puts another rocket's data on screen mid-flight.
         const val CONNECTION_HOLD_MS = 15_000L
 
+        // How long the conflicting-traffic banner survives the other locator's
+        // silence.  Long enough to read and act on (the Connect action needs a
+        // deliberate tap), short enough that it clears within a few seconds of the
+        // other locator being switched off.
+        const val CONFLICT_HOLD_MS = 8_000L
+
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
         // the receiver may sit on the forward until its next safe window — so a
@@ -302,9 +308,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // either mask a busy channel or slander a quiet one.
     @Volatile private var quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
 
-    private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int): LinkQuality.Verdict {
+    /**
+     * Classify the link for a just-accepted broadcast.  Call this *before* the
+     * rocketState update, not inside it: it mutates [quietestNoiseFloor], and an
+     * update lambda may re-run under contention.  It also needs the previous
+     * message time, which the update is about to overwrite.
+     */
+    private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int, currentTime: Long): LinkQuality.Verdict {
         quietestNoiseFloor = LinkQuality.updateQuietestFloor(quietestNoiseFloor, noiseFloor)
-        return LinkQuality.classify(rssi, snr, noiseFloor, quietestNoiseFloor)
+        val previous = _rocketState.value.lastPreLaunchMessageTime
+        // No previous broadcast (fresh session) is not a gap.
+        val gapMs = if (previous == 0L) 0L else currentTime - previous
+        return LinkQuality.classify(rssi, snr, noiseFloor, quietestNoiseFloor, gapMs)
     }
 
     // Wall clock of the last frame accepted from the connected locator.  Another
@@ -312,6 +327,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // [CONNECTION_HOLD_MS] — that is what keeps a momentary fade from handing the
     // display to whoever else happens to be audible.
     @Volatile private var lastConnectedFrameMs = 0L
+
+    // Wall clock of the last frame heard from the conflicting locator.  The banner
+    // is held for [CONFLICT_HOLD_MS] after that rather than being cleared by the
+    // next good packet: with two locators sharing a channel the broadcasts
+    // interleave, and clearing on every good packet made the banner flash faster
+    // than it could be read, let alone acted on.
+    @Volatile private var lastConflictFrameMs = 0L
 
     // A locator_id heard on the air that is not the connected one — either
     // unauthorized, or authorized but not the connection holder. Drives a
@@ -432,12 +454,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 // A different authorized locator, heard while ours is still live.
                 // Warn, but leave the connection where it is — switching is the
                 // user's call (the banner's Connect action), not this packet's.
-                _conflictLocatorId.value = locatorId
+                _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
                 return
             }
             _connectedLocatorId.value = locatorId
             lastConnectedFrameMs = System.currentTimeMillis()
-            _conflictLocatorId.value = null
+            // Do NOT clear the conflict just because a good packet arrived.  With two
+            // locators on one channel the broadcasts interleave, so an unconditional
+            // clear here made the banner flash on and off at the broadcast rate —
+            // visible, but gone again before Connect could be pressed.  The conflict
+            // belongs to the *other* locator and expires on its own silence.
+            if (_conflictLocatorId.value == locatorId ||
+                System.currentTimeMillis() - lastConflictFrameMs >= CONFLICT_HOLD_MS) {
+                _conflictLocatorId.value = null
+            }
             awaitingChannelRecognition = false
             if (_challenge.value?.locatorId == locatorId) _challenge.value = null
             // An armed locator authenticates but carries no config, so the status
@@ -454,7 +484,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // Unauthorized.  Never disturbs a standing connection — an armed stranger on
         // the channel must not knock out the locator we are connected to.
         if (!challengeable) {
-            _conflictLocatorId.value = locatorId
+            _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
             return
         }
         if (awaitingChannelRecognition) {
@@ -467,7 +497,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
         // Passive: unrecognised traffic on the current channel — warn, and (if we are
         // not already connected) prompt to connect on first contact with this locator.
-        _conflictLocatorId.value = locatorId
+        _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis()
         if (knownLocatorsLoaded && _connectedLocatorId.value == null && _challenge.value == null &&
             locatorId !in declinedLocatorIds) {
             challengeFrame = frame
@@ -487,6 +517,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _connectedLocatorId.value = null
         lastConnectedFrameMs = 0L
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+        lastConflictFrameMs = 0L
         _conflictLocatorId.value = null
         _challenge.value = null
         _challengeError.value = false
@@ -918,6 +949,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // authorized-but-not-connected sender is likewise not shown.
                             evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
+                            val verdict = classifyLink(
+                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -953,7 +986,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     rssi = parsed.msg.rssi,
                                     snr = parsed.msg.snr,
                                     noiseFloor = parsed.msg.noiseFloor,
-                                    linkQuality = classifyLink(parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor),
+                                    linkQuality = verdict,
                                 )
                             }
                             _remoteLocatorConfig.update { currentState ->
@@ -1005,6 +1038,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 challengeable = false,
                             )
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
+                            val verdict = classifyLink(
+                                parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastPreLaunchMessageTime = currentTime,
@@ -1038,7 +1073,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     rssi = parsed.msg.rssi,
                                     snr = parsed.msg.snr,
                                     noiseFloor = parsed.msg.noiseFloor,
-                                    linkQuality = classifyLink(parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor),
+                                    linkQuality = verdict,
                                 )
                             }
                             // Reset path on new launch; accumulate during flight.

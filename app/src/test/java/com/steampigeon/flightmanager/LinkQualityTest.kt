@@ -50,6 +50,49 @@ class LinkQualityTest {
         assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet))
     }
 
+    // ── Co-channel collisions (found by bench test, two locators on one channel) ──
+    //
+    // A LoRa peer on our own frequency destroys packets by collision, not by
+    // degradation: the survivors arrive pristine, so RSSI and SNR both look
+    // perfect. Before this case existed the app reported the reassuring
+    // "channel is busy, but your link is clean" while the locator was visibly
+    // dropping in and out.
+
+    @Test
+    fun `busy channel that is costing packets is interference, not merely congested`() {
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        // Pristine packet — the collision survivors always are — but a missed cycle.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, elevated, quiet, gapMs = LinkQuality.LOSSY_GAP_MS),
+        )
+    }
+
+    @Test
+    fun `loss on a quiet channel is not blamed on interference`() {
+        // A locator switched off or walked out of range produces gaps too, but it
+        // does not raise the noise floor. Requiring both is what keeps this honest.
+        assertEquals(Verdict.Normal, LinkQuality.classify(-60, 9, quiet, quiet, gapMs = 60_000L))
+        assertEquals(Verdict.Normal, LinkQuality.classify(-118, -7, quiet, quiet, gapMs = 60_000L))
+    }
+
+    @Test
+    fun `a single on-time broadcast on a busy channel stays congested`() {
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        assertEquals(
+            Verdict.Congested,
+            LinkQuality.classify(-60, 9, elevated, quiet, gapMs = LinkQuality.LOSSY_GAP_MS - 1),
+        )
+        // Nominal 1 Hz cadence with jitter must not read as loss.
+        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, gapMs = 1_100L))
+    }
+
+    @Test
+    fun `first broadcast of a session is not a gap`() {
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, gapMs = 0L))
+    }
+
     @Test
     fun `floor just under the margin is not congested`() {
         val marginal = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB - 1

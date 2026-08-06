@@ -146,7 +146,11 @@ fun ReceiverSettingsScreen(
         ChannelSurveySection(
             survey = channelSurvey,
             inProgress = surveyInProgress,
-            enabled = bluetoothConnectionState == BluetoothConnectionState.Connected && !surveyInProgress,
+            // Ready, not Connected: Connected is a transient step the connection
+            // manager passes through on its way to Ready, so gating on it leaves the
+            // button permanently disabled.  Ready is the steady usable state, and is
+            // what the map screen gates on.
+            enabled = bluetoothConnectionState == BluetoothConnectionState.Ready && !surveyInProgress,
             onScan = { viewModel.requestChannelSurvey(service) },
             onPick = { channel ->
                 // Stage it rather than sending: the user still presses Update, which
