@@ -142,6 +142,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // other locator being switched off.
         const val CONFLICT_HOLD_MS = 8_000L
 
+        // A sweep is ~1 s of dwell plus BLE round trip. Generous enough that a slow
+        // link never trips it, short enough that a receiver which will never answer
+        // (firmware predating the survey) reports back promptly instead of hanging.
+        const val SURVEY_TIMEOUT_MS = 5_000L
+
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
         // the receiver may sit on the forward until its next safe window — so a
@@ -379,14 +384,38 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _surveyInProgress = MutableStateFlow(false)
     val surveyInProgress: StateFlow<Boolean> = _surveyInProgress.asStateFlow()
 
+    private var surveyTimeoutJob: Job? = null
+
     /** Ask the receiver to sweep. The receiver independently refuses while armed;
-     *  this only avoids sending a request we already know it will reject. */
+     *  this only avoids sending a request we already know it will reject.
+     *
+     *  Always armed with a timeout. There is no other way out of the in-progress
+     *  state, so anything that swallows the reply — a receiver whose firmware
+     *  predates the survey and simply never answers, a dropped BLE notification, a
+     *  reset mid-sweep — would otherwise leave the button disabled and the UI
+     *  showing "Scanning…" until the app was restarted. */
     fun requestChannelSurvey(service: BluetoothService?) {
         if (_surveyInProgress.value) return
         _channelSurvey.value = null
+        surveyTimeoutJob?.cancel()
+        if (service?.requestChannelSurvey() != true) {
+            _surveyInProgress.value = false
+            _channelSurvey.value = surveyFailed()
+            return
+        }
         _surveyInProgress.value = true
-        if (service?.requestChannelSurvey() != true) _surveyInProgress.value = false
+        surveyTimeoutJob = viewModelScope.launch {
+            delay(SURVEY_TIMEOUT_MS)
+            if (_surveyInProgress.value) {
+                _surveyInProgress.value = false
+                _channelSurvey.value = surveyFailed()
+            }
+        }
     }
+
+    private fun surveyFailed() = ChannelSurveyData.analyze(
+        ChannelSurveyData.Status.Unknown, emptyList(), _remoteReceiverConfig.value.channel,
+    )
 
     fun clearChannelSurvey() {
         _channelSurvey.value = null
@@ -1131,6 +1160,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             versionInfoStale.value = false
                         }
                         is ParsedMessage.ChannelSurvey -> {
+                            surveyTimeoutJob?.cancel()
                             _surveyInProgress.value = false
                             _channelSurvey.value = ChannelSurveyData.analyze(
                                 parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
