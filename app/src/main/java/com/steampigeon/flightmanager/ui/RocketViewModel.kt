@@ -1018,7 +1018,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // locator we are connected to can be commanded.  BluetoothService.locatorConnected
         // carries the reason it is *connected* and not merely authorized.
         val sendGateJob = viewModelScope.launch {
-            connectedLocatorId.collect { service.locatorConnected = it != null }
+            // Carries the id, not a flag: since ADR-0020 that same id addresses every
+            // locator-directed command, so authorising and addressing a send are one
+            // value and cannot disagree.
+            connectedLocatorId.collect { service.connectedLocatorId = it }
         }
         val packetJob = viewModelScope.launch {
             service.packets.collect { locatorMessage ->

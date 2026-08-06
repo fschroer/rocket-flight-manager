@@ -68,8 +68,25 @@ class WireLayoutTest {
             3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + Protocol.SURVEY_CONFIRM_COUNT,
         )
 
-    // FlightDataAck: C++ sizeof 42 (header 6 + transfer_id 2 + packet_count 2 + bitmap 32)
+    // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────
+    // Every command carries target_locator_id right after the header. The locator
+    // discards anything not addressed to its UID, so a size mismatch here does not
+    // merely garble a command — it makes every command silently do nothing.
+    private val targetIdSize = 4
+
+    // FlightDataAck: buildAck still produces the 42-byte body (header 6 +
+    // transfer_id 2 + packet_count 2 + bitmap 32); sendFlightDataAck splices the
+    // target in, so the C++ sizeof is 46.
     @Test fun flightDataAckSize() = assertEquals(42, FLIGHT_DATA_ACK_SIZE)
+    @Test fun flightDataAckOnWireCarriesTheTarget() =
+        assertEquals(46, FLIGHT_DATA_ACK_SIZE + targetIdSize)
+
+    // Formerly header-only, now header + target: C++ sizeof(TargetedRequest) == 10.
+    // Covers ArmRequest, DisarmRequest, FlightMetadataRequest, VersionRequest.
+    @Test fun targetedRequestSize() = assertEquals(10, Protocol.HEADER_SIZE + targetIdSize)
+
+    // FlightDataRequest and DeploymentTestRequest: header + target + one byte == 11.
+    @Test fun onePayloadByteCommandSize() = assertEquals(11, Protocol.HEADER_SIZE + targetIdSize + 1)
 
     // FlightMetadata: 10 records × 10 bytes = 100 payload
     @Test fun flightMetadataPayloadSize() = assertEquals(100, FLIGHT_METADATA_PAYLOAD_SIZE)

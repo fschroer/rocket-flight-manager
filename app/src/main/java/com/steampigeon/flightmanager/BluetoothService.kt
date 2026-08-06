@@ -335,10 +335,20 @@ class BluetoothService : Service() {
             Log.w(TAG, "sendFlightDataAck: unexpected size ${ackFrame.size}")
             return false
         }
-        // Recompute CRC over the frame with the crc field zeroed (already 0
+        // This path builds its own frame instead of going through sendMessage, so
+        // it needs the gate and the addressing applied by hand. It previously had
+        // NEITHER — an ack went out unconditionally and unaddressed, so a transfer
+        // could be acknowledged with no locator connected, and every locator on the
+        // channel saw the ack.
+        val target = connectedLocatorId ?: return false
+        // Splice target_locator_id in after the header (ADR-0020): 42 -> 46 bytes.
+        val frame = concatBytes(
+            concatBytes(ackFrame.copyOfRange(0, Protocol.HEADER_SIZE), u32le(target)),
+            ackFrame.copyOfRange(Protocol.HEADER_SIZE, ackFrame.size),
+        )
+        // Recompute CRC over the final frame with the crc field zeroed (already 0
         // from buildAck), then write it back into bytes [4..5].
-        val crc = computeMessageCrc(ackFrame)
-        val frame = ackFrame.copyOf()
+        val crc = computeMessageCrc(frame)
         frame[4] = (crc and 0xFF).toByte()
         frame[5] = ((crc shr 8) and 0xFF).toByte()
         return btManager.sendData(frame)
@@ -371,26 +381,41 @@ class BluetoothService : Service() {
     //
     // Gated on *connected*, not merely authorized (ADR-0006, "One connection at a
     // time"). The app can be authorized for several locators at once, and these
-    // messages carry no locator id — they reach whichever locator the receiver is
-    // relaying to. The weaker condition would let an Arm land on the wrong rocket.
-    @Volatile var locatorConnected: Boolean = false
+    // messages reach whichever locator the receiver is relaying to. The weaker
+    // condition would let an Arm land on the wrong rocket.
+    //
+    // Holds the connected locator's id rather than a flag, because since ADR-0020
+    // that id is ALSO what addresses the command. The thing that authorises a send
+    // and the thing that addresses it are now the same value, so they cannot drift
+    // apart — a command can never go out authorised but unaddressed.
+    @Volatile var connectedLocatorId: Long? = null
+
+    /** Receiver-directed messages go point-to-point over BLE and are never relayed,
+     *  so they need no locator and carry no target (ADR-0020 Decision 3). They stay
+     *  open with no locator connected so the user can still find and switch
+     *  channels — hunting for a clean channel is exactly what you do when nothing
+     *  is coming through. */
+    private fun isReceiverDirected(msgType: MsgType) =
+        msgType == MsgType.ReceiverCfgChgRequest ||
+                msgType == MsgType.ReceiverInfoRequest ||
+                msgType == MsgType.ChannelSurveyRequest
 
     @SuppressLint("MissingPermission")
     private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean {
-        // Receiver-directed messages stay open even with no locator connected, so
-        // the user can still find and switch channels. The survey belongs here for
-        // the same reason — and more so: hunting for a clean channel is exactly
-        // what you do when nothing is coming through.
-        val receiverDirected =
-            msgType == MsgType.ReceiverCfgChgRequest ||
-                    msgType == MsgType.ReceiverInfoRequest ||
-                    msgType == MsgType.ChannelSurveyRequest
-        if (!locatorConnected && !receiverDirected) return false
-        return btManager.sendData(buildMessage(msgType, payload))
+        if (isReceiverDirected(msgType)) {
+            return btManager.sendData(buildMessage(msgType, payload))
+        }
+        // Locator-directed: refuse unless we know WHICH locator, because that id is
+        // what stops every other locator on the channel from obeying (ADR-0020).
+        val target = connectedLocatorId ?: return false
+        return btManager.sendData(buildMessage(msgType, payload, target))
     }
 
-    private fun buildMessage(msgType: MsgType, payload: ByteArray?): ByteArray {
-        val payloadBytes = payload ?: ByteArray(0)
+    /** [target] is the locator's id for locator-directed commands (prepended to the
+     *  payload, immediately after the header), or null for receiver-directed ones. */
+    private fun buildMessage(msgType: MsgType, payload: ByteArray?, target: Long? = null): ByteArray {
+        val body = payload ?: ByteArray(0)
+        val payloadBytes = if (target == null) body else concatBytes(u32le(target), body)
         val header0 = PacketHeader(Protocol.SYSTEM_ID.toUByte(), msgType, 0u, 0u)
         val crc = computeMessageCrc(concatBytes(header0.toBytes(), payloadBytes)).toUShort()
         return concatBytes(header0.copy(crc = crc).toBytes(), payloadBytes)
@@ -438,6 +463,14 @@ class BluetoothService : Service() {
     // -------------------------------------------------------------------------
     // Utilities
     // -------------------------------------------------------------------------
+
+    /** uint32_t little-endian, matching the firmware's packed structs. */
+    private fun u32le(value: Long): ByteArray = byteArrayOf(
+        (value and 0xFF).toByte(),
+        ((value shr 8) and 0xFF).toByte(),
+        ((value shr 16) and 0xFF).toByte(),
+        ((value shr 24) and 0xFF).toByte(),
+    )
 
     private fun concatBytes(a: ByteArray, b: ByteArray?): ByteArray {
         if (b == null || b.isEmpty()) return a.copyOf()
