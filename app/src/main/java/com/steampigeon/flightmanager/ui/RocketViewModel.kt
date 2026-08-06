@@ -1037,6 +1037,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // authorized-but-not-connected sender is likewise not shown.
                             evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
+                            // PreLaunchData from the CONNECTED locator means it is
+                            // disarmed. Derived here, not in the framer, so another
+                            // locator on the channel cannot flip it (ADR-0020).
+                            if (BluetoothManagerRepository.armedState.value) {
+                                BluetoothManagerRepository.updateArmedState(false)
+                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                    LocatorMessageState.AckUpdated)
+                            }
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
                             _rocketState.update { currentState ->
@@ -1126,6 +1134,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 challengeable = false,
                             )
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
+                            // TelemetryData from the CONNECTED locator means it is
+                            // armed. Same reasoning as the PreLaunchData side.
+                            if (!BluetoothManagerRepository.armedState.value) {
+                                BluetoothManagerRepository.updateArmedState(true)
+                                BluetoothManagerRepository.updateLocatorArmedMessageState(
+                                    LocatorMessageState.AckUpdated)
+                            }
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, currentTime)
                             _rocketState.update { currentState ->

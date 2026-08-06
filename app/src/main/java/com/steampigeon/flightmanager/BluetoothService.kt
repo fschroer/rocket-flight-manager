@@ -219,22 +219,20 @@ class BluetoothService : Service() {
         if (bytes.size < Protocol.HEADER_SIZE) return Int.MAX_VALUE
         val msgType = MsgType.fromUByte(bytes[1].toUByte())
 
-        // Side-effect: track armed state from message type (unchanged from original)
-        when (msgType) {
-            MsgType.PreLaunchData -> {
-                if (BluetoothManagerRepository.armedState.value) {
-                    BluetoothManagerRepository.updateArmedState(false)
-                    BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.AckUpdated)
-                }
-            }
-            MsgType.TelemetryData -> {
-                if (!BluetoothManagerRepository.armedState.value) {
-                    BluetoothManagerRepository.updateArmedState(true)
-                    BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.AckUpdated)
-                }
-            }
-            else -> {}
-        }
+        // Armed state used to be tracked here, from the message type alone. It is now
+        // derived in RocketViewModel, inside the connected-locator gate.
+        //
+        // This function frames bytes; it runs before parsing, before authentication,
+        // and before anything knows WHOSE packet it is. Deriving state here meant any
+        // locator on the channel could set it: with two powered, the armed one's
+        // TelemetryData and the disarmed one's PreLaunchData flipped the flag against
+        // each other at the broadcast rate, while the name and telemetry on screen —
+        // which ARE gated — stayed correctly on the connected locator.
+        //
+        // Unsolicited broadcasts are the distinguishing case. Every other message the
+        // app reacts to is a response to an addressed request (ADR-0020), so it can
+        // only come from the connected locator. PreLaunchData and TelemetryData arrive
+        // from everyone, so anything derived from them has to be gated on the sender.
 
         // FlightData and FlightDataParity are variable-length up to MAX_PACKET_SIZE.
         // We accept anything up to the protocol maximum and let the CRC gate validity.
