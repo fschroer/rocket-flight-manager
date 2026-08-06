@@ -87,6 +87,55 @@ class LinkQualityTest {
         assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, elevated, quiet, gapMs = 1_100L))
     }
 
+    // ── Holes found by the second bench run ──────────────────────────────────────
+
+    @Test
+    fun `unknown floor sentinel matches the int16 the firmware actually sends`() {
+        // The firmware's kNoiseFloorUnknown is INT16_MIN and the field is an int16_t,
+        // so it arrives as -32768. Comparing against Int.MIN_VALUE never matched:
+        // "no sample" was read as a real floor, the baseline latched onto it, and
+        // every later reading looked ~32000 dB elevated -- so the app reported
+        // "channel is busy" essentially always.
+        assertEquals(Short.MIN_VALUE.toInt(), LinkQuality.NOISE_FLOOR_UNKNOWN)
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(-60, 9, LinkQuality.NOISE_FLOOR_UNKNOWN, quiet),
+        )
+        // ...and it must not become the session baseline.
+        assertEquals(
+            quiet,
+            LinkQuality.updateQuietestFloor(quiet, LinkQuality.NOISE_FLOOR_UNKNOWN),
+        )
+    }
+
+    @Test
+    fun `a channel busy since startup is still detected without a quiet baseline`() {
+        // The relative test assumes the channel was quiet at some point this session.
+        // When the interference is already present at startup the baseline absorbs
+        // it and nothing looks "elevated" -- the same class of failure as the
+        // receiver only sampling when packets arrive.
+        val busy = LinkQuality.BUSY_FLOOR_DBM
+        assertEquals(Verdict.Congested, LinkQuality.classify(-60, 9, busy, busy))
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, busy, busy, gapMs = LinkQuality.LOSSY_GAP_MS),
+        )
+    }
+
+    @Test
+    fun `a quiet floor is not called busy on absolute grounds`() {
+        val justQuiet = LinkQuality.BUSY_FLOOR_DBM - 1
+        assertEquals(Verdict.Normal, LinkQuality.classify(-60, 9, justQuiet, justQuiet))
+    }
+
+    @Test
+    fun `loss threshold agrees with the map's staleness timeout`() {
+        // messageTimeout in FlightMapScreen is 2000 ms. When these disagreed a single
+        // missed 1 Hz broadcast reddened the rocket at ~2.1 s without counting as
+        // loss, which is a red marker with no explanation beside it.
+        assertEquals(2_000L, LinkQuality.LOSSY_GAP_MS)
+    }
+
     @Test
     fun `first broadcast of a session is not a gap`() {
         val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB

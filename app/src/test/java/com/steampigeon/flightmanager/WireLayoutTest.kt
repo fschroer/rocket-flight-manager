@@ -3,6 +3,7 @@ package com.steampigeon.flightmanager
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
 import com.steampigeon.flightmanager.data.FlightEventIndex
+import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -46,6 +47,12 @@ class WireLayoutTest {
             Protocol.TELEMETRY_BASE_STRUCT_SIZE,
             Protocol.HEADER_SIZE + Protocol.TELEMETRY_MESSAGE_PAYLOAD_SIZE - linkTrailer,
         )
+
+    // noise_floor is an int16_t, so the firmware's kNoiseFloorUnknown (INT16_MIN)
+    // arrives as -32768. Comparing it against Kotlin's Int.MIN_VALUE silently never
+    // matched, so "no sample" was read as a real floor and poisoned the baseline.
+    @Test fun noiseFloorUnknownMatchesInt16Min() =
+        assertEquals(Short.MIN_VALUE.toInt(), LinkQuality.NOISE_FLOOR_UNKNOWN)
 
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)

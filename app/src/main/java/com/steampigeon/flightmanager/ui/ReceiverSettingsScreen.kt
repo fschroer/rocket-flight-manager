@@ -58,6 +58,8 @@ fun ReceiverSettingsScreen(
     val locatorConnected by viewModel.locatorConnected.collectAsState()
     val channelSurvey by viewModel.channelSurvey.collectAsState()
     val surveyInProgress by viewModel.surveyInProgress.collectAsState()
+    val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
+    val locatorConfigMessageState by viewModel.locatorConfigMessageState.collectAsState()
 
     // Keep the staged copy in sync with the remote config as long as the user
     // has not made any local edits.  This ensures that arriving PreLaunchData
@@ -146,6 +148,40 @@ fun ReceiverSettingsScreen(
         // Channel survey (ADR-0019 tier 3): sweep the band and rank channels by how
         // quiet they are. On demand only — a sweep costs ~1 s of deafness, and the
         // decision it informs is made once, on the ground.
+        // Progress for a survey-driven move.  The ADR-0011 cycle waits for
+        // PreLaunchData to resume on the new channel and may revert and retry once,
+        // so this can run for several seconds with the link legitimately down —
+        // silence there reads as a hang.
+        pendingChannelMove?.let { channel ->
+            val (text, color) = when (locatorConfigMessageState) {
+                LocatorMessageState.SendRequested,
+                LocatorMessageState.Sent ->
+                    stringResource(R.string.channel_move_in_progress, channel) to
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                LocatorMessageState.AckUpdated ->
+                    stringResource(R.string.channel_move_done, channel) to
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                LocatorMessageState.SendFailure ->
+                    stringResource(R.string.channel_move_failed) to
+                            MaterialTheme.colorScheme.error
+                LocatorMessageState.NotAcknowledged ->
+                    stringResource(R.string.channel_move_not_acknowledged, channel) to
+                            MaterialTheme.colorScheme.error
+                LocatorMessageState.Idle -> null to MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            text?.let {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(text = it, color = color, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.clearPendingChannelMove() }) {
+                        Text(stringResource(R.string.dismiss))
+                    }
+                }
+            }
+        }
+
         ChannelSurveySection(
             survey = channelSurvey,
             inProgress = surveyInProgress,

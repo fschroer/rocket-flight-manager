@@ -69,6 +69,10 @@
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
     <string name="survey_scanning">Scanning…</string>
+    <string name="channel_move_in_progress">Moving to channel %1$d… the link drops briefly while both devices switch.</string>
+    <string name="channel_move_done">Now on channel %1$d.</string>
+    <string name="channel_move_failed">Could not send the channel change. Check the receiver connection.</string>
+    <string name="channel_move_not_acknowledged">The locator did not confirm channel %1$d. It has been left on its previous channel.</string>
     <string name="survey_move_here">Move here</string>
     <string name="survey_point_receiver">Point receiver</string>
     <string name="survey_moves_both">Moves your locator to the chosen channel; the receiver follows automatically.</string>

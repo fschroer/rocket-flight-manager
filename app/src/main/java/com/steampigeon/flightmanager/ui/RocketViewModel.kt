@@ -440,7 +440,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * revert-and-retry recovery of ADR-0011 invariants 3 and 4 apply here too,
      * rather than a second, untested path to the same place.
      */
+    // Channel a survey pick is currently moving the system to, so the UI can name it
+    // while the ADR-0011 confirm/recover cycle runs.  That cycle can take several
+    // seconds (it waits for PreLaunchData to resume on the new channel, and may
+    // revert and retry once), which is far too long to leave with no feedback.
+    private val _pendingChannelMove = MutableStateFlow<Int?>(null)
+    val pendingChannelMove: StateFlow<Int?> = _pendingChannelMove.asStateFlow()
+
+    fun clearPendingChannelMove() { _pendingChannelMove.value = null }
+
     fun moveLocatorToChannel(service: BluetoothService?, channel: Int) {
+        _pendingChannelMove.value = channel
         val target = _remoteLocatorConfig.value.copy(loraChannel = channel)
         _locatorConfigMessageState.value = LocatorMessageState.SendRequested
         _locatorConfigMessageState.value =

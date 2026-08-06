@@ -41,9 +41,17 @@ object LinkQuality {
         Interference,
     }
 
-    /** Receiver reports this when it took no idle sample in the interval. Mirrors
-     *  the firmware's `kNoiseFloorUnknown` (INT16_MIN). */
-    const val NOISE_FLOOR_UNKNOWN = Int.MIN_VALUE
+    /**
+     * Receiver reports this when it took no idle sample in the interval.
+     *
+     * **Must equal the firmware's `kNoiseFloorUnknown`, which is `INT16_MIN`.** The
+     * field is an `int16_t` on the wire, so the app sees −32768 — not Kotlin's
+     * `Int.MIN_VALUE`. Using the latter meant the sentinel never matched: "no
+     * sample" was read as a real −32768 dBm floor, the session baseline latched
+     * onto it, and every subsequent reading looked 32000 dB "elevated". Pinned by
+     * `WireLayoutTest`.
+     */
+    const val NOISE_FLOOR_UNKNOWN = -32768
 
     /**
      * Above this the packet is arriving comfortably — roughly 30 dB above the
@@ -68,15 +76,38 @@ object LinkQuality {
     const val ELEVATED_FLOOR_MARGIN_DB = 12
 
     /**
+     * A floor at or above this is occupied on its own evidence, whatever the
+     * session baseline says.
+     *
+     * The relative test alone has a hole: it assumes the channel was quiet at some
+     * point this session, so the baseline is a fair reference. If the channel is
+     * already busy when the app starts — the normal case for someone investigating
+     * interference — the baseline absorbs the interferer and nothing ever looks
+     * elevated. That is the same failure as the receiver sampling only when packets
+     * arrive: the mechanism defeated by the condition it detects.
+     *
+     * −100 dBm is ~20 dB above the receiver's thermal floor at BW125 and well
+     * inside the range where SX126x RSSI is trustworthy, so it does not reintroduce
+     * the calibration problem that made an absolute threshold unattractive for the
+     * *rise* test.
+     */
+    const val BUSY_FLOOR_DBM = -100
+
+    /**
      * Gap since the previous accepted broadcast that means we missed at least one.
-     * Broadcasts are 1 Hz, so this is one clean miss plus jitter headroom.
      *
      * This exists because **a co-channel LoRa peer destroys packets by collision,
      * not by degradation.** The packets that survive a collision arrive pristine,
      * so RSSI and SNR both look perfect and the strong-but-noisy rule never fires —
      * while the user watches the locator drop out. Loss is the only observable.
+     *
+     * Deliberately equal to the map's `messageTimeout`, so that "the rocket marker
+     * went red" and "the app counts this as loss" mean the same thing. At 2500 ms
+     * they disagreed: a single missed 1 Hz broadcast reddens the marker at ~2.1 s
+     * but fell short of the threshold, producing exactly the reported symptom — a
+     * red rocket with no explanation next to it.
      */
-    const val LOSSY_GAP_MS = 2_500L
+    const val LOSSY_GAP_MS = 2_000L
 
     /**
      * @param rssi        packet RSSI in dBm
@@ -95,8 +126,14 @@ object LinkQuality {
         gapMs: Long = 0L,
     ): Verdict {
         val degraded = rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
-        val floorKnown = noiseFloor != NOISE_FLOOR_UNKNOWN && quietestFloor != NOISE_FLOOR_UNKNOWN
-        val elevated = floorKnown && noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
+        val haveFloor = noiseFloor != NOISE_FLOOR_UNKNOWN
+        val haveBaseline = quietestFloor != NOISE_FLOOR_UNKNOWN
+        // Two independent ways to be occupied: risen materially above this session's
+        // quietest reading, or loud enough that no baseline is needed to say so.
+        val risen = haveFloor && haveBaseline &&
+                noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
+        val loud = haveFloor && noiseFloor >= BUSY_FLOOR_DBM
+        val elevated = risen || loud
         val lossy = gapMs >= LOSSY_GAP_MS
 
         return when {
