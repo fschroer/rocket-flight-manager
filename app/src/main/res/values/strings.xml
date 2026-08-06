@@ -68,7 +68,8 @@
     <string name="link_interference">Interference on this channel — another transmitter is degrading your link. Consider another channel.</string>
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
-    <string name="survey_scanning">Scanning…</string>
+    <string name="survey_scanning">Scanning… (about 7 seconds)</string>
+    <string name="survey_confirmed_note">Candidates are listened to for a full second each, so an intermittent transmitter cannot hide between samples.</string>
     <string name="channel_move_in_progress">Moving to channel %1$d… the link drops briefly while both devices switch.</string>
     <string name="channel_move_done">Now on channel %1$d.</string>
     <string name="channel_move_failed">Could not send the channel change. Check the receiver connection.</string>

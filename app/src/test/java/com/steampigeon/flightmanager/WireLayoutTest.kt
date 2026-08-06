@@ -57,14 +57,15 @@ class WireLayoutTest {
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)
 
-    // ChannelSurveyResponse: C++ sizeof 73 → payload 67
-    // (status 1 + channel_count 1 + home_channel 1 + level[64]).
-    @Test fun channelSurveyPayloadSize() = assertEquals(67, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
+    // ChannelSurveyResponse: C++ sizeof 79 → payload 73 (status 1 + channel_count 1
+    // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]).
+    @Test fun channelSurveyPayloadSize() = assertEquals(73, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
     @Test fun surveyChannelCount() = assertEquals(64, Protocol.SURVEY_CHANNEL_COUNT)
-    @Test fun channelSurveyPayloadIsCountPlusThreeHeaderBytes() =
+    @Test fun surveyConfirmCount() = assertEquals(5, Protocol.SURVEY_CONFIRM_COUNT)
+    @Test fun channelSurveyPayloadIsItsParts() =
         assertEquals(
             Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE,
-            Protocol.SURVEY_CHANNEL_COUNT + 3,
+            3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + Protocol.SURVEY_CONFIRM_COUNT,
         )
 
     // FlightDataAck: C++ sizeof 42 (header 6 + transfer_id 2 + packet_count 2 + bitmap 32)

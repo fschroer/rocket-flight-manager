@@ -47,14 +47,27 @@ object ChannelSurvey {
         val status: Status,
         /** Quietest first. Empty unless [status] is [Status.Ok]. */
         val ranked: List<Ranked>,
-        /** True when every channel is loud — advise moving the transmitter, not switching. */
+        /** True when every confirmed channel is loud — advise moving the transmitter. */
         val allChannelsHot: Boolean,
         val homeChannel: Int,
+        /**
+         * Channels the receiver dwelled on for a full broadcast period. Only these
+         * are evidence that a channel is free: the coarse pass dwells ~12 ms, while
+         * a locator is on air ~138 ms per second, so it reads an occupied channel
+         * as quiet about three times out of four.
+         */
+        val confirmed: List<Ranked>,
     ) {
-        /** Best channels to offer, quietest first. Empty when the ranking is not actionable. */
+        /**
+         * Channels to offer, quietest first.
+         *
+         * Drawn from [confirmed] only, never from the coarse ranking. Suggesting an
+         * unconfirmed channel is how a sweep ends up recommending the channel the
+         * locators are already sitting on.
+         */
         val suggestions: List<Ranked>
             get() = if (status != Status.Ok || allChannelsHot) emptyList()
-                    else ranked.take(SUGGESTION_COUNT)
+                    else confirmed.take(SUGGESTION_COUNT)
 
         /** Where the current channel sits in the ranking, 1-based. Null if unknown. */
         val homeRank: Int?
@@ -68,16 +81,29 @@ object ChannelSurvey {
      * @param levels  peak dBm per channel, index == channel number
      * @param homeChannel the receiver's current channel
      */
-    fun analyze(status: Status, levels: List<Int>, homeChannel: Int): Result {
+    fun analyze(
+        status: Status,
+        levels: List<Int>,
+        homeChannel: Int,
+        confirmedChannels: List<Int> = emptyList(),
+    ): Result {
         if (status != Status.Ok || levels.isEmpty()) {
-            return Result(status, emptyList(), allChannelsHot = false, homeChannel = homeChannel)
+            return Result(status, emptyList(), allChannelsHot = false,
+                homeChannel = homeChannel, confirmed = emptyList())
         }
         val ranked = levels
             .mapIndexed { channel, level -> Ranked(channel, level) }
             // Stable tie-break on channel number, so an unchanged RF environment
             // produces an unchanged recommendation rather than shuffling each sweep.
             .sortedWith(compareBy({ it.level }, { it.channel }))
-        val allHot = ranked.first().level >= ALL_HOT_DBM
-        return Result(status, ranked, allHot, homeChannel)
+        val confirmed = confirmedChannels
+            .filter { it in levels.indices }
+            .map { Ranked(it, levels[it]) }
+            .sortedWith(compareBy({ it.level }, { it.channel }))
+        // Judged on the confirmed set, since those are the only readings that mean
+        // anything. If every channel we actually verified is loud, the receiver is
+        // swamped broadband and no channel change will help.
+        val allHot = confirmed.isNotEmpty() && confirmed.first().level >= ALL_HOT_DBM
+        return Result(status, ranked, allHot, homeChannel, confirmed)
     }
 }

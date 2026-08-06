@@ -95,6 +95,9 @@ data class ChannelSurveyParsed(
     val status: ChannelSurveyData.Status,
     val homeChannel: Int,
     val levels: List<Int>,      // dBm, index == channel; empty when refused
+    // Channels that received the long confirmation dwell. Only these are evidence
+    // of a free channel — a coarse reading routinely misses a 1 Hz emitter.
+    val confirmed: List<Int>,
 )
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -142,10 +145,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // other locator being switched off.
         const val CONFLICT_HOLD_MS = 8_000L
 
-        // A sweep is ~1 s of dwell plus BLE round trip. Generous enough that a slow
-        // link never trips it, short enough that a receiver which will never answer
-        // (firmware predating the survey) reports back promptly instead of hanging.
-        const val SURVEY_TIMEOUT_MS = 5_000L
+        // A sweep is a ~0.8 s coarse pass plus a full broadcast period on each of the
+        // five shortlisted channels — about 7 s — plus the BLE round trip. Generous
+        // enough that a slow link never trips it, short enough that a receiver which
+        // will never answer (firmware predating the survey) reports back promptly
+        // instead of hanging. Must be raised with kSurveyConfirmDwellMs.
+        const val SURVEY_TIMEOUT_MS = 15_000L
 
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
@@ -1215,6 +1220,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             _surveyInProgress.value = false
                             _channelSurvey.value = ChannelSurveyData.analyze(
                                 parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
+                                parsed.msg.confirmed,
                             )
                             // The sweep left the home channel for ~1 s, so the noise-floor
                             // baseline built from before it describes a stale picture of a
@@ -1928,7 +1934,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // corrupt frame must not throw inside the packet collector.
         val available = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CHANNEL_COUNT)
         val levels = (0 until count.coerceAtMost(available)).map { Bytes.i8(frame[o + it]) }
-        return ChannelSurveyParsed(status, home, levels)
+        o += Protocol.SURVEY_CHANNEL_COUNT
+        // Confirmed list, bounded against the frame like the levels above.
+        val confirmed = if (o < frame.size) {
+            val confirmedCount = Bytes.u8(frame[o]); o += 1
+            val room = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CONFIRM_COUNT)
+            (0 until confirmedCount.coerceAtMost(room)).map { Bytes.u8(frame[o + it]) }
+        } else emptyList()
+        return ChannelSurveyParsed(status, home, levels, confirmed)
     }
 
     fun parseDeploymentTest (frame: ByteArray): DeploymentTestParsed {

@@ -405,6 +405,10 @@ private fun ChannelSurveySection(
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 SurveyNote(
+                    stringResource(R.string.survey_confirmed_note),
+                    MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SurveyNote(
                     stringResource(R.string.survey_caveat),
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
