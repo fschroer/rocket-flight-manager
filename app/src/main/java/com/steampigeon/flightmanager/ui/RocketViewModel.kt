@@ -324,6 +324,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // the link as healthy for every packet the user could actually see.
     @Volatile private var lastLossMs = 0L
 
+    // Wall clock of the last broadcast received from a locator that is NOT the
+    // connected one. Deliberately separate from lastConflictFrameMs, which drives
+    // the banner and is suppressed once the user dismisses it: this is the RF fact,
+    // and dismissing a banner must not hide the interference from the classifier.
+    @Volatile private var lastForeignBroadcastMs = 0L
+
     /**
      * Classify the link for a just-accepted broadcast.  Call this *before* the
      * rocketState update, not inside it: it mutates [quietestNoiseFloor], and an
@@ -342,6 +348,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         return LinkQuality.classify(
             rssi, snr, noiseFloor, quietestNoiseFloor,
             lossy = LinkQuality.isLossy(lastLossMs, currentTime),
+            // Another locator decoded on our channel. Reuses the loss window since
+            // it describes the same thing — how recently the channel was contested.
+            foreignLocator = LinkQuality.isLossy(lastForeignBroadcastMs, currentTime),
         )
     }
 
@@ -520,6 +529,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             lastPrelaunchLocatorId = locatorId
             lastPrelaunchDeviceName = deviceName
         }
+        // Any broadcast from a locator that is not the connected one means the
+        // channel is shared, whatever we go on to decide about authorization or
+        // banners. Recorded first so no later branch can lose it.
+        val connectedNow = _connectedLocatorId.value
+        if (connectedNow != null && connectedNow != locatorId)
+            lastForeignBroadcastMs = System.currentTimeMillis()
+
         val knownKey = _knownLocators.value[locatorId]?.passwordKey?.toLong()?.and(0xFFFFFFFFL)
         val authorized =
             (knownKey != null && LocatorAuth.verifyFrame(frame, knownKey, baseSize)) ||
@@ -603,6 +619,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         lastConnectedFrameMs = 0L
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         lastLossMs = 0L
+        lastForeignBroadcastMs = 0L
         lastConflictFrameMs = 0L
         _conflictLocatorId.value = null
         _challenge.value = null

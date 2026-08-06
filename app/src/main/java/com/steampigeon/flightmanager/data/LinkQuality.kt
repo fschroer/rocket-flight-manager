@@ -27,6 +27,19 @@ package com.steampigeon.flightmanager.data
  *
  * The noise floor adds the case packets cannot report at all: a channel busy with
  * traffic we are winning against ([Congested] — informational, no call to action).
+ *
+ * **Another locator on the channel outranks all of it, and is the case the RSSI
+ * signals kept failing to catch.** LoRa capture is strong: when two locators
+ * overlap, the receiver locks onto the first preamble and demodulates that packet
+ * cleanly, while the other is never heard at all. Nothing fails a CRC — the wrong
+ * packet *succeeded* — so there is no corruption to measure, no degraded SNR, and
+ * often no elevated floor either, because the sampler and the interferer take
+ * turns. The only trace left is a gap where our broadcast should have been.
+ *
+ * But the app is meanwhile *receiving and identifying the other locator*, because
+ * the receiver relays every broadcast on the channel. That is not evidence of
+ * interference to be inferred from power measurements — it is the interference,
+ * decoded, with a serial number on it.
  */
 object LinkQuality {
 
@@ -156,6 +169,9 @@ object LinkQuality {
      * @param lossy       whether a broadcast has been missed recently — see
      *                    [isLossy], which is what keeps this from being a
      *                    single-packet judgement
+     * @param foreignLocator whether another locator's broadcast has been received
+     *                    on this channel recently — see the note below, this is
+     *                    the strongest evidence available and needs no inference
      */
     fun classify(
         rssi: Int,
@@ -163,6 +179,7 @@ object LinkQuality {
         noiseFloor: Int,
         quietestFloor: Int,
         lossy: Boolean = false,
+        foreignLocator: Boolean = false,
     ): Verdict {
         val degraded = rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
         val haveFloor = noiseFloor != NOISE_FLOOR_UNKNOWN
@@ -172,7 +189,10 @@ object LinkQuality {
         val risen = haveFloor && haveBaseline &&
                 noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
         val loud = haveFloor && noiseFloor >= BUSY_FLOOR_DBM
-        val elevated = risen || loud
+        // A foreign locator on our channel is not evidence OF occupancy, it IS
+        // occupancy — decoded, identified, unambiguous. See the class note on why
+        // this outranks every RSSI-derived signal here.
+        val elevated = risen || loud || foreignLocator
         return when {
             // Loud but dirty. Reported whether or not the floor corroborates: a
             // continuous interferer raises the floor, but one that transmits only

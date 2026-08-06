@@ -172,6 +172,43 @@ class LinkQualityTest {
         assertEquals(Verdict.Congested, tick(1_000L))
     }
 
+    // ── Another locator on the channel (the case RSSI could never catch) ─────────
+    //
+    // LoRa capture is strong: when two locators overlap, the receiver locks onto the
+    // first preamble and decodes THAT packet cleanly while ours is never heard.
+    // Nothing fails a CRC, nothing degrades an SNR, and the noise floor often stays
+    // quiet because the sampler and the interferer take turns. Bench evidence: with
+    // two locators colliding, the receiver reported bad frames exactly once, and
+    // that was a different event. Meanwhile the app was receiving and identifying
+    // the other locator on every one of its broadcasts.
+
+    @Test
+    fun `another locator on the channel is interference when we are losing packets`() {
+        // Quiet floor, pristine packet -- every RSSI-derived signal says healthy.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, quiet, quiet, lossy = true, foreignLocator = true),
+        )
+    }
+
+    @Test
+    fun `sharing a channel without losing packets is only congestion`() {
+        assertEquals(
+            Verdict.Congested,
+            LinkQuality.classify(-60, 9, quiet, quiet, lossy = false, foreignLocator = true),
+        )
+    }
+
+    @Test
+    fun `loss with no other locator and a quiet channel still says nothing`() {
+        // A locator switched off or out of range. The foreign-locator signal is what
+        // separates this from co-channel contention, so it must not fire alone.
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(-60, 9, quiet, quiet, lossy = true, foreignLocator = false),
+        )
+    }
+
     // ── Holes found by the second bench run ──────────────────────────────────────
 
     @Test
