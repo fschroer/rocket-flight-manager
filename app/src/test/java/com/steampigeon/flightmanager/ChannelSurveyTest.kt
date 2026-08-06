@@ -303,6 +303,34 @@ class ChannelSurveyTest {
     }
 
     @Test
+    fun `the home channel is reported separately, not as another locator`() {
+        // Home is always confirmed and normally decodes frames -- our own locator
+        // transmits there. Calling that "another locator" would be plainly wrong.
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -115 }, homeChannel = 40,
+            confirmedChannels = listOf(40, 11, 63),
+            confirmedFrames   = listOf(3, 0, 0),
+        )
+        assertTrue(r.homeChannelInUse)
+        assertTrue("home must not appear as a foreign locator", r.occupied.isEmpty())
+        assertTrue("nor be suggested as a clean channel", r.suggestions.none { it.channel == 40 })
+        assertEquals(listOf(11, 63), r.suggestions.map { it.channel })
+    }
+
+    @Test
+    fun `a quiet home channel is not reported as in use`() {
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -115 }, homeChannel = 40,
+            confirmedChannels = listOf(40, 11),
+            confirmedFrames   = listOf(0, 0),
+        )
+        assertFalse(r.homeChannelInUse)
+        // Ordered by (level, channel), so at equal levels the lower channel leads;
+        // home gets no special ranking, only a guaranteed confirm slot.
+        assertEquals(listOf(11, 40), r.suggestions.map { it.channel })
+    }
+
+    @Test
     fun `a missing frame list degrades to no exclusions`() {
         // An older receiver sends no frame counts. Suggestions must still work.
         val r = ChannelSurvey.analyze(

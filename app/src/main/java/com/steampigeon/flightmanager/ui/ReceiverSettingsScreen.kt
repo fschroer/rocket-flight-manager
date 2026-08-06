@@ -422,6 +422,17 @@ private fun ChannelSurveySection(
                 )
                 // Naming the channels that were excluded, and why, so a short list
                 // does not read as a failed scan.
+                if (survey.homeChannelInUse) {
+                    SurveyNote(
+                        stringResource(
+                            if (locatorConnected) R.string.survey_home_in_use_own
+                            else R.string.survey_home_in_use_other,
+                            survey.homeChannel,
+                        ),
+                        if (locatorConnected) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
+                    )
+                }
                 survey.occupied.forEach { o ->
                     SurveyNote(
                         stringResource(R.string.survey_channel_occupied, o.channel),

@@ -124,8 +124,25 @@ object ChannelSurvey {
                     // "a locator near me is loud on every channel", and this can.
                     else confirmed.filterNot { it.occupiedByLocator }.take(SUGGESTION_COUNT)
 
-        /** Confirmed channels that have a locator on them — shown, never suggested. */
-        val occupied: List<Ranked> get() = confirmed.filter { it.occupiedByLocator }
+        /**
+         * Confirmed channels with a locator on them, **excluding the home channel**.
+         *
+         * Home is always confirmed and normally decodes frames, because that is
+         * where our own locator transmits. Reporting it as "another locator" would
+         * be plainly wrong, so it is carried separately as [homeChannelInUse].
+         */
+        val occupied: List<Ranked>
+            get() = confirmed.filter { it.occupiedByLocator && it.channel != homeChannel }
+
+        /**
+         * Whether a locator was decoded on the channel we are currently using.
+         *
+         * With a locator connected this is expected — it is ours — and confirms the
+         * scan is measuring what it claims to. With none connected it means someone
+         * else is on your channel.
+         */
+        val homeChannelInUse: Boolean
+            get() = confirmed.any { it.channel == homeChannel && it.occupiedByLocator }
 
         /** Where the current channel sits in the ranking, 1-based. Null if unknown. */
         val homeRank: Int?
