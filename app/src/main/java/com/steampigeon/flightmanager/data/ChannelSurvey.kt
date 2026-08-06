@@ -64,9 +64,19 @@ object ChannelSurvey {
          * Drawn from [confirmed] only, never from the coarse ranking. Suggesting an
          * unconfirmed channel is how a sweep ends up recommending the channel the
          * locators are already sitting on.
+         *
+         * Offered **even when [allChannelsHot]**. A transmitter a few feet from the
+         * receiver puts a broadband floor on every channel at once, so everything
+         * reads loud — but the ranking underneath is still correct, and the caller
+         * still has to choose something. A bench sweep with a spare locator two feet
+         * away confirmed channels at −52 and −57 dBm (adjacent to the occupied one)
+         * against −71 dBm elsewhere; −71 was the near-field floor, meaning those
+         * channels carried no traffic of their own and would be clean the moment the
+         * spare was moved. Withholding them left the user with a correct warning and
+         * no way to act on it. The warning is shown alongside, not instead.
          */
         val suggestions: List<Ranked>
-            get() = if (status != Status.Ok || allChannelsHot) emptyList()
+            get() = if (status != Status.Ok) emptyList()
                     else confirmed.take(SUGGESTION_COUNT)
 
         /** Where the current channel sits in the ranking, 1-based. Null if unknown. */

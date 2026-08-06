@@ -95,14 +95,33 @@ class ChannelSurveyTest {
     // ── All channels hot ─────────────────────────────────────────────────────────
 
     @Test
-    fun `all channels hot yields no suggestions`() {
+    fun `all channels hot still ranks, because the ranking is still correct`() {
+        // A transmitter a few feet away puts a broadband floor on every channel, so
+        // everything reads loud. That is worth warning about, but the ordering
+        // underneath remains valid and the user still has to pick something.
         val levels = List(64) { -60 - (it % 3) }
         val r = ChannelSurvey.analyze(
             Status.Ok, levels, homeChannel = 0, confirmedChannels = listOf(0, 1, 2, 3, 4),
         )
         assertTrue(r.allChannelsHot)
-        assertTrue("must not recommend a channel when everything is saturated",
-            r.suggestions.isEmpty())
+        assertTrue("warning must not remove the user's ability to choose",
+            r.suggestions.isNotEmpty())
+    }
+
+    @Test
+    fun `the near-field bench case ranks the quietest channels above the adjacent ones`() {
+        // Real trace, spare locator ~2 ft from the receiver, both locators on ch 0.
+        // -71 was the broadband near-field floor; ch 1 and 2 read louder because they
+        // are adjacent to the occupied channel and carry genuine leakage. Channels at
+        // the bare floor carry no traffic of their own and are the right answer.
+        val levels = MutableList(64) { -71 }
+        levels[1] = -52
+        levels[2] = -57
+        val r = ChannelSurvey.analyze(
+            Status.Ok, levels, homeChannel = 0, confirmedChannels = listOf(1, 2, 22, 23, 24),
+        )
+        assertTrue(r.allChannelsHot)
+        assertEquals(listOf(22, 23, 24, 2, 1), r.suggestions.map { it.channel })
     }
 
     @Test
@@ -115,7 +134,7 @@ class ChannelSurveyTest {
             Status.Ok, levels, homeChannel = 0, confirmedChannels = listOf(1, 2, 3),
         )
         assertTrue(r.allChannelsHot)
-        assertTrue(r.suggestions.isEmpty())
+        assertTrue(r.suggestions.none { it.channel == 0 })
     }
 
     @Test

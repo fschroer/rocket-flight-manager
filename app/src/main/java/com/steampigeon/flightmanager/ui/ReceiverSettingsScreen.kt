@@ -353,12 +353,17 @@ private fun ChannelSurveySection(
                 MaterialTheme.colorScheme.error,
             )
 
-            survey.allChannelsHot -> SurveyNote(
-                stringResource(R.string.survey_all_hot),
-                MaterialTheme.colorScheme.error,
-            )
-
             else -> {
+                // Shown ABOVE the list, not instead of it. Everything reading loud
+                // means a transmitter is very close, which is the important message
+                // — but the ranking below it is still correct, and refusing to show
+                // it leaves a correct warning with no way to act on it.
+                if (survey.allChannelsHot) {
+                    SurveyNote(
+                        stringResource(R.string.survey_all_hot),
+                        MaterialTheme.colorScheme.error,
+                    )
+                }
                 survey.homeRank?.let { rank ->
                     SurveyNote(
                         stringResource(R.string.survey_home_rank, survey.homeChannel, rank),
