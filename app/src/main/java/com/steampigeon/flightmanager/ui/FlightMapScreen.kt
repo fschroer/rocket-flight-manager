@@ -239,6 +239,22 @@ private fun LatLng.isFix() = validLatLng(latitude, longitude)
  * word the no-position case themselves rather than appending "location unknown"
  * to a sentence that was about to quote one.
  */
+/**
+ * Whether the rocket is FLYING — the predicate almost every piece of flight UI
+ * actually wants, as distinct from whether it is armed.
+ *
+ * Those were the same thing until #36 let a disarmed locator fly. Several places
+ * were gated on `armedState` and so went dead through a disarmed flight: the
+ * stats panel, the ascent/descent callouts, the flight-event announcements and
+ * the heads-up gauges. Armed-and-waiting still counts as in flight, so the armed
+ * path behaves exactly as before.
+ *
+ * Defined once because the failure mode is silent — a stale copy of this test
+ * does not break, it just quietly stops talking.
+ */
+private fun isInFlight(armedState: Boolean, state: RocketState): Boolean =
+    armedState || state.flightState != FlightStates.WaitingLaunch
+
 private fun launchRelativePhrase(state: RocketState, vector: Vector?): String? =
     if (state.gpsStatus == SensorHealth.Ok && vector != null)
         " ${vector.distance} meters ${vector.ordinal} of launch point."
@@ -414,7 +430,7 @@ fun HomeScreen(
             handheldCameraAzimuth, azimuthToLocator, handheldDevicePitch, locatorElevation,
             rocketSpeed = rocketState.velocity,
             rocketAttitude = rocketState.attitude,
-            armedState = armedState,
+            inFlight = isInFlight(armedState, rocketState),
             lastPreLaunchMessageAge = lastPreLaunchMessageAge,
         )
     } else {
@@ -534,7 +550,7 @@ private fun FlightSpeechAnnouncer(
 
     // Announces discrete flight state transitions (apogee, drogue/main deploy, landing).
     LaunchedEffect(rocketState.flightState) {
-        if (!armedState || rocketState.flightState <= receivedState) return@LaunchedEffect
+        if (!isInFlight(armedState, rocketState) || rocketState.flightState <= receivedState) return@LaunchedEffect
         receivedState = rocketState.flightState
 
         // The locator's own landing detection ends the flight, and it is the
@@ -671,8 +687,11 @@ private fun FlightSpeechAnnouncer(
     // are arriving to drive a recomposition.
     val currentRocketState by rememberUpdatedState(rocketState)
     val currentVector by rememberUpdatedState(vectorFromLaunch)
-    LaunchedEffect(armedState) {
-        if (!armedState) return@LaunchedEffect
+    // Keyed on inFlight, not armedState: during a disarmed flight armedState
+    // never changes, so an effect keyed on it would never start.
+    val inFlight = isInFlight(armedState, rocketState)
+    LaunchedEffect(inFlight) {
+        if (!inFlight) return@LaunchedEffect
         var lastDescentWarningTime = 0L
         // Link and GPS health are edge-triggered: each says something when the
         // state changes, not while it persists, so a long dropout is one sentence
@@ -1920,7 +1939,7 @@ fun LocatorStats(
                 // Same reasoning as the layout below: a disarmed rocket in flight
                 // is exactly when someone wants to hear state and altitude without
                 // looking, so this cannot be gated on arm state either (#36).
-                if (armedState || rocketState.flightState != FlightStates.WaitingLaunch)
+                if (isInFlight(armedState, rocketState))
                     textToSpeech?.speak(
                         "${locatorConfig.deviceName}, ${rocketState.flightState}, ${rocketState.altitudeAboveGroundLevel} meters",
                         TextToSpeech.QUEUE_FLUSH, null, null
@@ -1966,7 +1985,7 @@ fun LocatorStats(
         // is what "the stats area didn't change" looked like.
         //
         // Armed-and-waiting still gets the flight layout, exactly as before.
-        val inFlight = armedState || rocketState.flightState != FlightStates.WaitingLaunch
+        val inFlight = isInFlight(armedState, rocketState)
 
         // ── Telemetry rows ────────────────────────────────────────────────────
         val dst = if (rocketState.latitude != 0.0)
@@ -2311,7 +2330,9 @@ fun CameraPreviewScreen(
     locatorElevation: Float,
     rocketSpeed: Float = 0f,
     rocketAttitude: Quaternionf = Quaternionf.IDENTITY,
-    armedState: Boolean = false,
+    // Whether the rocket is FLYING, not whether it is armed — this screen has no
+    // RocketState to decide for itself, so the caller passes the verdict (#36).
+    inFlight: Boolean = false,
     lastPreLaunchMessageAge: Long = Long.MAX_VALUE,
 ) {
     val context = LocalContext.current
@@ -2517,7 +2538,7 @@ fun CameraPreviewScreen(
                         "${ld.toInt()}°", vLeft - 4.dp.toPx(), ly2 + labelPx / 3f, vLabelPaint)
             }
 
-            if (armedState && lastPreLaunchMessageAge < messageTimeout) {
+            if (inFlight && lastPreLaunchMessageAge < messageTimeout) {
                 // ── Velocity arc gauge (top-left) ─────────────────────────────
                 drawVelocityGauge(
                     speed = rocketSpeed,
