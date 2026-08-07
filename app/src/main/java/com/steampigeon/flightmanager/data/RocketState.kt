@@ -148,16 +148,35 @@ enum class NoseAxis(val value: UByte) {
  * exact failure this whole ADR started from. The operator should be able to see
  * that the system is still watching and merely holding its tongue.
  */
-enum class PadAlertState(val value: UByte) {
-    Quiet(0u),
-    Alerting(1u),
-    Snoozed(2u);
+enum class PadAlertState {
+    Quiet,
+    Alerting,
+    Snoozed;
 
     companion object {
-        // Unknown values read as Alerting, never as Quiet: an unrecognised
-        // verdict from a newer locator must not present as "nothing wrong".
-        fun fromUByte(v: UByte): PadAlertState =
-            entries.firstOrNull { it.value == v } ?: if (v == 0u.toUByte()) Quiet else Alerting
+        /**
+         * Wire encoding: 0 quiet, 1 alerting, 2+n snoozed with n minutes left.
+         *
+         * Anything unrecognised resolves to a warning, never to [Quiet] — a
+         * value this build cannot interpret must not present as "nothing wrong".
+         */
+        fun fromUByte(v: UByte): PadAlertState = when (v.toInt()) {
+            0 -> Quiet
+            1 -> Alerting
+            else -> Snoozed
+        }
+
+        /** Minutes of snooze left, 0 unless the byte encodes a snooze. */
+        fun snoozeMinutesFromUByte(v: UByte): Int =
+            if (v.toInt() >= SNOOZE_BASE) v.toInt() - SNOOZE_BASE else 0
+
+        private const val SNOOZE_BASE = 2
+
+        /** Ceiling the locator clamps total remaining snooze to. */
+        const val SNOOZE_CEILING_MINUTES = 15
+
+        /** Added per tap; the locator accumulates and clamps to the ceiling. */
+        const val SNOOZE_STEP_MINUTES = 5
     }
 }
 
@@ -476,6 +495,7 @@ data class PrelaunchParsed(
     // A verdict, not raw inputs: the locator judges it at 20 Hz, this message
     // arrives at 1 Hz, and re-deriving quiescence from that would be guesswork.
     val padAlert: PadAlertState,
+    val padAlertSnoozeMinutes: Int,   // uint8_t, decoded from the same byte
     val locatorId: Long,          // uint32_t — cleartext STM MPU UID
     val authTag: Long,            // uint32_t — password-seeded checksum from the locator
     val receiverChannel: Int,     // uint8_t
@@ -581,6 +601,16 @@ object BluetoothManagerRepository {
     // bystander locator on the channel must not be able to raise this.
     private val _padAlert = MutableStateFlow(PadAlertState.Quiet)
     val padAlert: StateFlow<PadAlertState> = _padAlert.asStateFlow()
+
+    // Minutes of snooze the locator reports remaining. Read back rather than
+    // tracked locally so repeated taps show real accumulated time, and so an
+    // app restart mid-snooze still shows the truth.
+    private val _padAlertSnoozeMinutes = MutableStateFlow(0)
+    val padAlertSnoozeMinutes: StateFlow<Int> = _padAlertSnoozeMinutes.asStateFlow()
+
+    fun updatePadAlertSnoozeMinutes(minutes: Int) {
+        _padAlertSnoozeMinutes.value = minutes
+    }
 
     private val _locatorArmedMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
     val locatorArmedMessageState: StateFlow<LocatorMessageState> = _locatorArmedMessageState.asStateFlow()

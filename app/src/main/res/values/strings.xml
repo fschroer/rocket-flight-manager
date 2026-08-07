@@ -7,9 +7,14 @@
     <string name="armed_state_armed">Armed</string>
     <string name="armed_state_arming">Arming</string>
     <string name="armed_state_disarmed">Disarmed</string>
-    <string name="pad_alert_banner">ROCKET ON PAD — NOT ARMED</string>
-    <string name="pad_alert_snoozed">NOT ARMED — alert snoozed</string>
-    <string name="pad_alert_snooze_action">Snooze 15 min</string>
+    <!-- Second line names where the snooze lives. Without it the control is
+         behind a tap-to-expand the operator has no reason to try mid-alarm —
+         found unfindable on the bench, 2026-08-07. "Top panel" rather than
+         "rocket panel": the latter is internal naming the operator never sees. -->
+    <string name="pad_alert_banner">ROCKET ON PAD — NOT ARMED\ntap top panel to snooze</string>
+    <string name="pad_alert_snoozed">NOT ARMED — alert snoozed %1$d min</string>
+    <string name="pad_alert_snooze_action">Snooze %1$d min</string>
+    <string name="pad_alert_snooze_more">Snoozed %1$d min — add %2$d</string>
     <string name="pad_alert_speech">Warning. Rocket is on the pad and not armed.</string>
     <string name="armed_state_disarming">Disarming</string>
     <string name="back_button">Back</string>

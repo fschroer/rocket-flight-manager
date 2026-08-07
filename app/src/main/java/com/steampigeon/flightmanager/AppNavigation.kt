@@ -56,6 +56,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
@@ -356,7 +357,15 @@ fun RocketApp(
                 HomeScreen(
                     navController, viewModel, permissionsState, textToSpeech,
                     onRescan = { btManager?.startScan() },
-                    onSnoozePadAlert = { BluetoothManagerRepository.requestPadAlertSnooze(15) },
+                    // Must be the SAME constant the button label renders. These were
+                    // separately authored literals once (label 5, payload 15), so one
+                    // tap jumped straight to the ceiling and read as the snooze
+                    // incrementing by itself.
+                    onSnoozePadAlert = {
+                        BluetoothManagerRepository.requestPadAlertSnooze(
+                            PadAlertState.SNOOZE_STEP_MINUTES
+                        )
+                    },
                     modifier
                 )
             }

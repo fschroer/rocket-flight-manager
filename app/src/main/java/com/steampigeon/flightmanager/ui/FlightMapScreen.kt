@@ -6,6 +6,8 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.location.Location
+import android.os.Vibrator
+import android.os.VibrationEffect
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.widget.Toast
@@ -333,6 +335,7 @@ fun HomeScreen(
         ?.takeIf { it.isNotEmpty() } ?: receiverConfig.deviceName
     val armedState = BluetoothManagerRepository.armedState.collectAsState().value
     val padAlert = BluetoothManagerRepository.padAlert.collectAsState().value
+    val padAlertSnoozeMinutes = BluetoothManagerRepository.padAlertSnoozeMinutes.collectAsState().value
     val locatorArmedMessageState = BluetoothManagerRepository.locatorArmedMessageState.collectAsState().value
     val orientation = LocalConfiguration.current.orientation
     val hasCompass = context.packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS)
@@ -399,6 +402,7 @@ fun HomeScreen(
         rocketState = rocketState,
         armedState = armedState,
         padAlert = padAlert,
+        padAlertSnoozeMinutes = padAlertSnoozeMinutes,
         locatorConfig = locatorConfig,
         locatorLatLng = locatorLatLng,
         viewModel = viewModel,
@@ -454,6 +458,7 @@ fun HomeScreen(
                         rocketState = rocketState,
                         armedState = armedState,
                         padAlert = padAlert,
+                        padAlertSnoozeMinutes = padAlertSnoozeMinutes,
                         receiverDeviceName = receiverDeviceName,
                         locatorConfig = locatorConfig,
                         locatorArmedMessageState = locatorArmedMessageState,
@@ -493,6 +498,7 @@ private fun FlightSpeechAnnouncer(
     rocketState: RocketState,
     armedState: Boolean,
     padAlert: PadAlertState,
+    padAlertSnoozeMinutes: Int,
     locatorConfig: LocatorConfig,
     locatorLatLng: LatLng,
     viewModel: RocketViewModel,
@@ -632,6 +638,30 @@ private fun FlightSpeechAnnouncer(
             delay(padAlertRepeatMillis)
             textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_ADD, null, null)
         }
+    }
+
+    // Haptic channel for the same alert. A third independent path to the operator
+    // after the locator's buzzer and the app's voice — and the one that still
+    // works with the phone muted, in a pocket, or on a loud flight line, which is
+    // exactly where the other two fail. Deliberately not gated on the voice
+    // setting: someone who turned speech off is MORE reliant on this, not less.
+    val alertContext = LocalContext.current
+    val vibrator = remember(alertContext) {
+        alertContext.getSystemService(Vibrator::class.java)
+    }
+    DisposableEffect(padAlert, vibrator) {
+        if (padAlert == PadAlertState.Alerting && vibrator?.hasVibrator() == true) {
+            // Two short pulses then a gap, repeating — a deliberate "something is
+            // wrong" rhythm rather than the single buzz of an ordinary
+            // notification, and it echoes the locator's doubled buzzer pattern.
+            val timings = longArrayOf(0, 260, 140, 260, 2400)
+            val amplitudes = intArrayOf(0, 255, 0, 255, 0)
+            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, 0))
+        }
+        // Cancel on ANY exit — snoozed, armed, laid down, or the screen going
+        // away. A haptic that outlives its cause is worse than none: it teaches
+        // the operator the phone is broken rather than the rocket is unarmed.
+        onDispose { vibrator?.cancel() }
     }
 
     // Continuous ascent/descent callouts, driven from a fixed-cadence poll loop rather than
@@ -817,6 +847,7 @@ private fun MapWithOverlays(
     rocketState: RocketState,
     armedState: Boolean,
     padAlert: PadAlertState,
+    padAlertSnoozeMinutes: Int,
     receiverDeviceName: String,
     locatorConfig: LocatorConfig,
     locatorArmedMessageState: LocatorMessageState,
@@ -995,7 +1026,7 @@ private fun MapWithOverlays(
                 modifier = modifier
                     .align(Alignment.Center),
                 text = (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
-                        else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed)
+                        else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed, padAlertSnoozeMinutes)
                         else if (!armedState) "Disarmed" else "") +
                         (if (!armedState && !locatorGPSLock) "\n" else "") +
                         (if (!locatorGPSLock) "No GPS" else ""),
@@ -1050,6 +1081,7 @@ private fun MapWithOverlays(
                     locatorConfig = locatorConfig,
                     armedState = armedState,
                     padAlert = padAlert,
+                    padAlertSnoozeMinutes = padAlertSnoozeMinutes,
                     locatorArmedMessageState = locatorArmedMessageState,
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
@@ -1474,6 +1506,7 @@ private fun MapControlsColumn(
     rocketState: RocketState,
     armedState: Boolean,
     padAlert: PadAlertState,
+    padAlertSnoozeMinutes: Int,
     locatorArmedMessageState: LocatorMessageState,
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
@@ -1505,7 +1538,13 @@ private fun MapControlsColumn(
         // "Rescan" and "Arm"/"Disarm" buttons.  It auto-collapses after a short
         // idle time, and the caller collapses it too when the map is tapped
         // (expanded state is hoisted).
-        LaunchedEffect(actionsExpanded) {
+        // Each snooze tap RESTARTS the collapse timer rather than defeating it.
+        // Holding the panel open for as long as the alert sounded (the first
+        // attempt) meant it never tidied itself away; collapsing on a fixed timer
+        // meant every additive tap cost a re-open. Restarting on interaction gives
+        // both: tap as often as you like, and it closes 5 s after you stop.
+        var snoozeInteraction by remember { mutableIntStateOf(0) }
+        LaunchedEffect(actionsExpanded, snoozeInteraction) {
             if (actionsExpanded) {
                 delay(actionPanelCollapseDelay)
                 onActionsExpandedChange(false)
@@ -1746,12 +1785,20 @@ private fun MapControlsColumn(
                     // Decision 5) and the locator bounds it regardless of what the app
                     // asks for — a snooze that could be made indefinite is an off
                     // switch, and hands back the forgotten arm this exists to catch.
-                    if (padAlert == PadAlertState.Alerting) {
+                    if (padAlert != PadAlertState.Quiet) {
+                        // Stays available while snoozed so the operator can top up
+                        // toward the ceiling, and does NOT collapse the panel on
+                        // click — tapping to accumulate should not cost a re-open
+                        // each time. Disabled at the ceiling rather than hidden, so
+                        // "no more" is visible instead of the control vanishing.
+                        val atCeiling =
+                            padAlertSnoozeMinutes >= PadAlertState.SNOOZE_CEILING_MINUTES
                         Button(
                             onClick = {
-                                onActionsExpandedChange(false)
                                 onSnoozePadAlert()
+                                snoozeInteraction++   // restart the collapse timer
                             },
+                            enabled = !atCeiling,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.tertiary,
                                 contentColor = MaterialTheme.colorScheme.onTertiary,
@@ -1760,7 +1807,19 @@ private fun MapControlsColumn(
                                 .fillMaxWidth()
                                 .height(48.dp),
                         ) {
-                            Text(stringResource(R.string.pad_alert_snooze_action))
+                            Text(
+                                if (padAlert == PadAlertState.Snoozed)
+                                    stringResource(
+                                        R.string.pad_alert_snooze_more,
+                                        padAlertSnoozeMinutes,
+                                        PadAlertState.SNOOZE_STEP_MINUTES,
+                                    )
+                                else
+                                    stringResource(
+                                        R.string.pad_alert_snooze_action,
+                                        PadAlertState.SNOOZE_STEP_MINUTES,
+                                    )
+                            )
                         }
                     }
                     val disarming = armedState

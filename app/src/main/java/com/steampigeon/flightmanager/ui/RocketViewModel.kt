@@ -1121,6 +1121,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // Prepped-and-disarmed verdict (#37), inside the same
                             // connected-locator gate so a bystander cannot raise it.
                             BluetoothManagerRepository.updatePadAlert(parsed.msg.padAlert)
+                            BluetoothManagerRepository.updatePadAlertSnoozeMinutes(
+                                parsed.msg.padAlertSnoozeMinutes)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
@@ -1234,6 +1236,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // at that point, so a set flag would otherwise latch on
                             // stale data and keep warning through the whole flight.
                             BluetoothManagerRepository.updatePadAlert(PadAlertState.Quiet)
+                            BluetoothManagerRepository.updatePadAlertSnoozeMinutes(0)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
@@ -1965,7 +1968,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
         val noseAxis = NoseAxis.fromUByte(frame[o].toUByte()); o += 1  // mounting config (#36)
         val armed = frame[o] != 0.toByte(); o += 1       // stated arm state (ADR-0021, #35)
-        val padAlert = PadAlertState.fromUByte(frame[o].toUByte()); o += 1  // prepped + disarmed (#37)
+        val padAlertRaw = frame[o].toUByte()
+        val padAlert = PadAlertState.fromUByte(padAlertRaw)
+        val padAlertSnoozeMinutes = PadAlertState.snoozeMinutesFromUByte(padAlertRaw); o += 1
         val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
         val channel = Bytes.u8(frame[o]); o += 1
@@ -1988,7 +1993,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deployCh1, deployCh2, deployCh3, deployCh4,
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
-            deviceName, locatorBatteryMv, noseAxis, armed, padAlert,
+            deviceName, locatorBatteryMv, noseAxis, armed, padAlert, padAlertSnoozeMinutes,
             locatorId, authTag,
             channel, receiverBatteryMv,
             receiverName, rssi, snr, noiseFloor, badFrames
