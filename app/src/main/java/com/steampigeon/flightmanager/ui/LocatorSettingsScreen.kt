@@ -54,6 +54,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.NoseAxis
 import com.steampigeon.flightmanager.data.Protocol
 import kotlinx.coroutines.delay
 import java.math.RoundingMode
@@ -399,6 +400,22 @@ fun LocatorSettingsScreen(
             ) { newConfigValue ->
                 stagedLocatorConfig =
                     stagedLocatorConfig.copy(launchDetectAltitude = newConfigValue)
+                viewModel.updateLocatorConfigChanged(true)
+            }
+            // How the locator is mounted in the airframe (ADR-0021 Decision 6, #36).
+            // Static per installation, but the locator cannot infer it: mounting
+            // calibration finds the axis gravity lies along and calls it "up", which
+            // is only the nose axis if the rocket happens to be vertical. Stating it
+            // is what makes tilt-from-vertical measurable off the pad.
+            Text(stringResource(R.string.nose_axis))
+            EnumDropdown(
+                NoseAxis::class,
+                stagedLocatorConfig.noseAxis,
+                enabled = locatorConfigMessageState == LocatorMessageState.Idle,
+                modifier = modifier
+            )
+            { newConfigValue ->
+                stagedLocatorConfig = stagedLocatorConfig.copy(noseAxis = newConfigValue as NoseAxis)
                 viewModel.updateLocatorConfigChanged(true)
             }
             ConfigurationItemNumeric(

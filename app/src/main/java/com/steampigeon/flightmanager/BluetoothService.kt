@@ -291,7 +291,13 @@ class BluetoothService : Service() {
                 (locatorConfig.mainBackupDeployAltitude / 256).toByte(),
                 locatorConfig.deploySignalDuration.toByte(),
                 locatorConfig.loraChannel.toByte(),
-            ), fillFixed(Protocol.DEVICE_NAME_LENGTH, locatorConfig.deviceName))
+            ),
+            fillFixed(Protocol.DEVICE_NAME_LENGTH, locatorConfig.deviceName),
+            // noseAxis is last, after deviceName — same order as the firmware
+            // struct, which appends it so every existing field keeps its offset
+            // (the receiver reads loraChannel by offset to follow a channel
+            // change, ADR-0011).
+            byteArrayOf(locatorConfig.noseAxis.value.toByte()))
         return sendMessage(MsgType.LocatorCfgChgRequest, configMessage)
     }
 
@@ -470,11 +476,17 @@ class BluetoothService : Service() {
         ((value shr 24) and 0xFF).toByte(),
     )
 
-    private fun concatBytes(a: ByteArray, b: ByteArray?): ByteArray {
-        if (b == null || b.isEmpty()) return a.copyOf()
-        val out = ByteArray(a.size + b.size)
-        System.arraycopy(a, 0, out, 0, a.size)
-        System.arraycopy(b, 0, out, a.size, b.size)
+    // Variadic since #36: the locator config payload is now three parts (fixed
+    // fields, device name, nose axis). Two-argument calls are unaffected.
+    private fun concatBytes(vararg parts: ByteArray?): ByteArray {
+        val total = parts.sumOf { it?.size ?: 0 }
+        val out = ByteArray(total)
+        var offset = 0
+        for (part in parts) {
+            if (part == null || part.isEmpty()) continue
+            System.arraycopy(part, 0, out, offset, part.size)
+            offset += part.size
+        }
         return out
     }
 

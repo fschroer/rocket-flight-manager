@@ -24,6 +24,7 @@
     <string name="channel_description">Rocket locator communicator</string>
     <string name="decrement">Decrement</string>
     <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
+    <string name="nose_axis">Sensor Axis Toward Nose</string>
     <string name="deployment_channel_1">Deployment Channel 1</string>
     <string name="deployment_channel_2">Deployment Channel 2</string>
     <string name="deployment_channel_3">Deployment Channel 3</string>

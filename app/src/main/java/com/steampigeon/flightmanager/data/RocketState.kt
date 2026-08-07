@@ -17,12 +17,12 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 139 // PreLaunchData payload (110 = 101 + armed 1 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 139
-    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 110).
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 140 // PreLaunchData payload (111 = 101 + nose_axis 1 + armed 1 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 140
+    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 111).
     // The password auth_tag is computed over exactly these bytes (with crc and
     // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
     // The armed byte is inside this region, so it is authenticated (ADR-0021 #35).
-    const val PRELAUNCH_BASE_STRUCT_SIZE = 116
+    const val PRELAUNCH_BASE_STRUCT_SIZE = 117
     const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 77 // TelemetryData payload (71 = 62 + armed 1 + locator_id 4 + auth_tag 4) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 77
     // On-wire size of the locator's TelemetryData struct (header 6 + payload 71).
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
@@ -105,7 +105,36 @@ data class LocatorConfig(
     val deploySignalDuration: Int = 0,
     val loraChannel: Int = 0,
     val deviceName: String = "",
+    // Which raw sensor axis points at the rocket's nose (ADR-0021 Decision 6, #36).
+    // Last on the wire, after deviceName, matching the firmware struct.
+    val noseAxis: NoseAxis = NoseAxis.Auto,
 )
+
+/**
+ * Which raw sensor axis points toward the rocket's nose — how the locator is
+ * physically mounted in the airframe (ADR-0021 Decision 6, #36).
+ *
+ * The locator cannot infer this: mounting calibration finds which axis gravity
+ * lies along and calls it "up", which is only the nose axis if the rocket is
+ * vertical at the time. Stating it makes tilt-from-vertical measurable whenever
+ * the locator is powered, which is what the disarmed-rocket alert (#37) needs.
+ *
+ * Auto keeps the pre-#36 detect-on-arm behaviour. Values mirror the firmware
+ * NoseAxis enum — keep in sync.
+ */
+enum class NoseAxis(val value: UByte) {
+    Auto(0u),
+    XPlus(1u),
+    XMinus(2u),
+    YPlus(3u),
+    YMinus(4u),
+    ZPlus(5u),
+    ZMinus(6u);
+
+    companion object {
+        fun fromUByte(v: UByte): NoseAxis = entries.firstOrNull { it.value == v } ?: Auto
+    }
+}
 
 data class ReceiverConfig(
     val channel: Int = 0,
@@ -415,6 +444,7 @@ data class PrelaunchParsed(
     val mainBackupAltitude: Int,  // uint16_t
     val deviceName: String,       // char[device_name_length]
     val locatorBatteryMv: Int,    // uint16_t
+    val noseAxis: NoseAxis,       // uint8_t enum — mounting config (ADR-0021, #36)
     val armed: Boolean,           // uint8_t — stated arm state (ADR-0021, #35)
     val locatorId: Long,          // uint32_t — cleartext STM MPU UID
     val authTag: Long,            // uint32_t — password-seeded checksum from the locator

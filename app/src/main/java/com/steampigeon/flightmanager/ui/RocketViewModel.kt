@@ -51,6 +51,7 @@ import kotlin.math.sqrt
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.MsgType
+import com.steampigeon.flightmanager.data.NoseAxis
 import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.PacketHeader
 import com.steampigeon.flightmanager.data.PrelaunchParsed
@@ -1176,6 +1177,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     // confirmed by whole-object equality below.
                                     loraChannel = parsed.msg.receiverChannel,
                                     deviceName = parsed.msg.deviceName,
+                                    // Taken from the broadcast, not remembered locally.
+                                    // changeLocatorConfig sends the WHOLE struct, so a
+                                    // setting the app did not read back would be reset
+                                    // to Auto the next time any other field is edited.
+                                    noseAxis = parsed.msg.noseAxis,
                                 )
                             }
                             } // end recognised-locator gate
@@ -1947,6 +1953,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         o += Protocol.DEVICE_NAME_LENGTH
 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
+        val noseAxis = NoseAxis.fromUByte(frame[o].toUByte()); o += 1  // mounting config (#36)
         val armed = frame[o] != 0.toByte(); o += 1       // stated arm state (ADR-0021, #35)
         val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
@@ -1970,7 +1977,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deployCh1, deployCh2, deployCh3, deployCh4,
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
-            deviceName, locatorBatteryMv, armed,
+            deviceName, locatorBatteryMv, noseAxis, armed,
             locatorId, authTag,
             channel, receiverBatteryMv,
             receiverName, rssi, snr, noiseFloor, badFrames
