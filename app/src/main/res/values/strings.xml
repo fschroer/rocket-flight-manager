@@ -8,6 +8,8 @@
     <string name="armed_state_arming">Arming</string>
     <string name="armed_state_disarmed">Disarmed</string>
     <string name="pad_alert_banner">ROCKET ON PAD — NOT ARMED</string>
+    <string name="pad_alert_snoozed">NOT ARMED — alert snoozed</string>
+    <string name="pad_alert_snooze_action">Snooze 15 min</string>
     <string name="pad_alert_speech">Warning. Rocket is on the pad and not armed.</string>
     <string name="armed_state_disarming">Disarming</string>
     <string name="back_button">Back</string>

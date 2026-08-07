@@ -356,6 +356,7 @@ fun RocketApp(
                 HomeScreen(
                     navController, viewModel, permissionsState, textToSpeech,
                     onRescan = { btManager?.startScan() },
+                    onSnoozePadAlert = { BluetoothManagerRepository.requestPadAlertSnooze(15) },
                     modifier
                 )
             }

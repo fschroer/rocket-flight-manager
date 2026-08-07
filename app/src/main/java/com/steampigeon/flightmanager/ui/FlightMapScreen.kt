@@ -148,6 +148,7 @@ import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.RocketState
 import com.steampigeon.flightmanager.data.SensorHealth
@@ -314,6 +315,7 @@ fun HomeScreen(
     permissionsState: MultiplePermissionsState,
     textToSpeech: TextToSpeech?,
     onRescan: () -> Unit,
+    onSnoozePadAlert: () -> Unit,
     modifier: Modifier
 ) {
     val context = LocalContext.current
@@ -460,6 +462,7 @@ fun HomeScreen(
                         isMapLoaded = isMapLoaded,
                         onMapLoaded = { isMapLoaded = true },
                         onRescan = onRescan,
+                        onSnoozePadAlert = onSnoozePadAlert,
                         hasCompass = hasCompass,
                         azimuth = azimuth,
                         lastAzimuth = lastAzimuth,
@@ -489,7 +492,7 @@ fun HomeScreen(
 private fun FlightSpeechAnnouncer(
     rocketState: RocketState,
     armedState: Boolean,
-    padAlert: Boolean,
+    padAlert: PadAlertState,
     locatorConfig: LocatorConfig,
     locatorLatLng: LatLng,
     viewModel: RocketViewModel,
@@ -620,7 +623,9 @@ private fun FlightSpeechAnnouncer(
     // Keyed on padAlert so leaving the condition cancels the loop and re-arms it.
     val padAlertSpeech = stringResource(R.string.pad_alert_speech)
     LaunchedEffect(padAlert) {
-        if (!padAlert) return@LaunchedEffect
+        // Voice only while actually alerting. A snoozed alert is shown, never spoken —
+        // speaking through a snooze would make the control useless.
+        if (padAlert != PadAlertState.Alerting) return@LaunchedEffect
         // QUEUE_FLUSH: this outranks whatever routine callout is mid-sentence.
         textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_FLUSH, null, null)
         while (true) {
@@ -811,13 +816,14 @@ private fun MapWithOverlays(
     trackerLocation: Location,
     rocketState: RocketState,
     armedState: Boolean,
-    padAlert: Boolean,
+    padAlert: PadAlertState,
     receiverDeviceName: String,
     locatorConfig: LocatorConfig,
     locatorArmedMessageState: LocatorMessageState,
     bluetoothConnectionState: BluetoothConnectionState,
     locatorGPSLock: Boolean,
     onRescan: () -> Unit,
+    onSnoozePadAlert: () -> Unit,
     isMapLoaded: Boolean,
     onMapLoaded: () -> Unit,
     hasCompass: Boolean,
@@ -988,11 +994,16 @@ private fun MapWithOverlays(
             PulsingText(
                 modifier = modifier
                     .align(Alignment.Center),
-                text = (if (padAlert) stringResource(R.string.pad_alert_banner)
+                text = (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
+                        else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed)
                         else if (!armedState) "Disarmed" else "") +
                         (if (!armedState && !locatorGPSLock) "\n" else "") +
                         (if (!locatorGPSLock) "No GPS" else ""),
-                color = if (padAlert) Color.Red else Color.White,
+                color = when (padAlert) {
+                    PadAlertState.Alerting -> Color.Red
+                    PadAlertState.Snoozed  -> Color.Yellow
+                    else                   -> Color.White
+                },
                 textAlign = TextAlign.Center,
                 style = typography.displayLarge,
             )
@@ -1038,9 +1049,11 @@ private fun MapWithOverlays(
                     receiverDeviceName = receiverDeviceName,
                     locatorConfig = locatorConfig,
                     armedState = armedState,
+                    padAlert = padAlert,
                     locatorArmedMessageState = locatorArmedMessageState,
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
+                    onSnoozePadAlert = onSnoozePadAlert,
                     textToSpeech = textToSpeech,
                     locatorConnected = locatorConnected,
                     actionsExpanded = actionsExpanded,
@@ -1460,9 +1473,11 @@ private fun MapControlsColumn(
     locatorConfig: LocatorConfig,
     rocketState: RocketState,
     armedState: Boolean,
+    padAlert: PadAlertState,
     locatorArmedMessageState: LocatorMessageState,
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
+    onSnoozePadAlert: () -> Unit,
     textToSpeech: TextToSpeech?,
     locatorConnected: Boolean = true,
     actionsExpanded: Boolean,
@@ -1724,6 +1739,29 @@ private fun MapControlsColumn(
                             .height(48.dp),
                     ) {
                         Text(stringResource(R.string.action_rescan))
+                    }
+                    // Snooze appears ONLY while the alert is actually sounding, so it
+                    // cannot be pressed pre-emptively to keep a rocket permanently
+                    // quiet. It is the operator saying "still prepping" (ADR-0021
+                    // Decision 5) and the locator bounds it regardless of what the app
+                    // asks for — a snooze that could be made indefinite is an off
+                    // switch, and hands back the forgotten arm this exists to catch.
+                    if (padAlert == PadAlertState.Alerting) {
+                        Button(
+                            onClick = {
+                                onActionsExpandedChange(false)
+                                onSnoozePadAlert()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.tertiary,
+                                contentColor = MaterialTheme.colorScheme.onTertiary,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                        ) {
+                            Text(stringResource(R.string.pad_alert_snooze_action))
+                        }
                     }
                     val disarming = armedState
                     Button(

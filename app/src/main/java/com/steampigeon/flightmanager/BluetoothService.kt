@@ -190,6 +190,14 @@ class BluetoothService : Service() {
             changeLocatorArmedState(!BluetoothManagerRepository.armedState.value)
         if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.NotAcknowledged)
             changeLocatorArmedState(BluetoothManagerRepository.armedState.value)
+        // Pad-alert snooze (#37). Fire-and-forget: the locator reports the
+        // resulting state back in PreLaunchData.pad_alert, so a lost request
+        // simply means the alert keeps sounding — the safe direction.
+        val snoozeMinutes = BluetoothManagerRepository.padAlertSnoozeRequest.value
+        if (snoozeMinutes > 0) {
+            BluetoothManagerRepository.clearPadAlertSnoozeRequest()
+            snoozePadAlert(snoozeMinutes)
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -266,6 +274,20 @@ class BluetoothService : Service() {
     // -------------------------------------------------------------------------
     // Outbound messages
     // -------------------------------------------------------------------------
+
+    /**
+     * Suppress the prepped-and-disarmed alert for [minutes] (0 cancels).
+     *
+     * A rocket assembled vertically with charges wired is physically identical
+     * to one standing on the pad, so no sensor separates them — this is the
+     * operator saying "still prepping" (ADR-0021 Decision 5, #37).
+     *
+     * Bounded on purpose, and the locator clamps it again on receipt: a snooze
+     * that could be made indefinite is an off switch, and would hand back the
+     * forgotten arm the alert exists to catch.
+     */
+    fun snoozePadAlert(minutes: Int): Boolean =
+        sendMessage(MsgType.PadAlertSnoozeRequest, byteArrayOf(minutes.toByte()))
 
     private fun changeLocatorArmedState(armedState: Boolean) {
         if (sendMessage(if (armedState) MsgType.ArmRequest else MsgType.DisarmRequest, null))

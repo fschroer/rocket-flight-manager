@@ -140,6 +140,27 @@ enum class NoseAxis(val value: UByte) {
     }
 }
 
+/**
+ * The locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
+ *
+ * [Snoozed] is reported distinctly rather than collapsed into [Quiet] on
+ * purpose: a silenced locator that looks identical to a healthy one is the
+ * exact failure this whole ADR started from. The operator should be able to see
+ * that the system is still watching and merely holding its tongue.
+ */
+enum class PadAlertState(val value: UByte) {
+    Quiet(0u),
+    Alerting(1u),
+    Snoozed(2u);
+
+    companion object {
+        // Unknown values read as Alerting, never as Quiet: an unrecognised
+        // verdict from a newer locator must not present as "nothing wrong".
+        fun fromUByte(v: UByte): PadAlertState =
+            entries.firstOrNull { it.value == v } ?: if (v == 0u.toUByte()) Quiet else Alerting
+    }
+}
+
 data class ReceiverConfig(
     val channel: Int = 0,
     val deviceName: String = "",
@@ -377,7 +398,8 @@ enum class MsgType(val value: UByte) {
     VersionInfo(18u),           // Response: locator version forwarded through receiver, which appends its own version.
     FlightEvents(19u),          // Per-record flight event summary sent alongside a FlightData transfer.
     ChannelSurveyRequest(20u),  // Request from the app to the receiver to sweep the band (no locator involved).
-    ChannelSurvey(21u);         // Response from the receiver with per-channel occupancy.
+    ChannelSurvey(21u),         // Response from the receiver with per-channel occupancy.
+    PadAlertSnoozeRequest(22u); // App→locator: suppress the prepped-and-disarmed alert for N minutes (#37).
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }
@@ -453,7 +475,7 @@ data class PrelaunchParsed(
     // uint8_t — locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
     // A verdict, not raw inputs: the locator judges it at 20 Hz, this message
     // arrives at 1 Hz, and re-deriving quiescence from that would be guesswork.
-    val padAlert: Boolean,
+    val padAlert: PadAlertState,
     val locatorId: Long,          // uint32_t — cleartext STM MPU UID
     val authTag: Long,            // uint32_t — password-seeded checksum from the locator
     val receiverChannel: Int,     // uint8_t
@@ -557,8 +579,8 @@ object BluetoothManagerRepository {
     // The locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
     // Set only from the connected locator's broadcast, like armedState — a
     // bystander locator on the channel must not be able to raise this.
-    private val _padAlert = MutableStateFlow<Boolean>(false)
-    val padAlert: StateFlow<Boolean> = _padAlert.asStateFlow()
+    private val _padAlert = MutableStateFlow(PadAlertState.Quiet)
+    val padAlert: StateFlow<PadAlertState> = _padAlert.asStateFlow()
 
     private val _locatorArmedMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
     val locatorArmedMessageState: StateFlow<LocatorMessageState> = _locatorArmedMessageState.asStateFlow()
@@ -575,7 +597,21 @@ object BluetoothManagerRepository {
         _receiverDevice.value = newReceiverDevice
     }
 
-    fun updatePadAlert(newPadAlert: Boolean) {
+    // Pending snooze request, in minutes; drained by BluetoothService on the next
+    // inbound packet the same way an arm request is (#37).  The UI cannot send
+    // directly — only the service holds the transport.
+    private val _padAlertSnoozeRequest = MutableStateFlow(0)
+    val padAlertSnoozeRequest: StateFlow<Int> = _padAlertSnoozeRequest.asStateFlow()
+
+    fun requestPadAlertSnooze(minutes: Int) {
+        _padAlertSnoozeRequest.value = minutes
+    }
+
+    fun clearPadAlertSnoozeRequest() {
+        _padAlertSnoozeRequest.value = 0
+    }
+
+    fun updatePadAlert(newPadAlert: PadAlertState) {
         _padAlert.value = newPadAlert
     }
 

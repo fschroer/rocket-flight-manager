@@ -52,6 +52,7 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.MsgType
 import com.steampigeon.flightmanager.data.NoseAxis
+import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.PacketHeader
 import com.steampigeon.flightmanager.data.PrelaunchParsed
@@ -1232,7 +1233,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // Cleared explicitly because PreLaunchData stops arriving
                             // at that point, so a set flag would otherwise latch on
                             // stale data and keep warning through the whole flight.
-                            BluetoothManagerRepository.updatePadAlert(false)
+                            BluetoothManagerRepository.updatePadAlert(PadAlertState.Quiet)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
@@ -1964,7 +1965,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
         val noseAxis = NoseAxis.fromUByte(frame[o].toUByte()); o += 1  // mounting config (#36)
         val armed = frame[o] != 0.toByte(); o += 1       // stated arm state (ADR-0021, #35)
-        val padAlert = frame[o] != 0.toByte(); o += 1    // prepped + disarmed (ADR-0021, #37)
+        val padAlert = PadAlertState.fromUByte(frame[o].toUByte()); o += 1  // prepped + disarmed (#37)
         val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
         val channel = Bytes.u8(frame[o]); o += 1
