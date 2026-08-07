@@ -1917,7 +1917,10 @@ fun LocatorStats(
         modifier = modifier
             .offset { locatorStatisticsOffset }
             .clickable {
-                if (armedState)
+                // Same reasoning as the layout below: a disarmed rocket in flight
+                // is exactly when someone wants to hear state and altitude without
+                // looking, so this cannot be gated on arm state either (#36).
+                if (armedState || rocketState.flightState != FlightStates.WaitingLaunch)
                     textToSpeech?.speak(
                         "${locatorConfig.deviceName}, ${rocketState.flightState}, ${rocketState.altitudeAboveGroundLevel} meters",
                         TextToSpeech.QUEUE_FLUSH, null, null
@@ -1954,6 +1957,17 @@ fun LocatorStats(
             }
             .defaultMinSize(minWidth = 160.dp),
     ) {
+        // Layout follows whether the rocket is FLYING, not whether it is armed.
+        // Those were the same thing until #36 let a disarmed locator fly, and the
+        // panel still conflated them: a disarmed flight got the on-pad layout and
+        // never showed flight state at all. Worse, the pad layout's accel/gyro
+        // rows come from PreLaunchData, which stops arriving once the locator
+        // switches to telemetry — so they froze at their last pad values, which
+        // is what "the stats area didn't change" looked like.
+        //
+        // Armed-and-waiting still gets the flight layout, exactly as before.
+        val inFlight = armedState || rocketState.flightState != FlightStates.WaitingLaunch
+
         // ── Telemetry rows ────────────────────────────────────────────────────
         val dst = if (rocketState.latitude != 0.0)
             String.format(Locale.US, "%15d", distanceToLocator) + " m"
@@ -1968,7 +1982,7 @@ fun LocatorStats(
             style = TelemetryTextStyle,
             color = if (rocketState.baroStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
         )
-        if (armedState) {
+        if (inFlight) {
             Text(
                 text = "Spd: ${String.format(Locale.US, "%6.1f", rocketState.velocity)} m/s",
                 style = TelemetryTextStyle,
@@ -1997,8 +2011,8 @@ fun LocatorStats(
             )
         }
 
-        // ── Flight state (armed) or deployment channel config (disarmed) ──────
-        if (armedState) {
+        // ── Flight state (in flight) or deployment channel config (on pad) ────
+        if (inFlight) {
             Text(
                 text = when (rocketState.flightState) {
                     FlightStates.WaitingLaunch -> "Waiting For Launch"
