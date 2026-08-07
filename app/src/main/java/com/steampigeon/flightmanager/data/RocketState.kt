@@ -111,25 +111,29 @@ data class LocatorConfig(
 )
 
 /**
- * Which raw sensor axis points toward the rocket's nose — how the locator is
+ * Which raw sensor axis the rocket's long axis lies along — how the locator is
  * physically mounted in the airframe (ADR-0021 Decision 6, #36).
  *
- * The locator cannot infer this: mounting calibration finds which axis gravity
- * lies along and calls it "up", which is only the nose axis if the rocket is
- * vertical at the time. Stating it makes tilt-from-vertical measurable whenever
- * the locator is powered, which is what the disarmed-rocket alert (#37) needs.
+ * The locator cannot infer the AXIS: mounting calibration finds which axis
+ * gravity lies along and calls it "up", which is only the rocket axis if the
+ * rocket is vertical at the time. Stating it makes tilt-from-vertical
+ * measurable whenever the locator is powered, which is what the disarmed-rocket
+ * alert (#37) needs.
+ *
+ * Deliberately UNSIGNED. The sign is measurable — calibration only commits with
+ * the rocket vertical, where gravity along the stated axis is a full ±1 g — so
+ * asking the operator which way up the locator is bolted would be asking them
+ * to supply something the firmware can read, and to get it right. Both
+ * polarities count as vertical for the alert.
  *
  * Auto keeps the pre-#36 detect-on-arm behaviour. Values mirror the firmware
  * NoseAxis enum — keep in sync.
  */
 enum class NoseAxis(val value: UByte) {
     Auto(0u),
-    XPlus(1u),
-    XMinus(2u),
-    YPlus(3u),
-    YMinus(4u),
-    ZPlus(5u),
-    ZMinus(6u);
+    X(1u),
+    Y(2u),
+    Z(3u);
 
     companion object {
         fun fromUByte(v: UByte): NoseAxis = entries.firstOrNull { it.value == v } ?: Auto
