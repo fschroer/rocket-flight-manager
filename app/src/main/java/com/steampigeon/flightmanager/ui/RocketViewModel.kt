@@ -1117,6 +1117,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
+                            // Prepped-and-disarmed verdict (#37), inside the same
+                            // connected-locator gate so a bystander cannot raise it.
+                            BluetoothManagerRepository.updatePadAlert(parsed.msg.padAlert)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
@@ -1224,6 +1227,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
+                            // TelemetryData carries no pad_alert — it is an on-pad
+                            // condition and this message means armed or in flight.
+                            // Cleared explicitly because PreLaunchData stops arriving
+                            // at that point, so a set flag would otherwise latch on
+                            // stale data and keep warning through the whole flight.
+                            BluetoothManagerRepository.updatePadAlert(false)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
@@ -1955,6 +1964,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
         val noseAxis = NoseAxis.fromUByte(frame[o].toUByte()); o += 1  // mounting config (#36)
         val armed = frame[o] != 0.toByte(); o += 1       // stated arm state (ADR-0021, #35)
+        val padAlert = frame[o] != 0.toByte(); o += 1    // prepped + disarmed (ADR-0021, #37)
         val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
         val channel = Bytes.u8(frame[o]); o += 1
@@ -1977,7 +1987,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deployCh1, deployCh2, deployCh3, deployCh4,
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
-            deviceName, locatorBatteryMv, noseAxis, armed,
+            deviceName, locatorBatteryMv, noseAxis, armed, padAlert,
             locatorId, authTag,
             channel, receiverBatteryMv,
             receiverName, rssi, snr, noiseFloor, badFrames

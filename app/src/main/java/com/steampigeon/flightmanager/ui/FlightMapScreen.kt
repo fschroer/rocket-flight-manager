@@ -187,6 +187,10 @@ private const val minimumSpokenAGLVelocity = 2 * 9.8
 // fixed poll interval (not the TTS engine's isSpeaking flag) so behavior is consistent
 // across phone hardware.
 private const val announcementIntervalMillis = 500L          // poll cadence for continuous callouts
+// Repeat cadence for the prepped-and-disarmed warning (#37). Long on purpose:
+// the locator's buzzer carries the escalation, and the always-visible banner is
+// what keeps the condition in front of the operator without nagging.
+private const val padAlertRepeatMillis = 30_000L
 private const val descentWarningIntervalMillis = 10000L      // minimum gap between descent warnings
 private const val freefallDescentRate = 50f                  // m/s downward => still in freefall (pre-chute)
 private const val minDescentRateForPrediction = 1f           // m/s, floor to avoid div-by-zero / noise
@@ -326,6 +330,7 @@ fun HomeScreen(
     val receiverDeviceName = BluetoothManagerRepository.receiverDevice.collectAsState().value?.name
         ?.takeIf { it.isNotEmpty() } ?: receiverConfig.deviceName
     val armedState = BluetoothManagerRepository.armedState.collectAsState().value
+    val padAlert = BluetoothManagerRepository.padAlert.collectAsState().value
     val locatorArmedMessageState = BluetoothManagerRepository.locatorArmedMessageState.collectAsState().value
     val orientation = LocalConfiguration.current.orientation
     val hasCompass = context.packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS)
@@ -391,6 +396,7 @@ fun HomeScreen(
     FlightSpeechAnnouncer(
         rocketState = rocketState,
         armedState = armedState,
+        padAlert = padAlert,
         locatorConfig = locatorConfig,
         locatorLatLng = locatorLatLng,
         viewModel = viewModel,
@@ -445,6 +451,7 @@ fun HomeScreen(
                         trackerLocation = trackerLocation ?: fallbackTrackerLocation,
                         rocketState = rocketState,
                         armedState = armedState,
+                        padAlert = padAlert,
                         receiverDeviceName = receiverDeviceName,
                         locatorConfig = locatorConfig,
                         locatorArmedMessageState = locatorArmedMessageState,
@@ -482,6 +489,7 @@ fun HomeScreen(
 private fun FlightSpeechAnnouncer(
     rocketState: RocketState,
     armedState: Boolean,
+    padAlert: Boolean,
     locatorConfig: LocatorConfig,
     locatorLatLng: LatLng,
     viewModel: RocketViewModel,
@@ -595,6 +603,29 @@ private fun FlightSpeechAnnouncer(
             if (locatorConfig.deploymentChannel1Mode == DeployMode.MainBackup && rocketState.channel1Fired ||
                 locatorConfig.deploymentChannel2Mode == DeployMode.MainBackup && rocketState.channel2Fired)
                 textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
+        }
+    }
+
+    // ── Prepped-and-disarmed alert (ADR-0021 Decision 5, #37) ────────────────
+    // The locator judges the condition (vertical, still, e-matches wired, not
+    // armed) at 20 Hz and broadcasts the verdict; this only reacts to it, so the
+    // buzzer at the pad and the voice here can never disagree.
+    //
+    // Speaks once on the rising edge, then repeats on a fixed cadence while the
+    // condition holds. The ESCALATION lives in the locator's buzzer, which gets
+    // louder and more frequent; repeating that here as well would just be two
+    // things shouting. The app's anti-habituation answer is the banner below —
+    // permanently visible, and silent.
+    //
+    // Keyed on padAlert so leaving the condition cancels the loop and re-arms it.
+    val padAlertSpeech = stringResource(R.string.pad_alert_speech)
+    LaunchedEffect(padAlert) {
+        if (!padAlert) return@LaunchedEffect
+        // QUEUE_FLUSH: this outranks whatever routine callout is mid-sentence.
+        textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_FLUSH, null, null)
+        while (true) {
+            delay(padAlertRepeatMillis)
+            textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_ADD, null, null)
         }
     }
 
@@ -780,6 +811,7 @@ private fun MapWithOverlays(
     trackerLocation: Location,
     rocketState: RocketState,
     armedState: Boolean,
+    padAlert: Boolean,
     receiverDeviceName: String,
     locatorConfig: LocatorConfig,
     locatorArmedMessageState: LocatorMessageState,
@@ -947,13 +979,20 @@ private fun MapWithOverlays(
         )
 
         if (lastPreLaunchMessageAge < messageTimeout) {
+            // A plain "Disarmed" is correct on the bench and near-invisible at the
+            // pad, which is where it matters. When the locator reports a prepped
+            // rocket standing disarmed (#37) the same indicator escalates: it says
+            // what is wrong rather than just what is true, and turns red. This is
+            // the app's anti-habituation answer — permanently visible and silent,
+            // so the voice can stay on a long cadence (ADR-0021 Decision 5).
             PulsingText(
                 modifier = modifier
                     .align(Alignment.Center),
-                text = (if (!armedState) "Disarmed" else "") +
+                text = (if (padAlert) stringResource(R.string.pad_alert_banner)
+                        else if (!armedState) "Disarmed" else "") +
                         (if (!armedState && !locatorGPSLock) "\n" else "") +
                         (if (!locatorGPSLock) "No GPS" else ""),
-                color = Color.White,
+                color = if (padAlert) Color.Red else Color.White,
                 textAlign = TextAlign.Center,
                 style = typography.displayLarge,
             )

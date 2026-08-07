@@ -17,12 +17,12 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 140 // PreLaunchData payload (111 = 101 + nose_axis 1 + armed 1 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 140
-    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 111).
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 141 // PreLaunchData payload (112 = 101 + nose_axis 1 + armed 1 + pad_alert 1 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 141
+    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 112).
     // The password auth_tag is computed over exactly these bytes (with crc and
     // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
     // The armed byte is inside this region, so it is authenticated (ADR-0021 #35).
-    const val PRELAUNCH_BASE_STRUCT_SIZE = 117
+    const val PRELAUNCH_BASE_STRUCT_SIZE = 118
     const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 77 // TelemetryData payload (71 = 62 + armed 1 + locator_id 4 + auth_tag 4) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 77
     // On-wire size of the locator's TelemetryData struct (header 6 + payload 71).
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
@@ -446,6 +446,10 @@ data class PrelaunchParsed(
     val locatorBatteryMv: Int,    // uint16_t
     val noseAxis: NoseAxis,       // uint8_t enum — mounting config (ADR-0021, #36)
     val armed: Boolean,           // uint8_t — stated arm state (ADR-0021, #35)
+    // uint8_t — locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
+    // A verdict, not raw inputs: the locator judges it at 20 Hz, this message
+    // arrives at 1 Hz, and re-deriving quiescence from that would be guesswork.
+    val padAlert: Boolean,
     val locatorId: Long,          // uint32_t — cleartext STM MPU UID
     val authTag: Long,            // uint32_t — password-seeded checksum from the locator
     val receiverChannel: Int,     // uint8_t
@@ -546,6 +550,12 @@ object BluetoothManagerRepository {
     private val _armedState = MutableStateFlow<Boolean>(false)
     val armedState: StateFlow<Boolean> = _armedState.asStateFlow()
 
+    // The locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
+    // Set only from the connected locator's broadcast, like armedState — a
+    // bystander locator on the channel must not be able to raise this.
+    private val _padAlert = MutableStateFlow<Boolean>(false)
+    val padAlert: StateFlow<Boolean> = _padAlert.asStateFlow()
+
     private val _locatorArmedMessageState = MutableStateFlow<LocatorMessageState>(LocatorMessageState.Idle)
     val locatorArmedMessageState: StateFlow<LocatorMessageState> = _locatorArmedMessageState.asStateFlow()
 
@@ -559,6 +569,10 @@ object BluetoothManagerRepository {
 
     fun updateReceiverDevice(newReceiverDevice: BluetoothDevice?) {
         _receiverDevice.value = newReceiverDevice
+    }
+
+    fun updatePadAlert(newPadAlert: Boolean) {
+        _padAlert.value = newPadAlert
     }
 
     fun updateArmedState(newArmedState: Boolean) {

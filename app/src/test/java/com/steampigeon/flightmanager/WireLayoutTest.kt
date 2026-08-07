@@ -25,14 +25,14 @@ class WireLayoutTest {
 
     // Receiver-appended link-quality trailer, present on both broadcasts (ADR-0019):
     // rssi 2 + snr 1 + noise_floor 2 + bad_frames 1. The receiver pins the extended
-    // struct sizes (146 / 83) with its own static_asserts.
+    // struct sizes (147 / 83) with its own static_asserts.
     private val linkTrailer = 6
 
-    // PreLaunchData: C++ sizeof 117 → payload 111 (101 + nose_axis 1 + armed 1
-    //                + locator_id 4 + auth_tag 4);
-    //                + channel 1 + recv battery 2 + recv name 20 + link trailer 6 = 140
-    @Test fun prelaunchPayloadSize() = assertEquals(140, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
-    @Test fun prelaunchBaseStructSize() = assertEquals(117, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
+    // PreLaunchData: C++ sizeof 118 → payload 112 (101 + nose_axis 1 + armed 1
+    //                + pad_alert 1 + locator_id 4 + auth_tag 4);
+    //                + channel 1 + recv battery 2 + recv name 20 + link trailer 6 = 141
+    @Test fun prelaunchPayloadSize() = assertEquals(141, Protocol.PRELAUNCH_MESSAGE_PAYLOAD_SIZE)
+    @Test fun prelaunchBaseStructSize() = assertEquals(118, Protocol.PRELAUNCH_BASE_STRUCT_SIZE)
 
     // TelemetryData: C++ sizeof 77 → payload 71 (62 + armed 1 + locator_id 4 + auth_tag 4);
     //                + link trailer 6 = 77
