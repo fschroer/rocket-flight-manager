@@ -800,7 +800,15 @@ private fun FlightSpeechAnnouncer(
             // these flags arrive latched in the telemetry, so the first packet after
             // a blackout that outlasted the flight would otherwise report a main
             // deployment that happened on the way to a landing already announced.
-            if (!flightConcluded) {
+            //
+            // isAirborne() is load-bearing, not belt-and-braces. On reaching Landed
+            // the discrete-event effect resets every announcement guard for the next
+            // flight — including flightConcluded, drogueDeploySpoken and
+            // mainDeploySpoken — while THIS loop is still polling the same Landed
+            // telemetry, whose deploy bits are still latched true. Without the
+            // airborne test the next 500 ms tick re-announces both deployments at
+            // landing, having just been told it had never announced them.
+            if (!flightConcluded && state.flightState.isAirborne()) {
                 if (state.flightState >= FlightStates.DroguePrimaryEvent && !drogueDeploySpoken && state.drogueDeployDetected) {
                     drogueDeploySpoken = true
                     textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
