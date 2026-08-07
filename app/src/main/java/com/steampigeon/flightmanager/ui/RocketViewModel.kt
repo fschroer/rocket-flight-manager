@@ -1107,11 +1107,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // authorized-but-not-connected sender is likewise not shown.
                             evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
-                            // PreLaunchData from the CONNECTED locator means it is
-                            // disarmed. Derived here, not in the framer, so another
-                            // locator on the channel cannot flip it (ADR-0020).
-                            if (BluetoothManagerRepository.armedState.value) {
-                                BluetoothManagerRepository.updateArmedState(false)
+                            // Arm state is READ from the locator's stated flag, never
+                            // inferred from which message arrived (ADR-0021 Decision 3,
+                            // FR-A10, #35). Still derived here rather than in the framer,
+                            // so another locator on the channel cannot flip it (ADR-0020).
+                            if (BluetoothManagerRepository.armedState.value != parsed.msg.armed) {
+                                BluetoothManagerRepository.updateArmedState(parsed.msg.armed)
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
@@ -1205,10 +1206,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 challengeable = false,
                             )
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
-                            // TelemetryData from the CONNECTED locator means it is
-                            // armed. Same reasoning as the PreLaunchData side.
-                            if (!BluetoothManagerRepository.armedState.value) {
-                                BluetoothManagerRepository.updateArmedState(true)
+                            // Read from the stated flag, same as the PreLaunchData side.
+                            // This site is the one that mattered: "TelemetryData ⇒ armed"
+                            // was true only while a disarmed locator never broadcast in
+                            // flight. Once arming gates pyro only (#36) it stops being
+                            // true, and the old reading would have shown an unarmed
+                            // ballistic flight as ARMED — hiding the one thing the
+                            // operator needed to see (ADR-0021 Decision 3, FR-A10).
+                            if (BluetoothManagerRepository.armedState.value != parsed.msg.armed) {
+                                BluetoothManagerRepository.updateArmedState(parsed.msg.armed)
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
@@ -1941,6 +1947,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         o += Protocol.DEVICE_NAME_LENGTH
 
         val locatorBatteryMv = Bytes.u16(frame, o); o += 2
+        val armed = frame[o] != 0.toByte(); o += 1       // stated arm state (ADR-0021, #35)
         val locatorId = Bytes.u32(frame, o); o += 4      // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
         val channel = Bytes.u8(frame[o]); o += 1
@@ -1963,7 +1970,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deployCh1, deployCh2, deployCh3, deployCh4,
             droguePrimary, drogueBackup,
             mainPrimary, mainBackup,
-            deviceName, locatorBatteryMv,
+            deviceName, locatorBatteryMv, armed,
             locatorId, authTag,
             channel, receiverBatteryMv,
             receiverName, rssi, snr, noiseFloor, badFrames
@@ -1997,6 +2004,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val attitude = Quaternionf(qW, qX, qY, qZ)
 
         val flightState = FlightStates.fromUByte(frame[o].toUByte()); o += 1
+        val armed = frame[o] != 0.toByte(); o += 1      // stated arm state (ADR-0021, #35)
         val locatorId = Bytes.u32(frame, o); o += 4     // last base fields, before receiver-appended metadata
         val authTag = Bytes.u32(frame, o); o += 4
         val rssi = Bytes.i16(frame, o); o += 2
@@ -2011,7 +2019,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             deploymentCh3Stats, deploymentCh4Stats,
             physicalDeploymentStats, agl,
             velNed, attitude,
-            flightState, locatorId, authTag, rssi, snr, noiseFloor, badFrames
+            flightState, armed, locatorId, authTag, rssi, snr, noiseFloor, badFrames
         )
     }
 

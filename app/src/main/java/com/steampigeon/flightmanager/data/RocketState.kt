@@ -17,16 +17,17 @@ object Protocol {
 
     const val MESSAGE_BUFFER_SIZE = 52 * 256 // Up to 46 packets during ascent, 6 packets during descent * maximum message size
     const val SYSTEM_ID : Byte = 0x44
-    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 138 // PreLaunchData payload (109 = 101 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 138
-    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 109).
+    const val PRELAUNCH_MESSAGE_PAYLOAD_SIZE = 139 // PreLaunchData payload (110 = 101 + armed 1 + locator_id 4 + auth_tag 4) + channel (1) + receiver battery level (2) + receiver name (20) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 139
+    // On-wire size of the locator's PreLaunchData struct (header 6 + payload 110).
     // The password auth_tag is computed over exactly these bytes (with crc and
     // auth_tag zeroed) — receiver-appended metadata sits after and is excluded.
-    const val PRELAUNCH_BASE_STRUCT_SIZE = 115
-    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 76 // TelemetryData payload (70 = 62 + locator_id 4 + auth_tag 4) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 76
-    // On-wire size of the locator's TelemetryData struct (header 6 + payload 70).
+    // The armed byte is inside this region, so it is authenticated (ADR-0021 #35).
+    const val PRELAUNCH_BASE_STRUCT_SIZE = 116
+    const val TELEMETRY_MESSAGE_PAYLOAD_SIZE = 77 // TelemetryData payload (71 = 62 + armed 1 + locator_id 4 + auth_tag 4) + rssi (2) + snr (1) + noise floor (2) + bad frames (1) = 77
+    // On-wire size of the locator's TelemetryData struct (header 6 + payload 71).
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
     // zeroed); the receiver-appended RSSI/SNR/noise floor sit after and are excluded.
-    const val TELEMETRY_BASE_STRUCT_SIZE = 76
+    const val TELEMETRY_BASE_STRUCT_SIZE = 77
     // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
     // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
     // + confirmed_frames[5]).
@@ -414,6 +415,7 @@ data class PrelaunchParsed(
     val mainBackupAltitude: Int,  // uint16_t
     val deviceName: String,       // char[device_name_length]
     val locatorBatteryMv: Int,    // uint16_t
+    val armed: Boolean,           // uint8_t — stated arm state (ADR-0021, #35)
     val locatorId: Long,          // uint32_t — cleartext STM MPU UID
     val authTag: Long,            // uint32_t — password-seeded checksum from the locator
     val receiverChannel: Int,     // uint8_t
@@ -442,6 +444,7 @@ data class TelemetryParsed(
     val velNed: Vec3f,                // Vec3f — fused NED velocity m/s
     val attitude: Quaternionf,        // Quaternionf — body-to-NED quaternion
     val flightState: FlightStates,    // uint8_t enum
+    val armed: Boolean,               // uint8_t — stated arm state (ADR-0021, #35)
     val locatorId: Long,              // uint32_t — cleartext STM MPU UID
     val authTag: Long,                // uint32_t — password-seeded checksum from the locator
     val rssi: Int,                    // int16_t
