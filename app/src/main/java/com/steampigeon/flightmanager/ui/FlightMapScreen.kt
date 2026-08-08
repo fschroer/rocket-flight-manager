@@ -255,7 +255,12 @@ private fun isInFlight(armedState: Boolean, state: RocketState): Boolean =
     armedState || state.flightState != FlightStates.WaitingLaunch
 
 private fun launchRelativePhrase(state: RocketState, vector: Vector?): String? =
-    if (state.gpsStatus == SensorHealth.Ok && vector != null)
+    // The range ceiling is checked here too, not just on the displayed figure: an
+    // impossible distance read aloud as a recovery bearing is worse than the same
+    // number sitting in a corner of the screen, because it is instruction rather
+    // than readout. Callers word the no-position case themselves.
+    if (state.gpsStatus == SensorHealth.Ok && vector != null &&
+        distanceWithinRadioRange(vector.distance))
         " ${vector.distance} meters ${vector.ordinal} of launch point."
     else null
 
@@ -411,6 +416,10 @@ fun HomeScreen(
     val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
     val flightPath = viewModel.flightPath.collectAsState().value
     val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
+    // Whether the locator's reported position is one we can quote a distance or a
+    // bearing from at all — both come out of the same vector.
+    val locatorFixUsable = validLatLng(rocketState.latitude, rocketState.longitude) &&
+        viewModel.locatorDistancePlausible.collectAsState().value
 
     // Headless composable: manages all flight-event speech announcements
     FlightSpeechAnnouncer(
@@ -431,6 +440,9 @@ fun HomeScreen(
             rocketAttitude = rocketState.attitude,
             inFlight = isInFlight(armedState, rocketState),
             lastPreLaunchMessageAge = lastPreLaunchMessageAge,
+            // Bearing and distance come out of the same vector, so a position the
+            // distance test rejects aims the AR marker just as wrongly.
+            bearingValid = locatorFixUsable,
         )
     } else {
         ModalNavigationDrawer(
@@ -1998,7 +2010,13 @@ fun LocatorStats(
         val inFlight = isInFlight(armedState, rocketState)
 
         // ── Telemetry rows ────────────────────────────────────────────────────
-        val dst = if (rocketState.latitude != 0.0)
+        // "Unknown" beats a number that cannot be true. The figure is suppressed
+        // for a coordinate that is no fix at all (0,0 before the locator has one,
+        // or non-finite) and for one the locator cannot be at — 779 km away while
+        // reporting no satellites, from a radio we are receiving. A stale but
+        // believable distance is still shown: it is what the user walks toward.
+        val distancePlausible = viewModel.locatorDistancePlausible.collectAsState().value
+        val dst = if (validLatLng(rocketState.latitude, rocketState.longitude) && distancePlausible)
             String.format(Locale.US, "%15d", distanceToLocator) + " m"
         else stringResource(R.string.unknown)
         Text(
@@ -2349,6 +2367,13 @@ fun CameraPreviewScreen(
     // RocketState to decide for itself, so the caller passes the verdict (#36).
     inFlight: Boolean = false,
     lastPreLaunchMessageAge: Long = Long.MAX_VALUE,
+    // False when the position the bearing was computed from failed the distance
+    // plausibility test. The locator marker and both gauge pointers are drawn
+    // from it, and an AR overlay is more assertive than a readout: it puts a
+    // circle on a patch of sky and invites the user to walk that way. Suppressed
+    // rather than reworded, and the crosshair and gauge scales stay — they are
+    // the reference frame, not a claim about where the rocket is.
+    bearingValid: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -2434,7 +2459,11 @@ fun CameraPreviewScreen(
             val lx = cx + horizontalDelta * scale
             val ly = cy + verticalDelta   * scale
 
-            if (lx in -radius..(scrW + radius) && ly in -radius..(scrH + radius)) {
+            if (!bearingValid) {
+                // Nothing drawn: no marker, and no edge arrow either. An arrow is
+                // the more confident of the two — it says the rocket is off-screen
+                // in this direction, which is exactly the claim we cannot make.
+            } else if (lx in -radius..(scrW + radius) && ly in -radius..(scrH + radius)) {
                 drawCircle(locatorColor, radius, Offset(lx, ly), style = Stroke(stroke))
             } else {
                 // Clamp circle centre to screen edge with a small margin, then
@@ -2489,15 +2518,17 @@ fun CameraPreviewScreen(
             drawLine(Color.White, Offset(cx, hTop), Offset(cx, hBottom), stroke * 1.5f)
 
             // Indicator triangle above the bar, tip pointing down into it
-            val hiX    = (cx + horizontalDelta * hPpd).coerceIn(hLeft, hLeft + hGaugeW)
-            val hTriH  = hGaugeH * 0.8f
-            val hTriPath = Path().apply {
-                moveTo(hiX,                  hTop - 1.dp.toPx())
-                lineTo(hiX - hTriH * 0.5f,  hTop - hTriH)
-                lineTo(hiX + hTriH * 0.5f,  hTop - hTriH)
-                close()
+            if (bearingValid) {
+                val hiX    = (cx + horizontalDelta * hPpd).coerceIn(hLeft, hLeft + hGaugeW)
+                val hTriH  = hGaugeH * 0.8f
+                val hTriPath = Path().apply {
+                    moveTo(hiX,                  hTop - 1.dp.toPx())
+                    lineTo(hiX - hTriH * 0.5f,  hTop - hTriH)
+                    lineTo(hiX + hTriH * 0.5f,  hTop - hTriH)
+                    close()
+                }
+                drawPath(hTriPath, locatorColor)
             }
-            drawPath(hTriPath, locatorColor)
 
             // Degree labels at ±gaugeRange, ±gaugeRange/2, 0
             listOf(-gaugeRange, -gaugeRange / 2f, 0f, gaugeRange / 2f, gaugeRange).forEach { ld ->
@@ -2535,15 +2566,17 @@ fun CameraPreviewScreen(
             drawLine(Color.White, Offset(vLeft, cy), Offset(vRight, cy), stroke * 1.5f)
 
             // Indicator triangle left of the bar, tip pointing right into it
-            val viY    = (cy + verticalDelta * vPpd).coerceIn(vTop, vBottom)
-            val vTriW  = vGaugeW * 0.8f
-            val vTriPath = Path().apply {
-                moveTo(vLeft - 1.dp.toPx(),   viY)
-                lineTo(vLeft - vTriW,          viY - vTriW * 0.5f)
-                lineTo(vLeft - vTriW,          viY + vTriW * 0.5f)
-                close()
+            if (bearingValid) {
+                val viY    = (cy + verticalDelta * vPpd).coerceIn(vTop, vBottom)
+                val vTriW  = vGaugeW * 0.8f
+                val vTriPath = Path().apply {
+                    moveTo(vLeft - 1.dp.toPx(),   viY)
+                    lineTo(vLeft - vTriW,          viY - vTriW * 0.5f)
+                    lineTo(vLeft - vTriW,          viY + vTriW * 0.5f)
+                    close()
+                }
+                drawPath(vTriPath, locatorColor)
             }
-            drawPath(vTriPath, locatorColor)
 
             // Degree labels
             listOf(-gaugeRange, -gaugeRange / 2f, 0f, gaugeRange / 2f, gaugeRange).forEach { ld ->

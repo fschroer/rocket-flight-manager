@@ -261,11 +261,51 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val locatorOrdinal: StateFlow<String> = _locatorOrdinal.asStateFlow()
     private val _locatorElevation = MutableStateFlow<Float>(0f)
     val locatorElevation: StateFlow<Float> = _locatorElevation.asStateFlow()
+    /**
+     * False while [locatorDistance] holds a figure the locator cannot be at — see
+     * [distanceIsPlausible].  The distance is still published: this says whether
+     * to quote it, and the display reads "Unknown" instead.
+     */
+    private val _locatorDistancePlausible = MutableStateFlow(true)
+    val locatorDistancePlausible: StateFlow<Boolean> = _locatorDistancePlausible.asStateFlow()
+    // The last distance measured while the locator actually had a fix. The anchor
+    // for the jump test, so the envelope of believable movement always grows from
+    // a real measurement rather than from another unverified reading.
+    private var lastFixDistanceM: Int? = null
+    // How far the rocket could have travelled since that fix, integrated a step at
+    // a time at the bound for the phase it was in — a fixless stretch that starts
+    // under canopy and ends on the ground is charged descent rates and then ground
+    // rates, not one or the other for the whole gap.
+    private var travelBudgetM = 0.0
+    private var lastVectorAtMs = 0L
+
     fun updateLocatorVector(newLocatorVector: Vector) {
         _locatorDistance.value = newLocatorVector.distance
         _locatorAzimuth.value = newLocatorVector.azimuth
         _locatorOrdinal.value = newLocatorVector.ordinal
         _locatorElevation.value = newLocatorVector.elevation
+
+        val state = _rocketState.value
+        val hasFix = locatorHasFix(state.satellites.toInt(), state.gpsStatus)
+        val now = System.currentTimeMillis()
+        // First call has no interval behind it, so it opens no budget.
+        val elapsedMs = if (lastVectorAtMs == 0L) 0L else now - lastVectorAtMs
+        lastVectorAtMs = now
+        if (!hasFix) travelBudgetM += phaseTravelM(state.flightState, elapsedMs)
+
+        _locatorDistancePlausible.value = distanceIsPlausible(
+            distanceM = newLocatorVector.distance,
+            locatorHasFix = hasFix,
+            lastFixDistanceM = lastFixDistanceM,
+            travelBudgetM = travelBudgetM,
+        )
+        // Re-anchored only on a real fix, and only on one that passed: a reading
+        // over the range ceiling is wrong whatever the satellite count says, and
+        // adopting it would move the anchor to a place the rocket has never been.
+        if (hasFix && _locatorDistancePlausible.value) {
+            lastFixDistanceM = newLocatorVector.distance
+            travelBudgetM = 0.0
+        }
     }
 
     /**
@@ -2326,4 +2366,123 @@ internal fun recordsPathPoint(
     // nothing and wait for it to.
     landingConcluded -> false
     else -> state > FlightStates.WaitingLaunch
+}
+
+// ── Distance plausibility ────────────────────────────────────────────────────
+
+/**
+ * A distance the locator cannot be at, because we are hearing from it.
+ *
+ * Telemetry reaches the app as LoRa to the receiver and BLE from the receiver to
+ * the phone, and BLE puts the receiver in the user's hand — so a packet arriving
+ * at all means the locator is within LoRa range of where the distance is measured
+ * from.  Practical range is 10–20 km line of sight; 100 km is several times that
+ * and still an order of magnitude below the readings this exists to reject, so it
+ * cannot fire on a real flight.
+ */
+private const val maxRadioRangeM = 100_000
+
+/**
+ * Whether a distance to the locator is one we could be hearing from at all.  The
+ * check every quoted distance passes, spoken or displayed, whatever the locator
+ * claims about its own fix — see [maxRadioRangeM].
+ */
+internal fun distanceWithinRadioRange(distanceM: Int) =
+    distanceM in 0..maxRadioRangeM
+
+/**
+ * Ceiling on the rocket's **ground speed**, by flight phase.
+ *
+ * Ground speed, not airspeed, and the distinction is the whole calibration.  The
+ * figure being judged comes out of [RocketViewModel.locatorVector], a haversine
+ * over latitude and longitude with no altitude term at all — so it moves only
+ * with the rocket's ground track.  A Mach 5 boost is Mach 5 *vertically*; it adds
+ * almost nothing here, and sizing the bound against it would leave the test
+ * limp through the phase it least needs to be.
+ *
+ * One number for the whole flight had to be the boost number, which left it
+ * uselessly loose everywhere else — a rocket sitting in a field was allowed to
+ * have moved kilometres between reports.
+ *
+ * - **Boost and coast (Launched, Burnout):** 400 m/s.  Not the airframe's speed
+ *   but the horizontal component of it, which is small on a vertical flight and
+ *   still covered here for a badly weathercocked one.
+ * - **Descent (Noseover onward):** 200 m/s.  Far past wind drift under canopy;
+ *   sized instead for a failed deployment, where the rocket keeps the horizontal
+ *   momentum it had at apogee and comes down ballistic.
+ * - **On the ground:** walking pace, for a rocket being carried back and for
+ *   drift in the reported fix.
+ *
+ * Every value errs loose on purpose.  Falsely rejecting a distance during a real
+ * recovery takes away the number the user is walking toward, which is a far worse
+ * failure than showing one bad reading a moment longer.  The boost figure is the
+ * least load-bearing of the three: boost lasts seconds, so it opens a couple of
+ * km of budget at most, where the descent and ground phases run for minutes.
+ */
+internal fun maxGroundSpeedMs(state: FlightStates): Double = when {
+    state == FlightStates.Launched || state == FlightStates.Burnout -> 400.0
+    state.isAirborne() -> 200.0
+    state.isGrounded() -> 5.0
+    // NoSignal, which is also what any state byte the app does not recognise
+    // decodes to. Unknown phase: be permissive rather than blank a distance on
+    // the strength of a state we failed to understand.
+    else -> 400.0
+}
+
+/** Slack for GPS noise, so a stationary rocket is never judged to have jumped. */
+private const val positionNoiseMarginM = 100
+
+/**
+ * How far the rocket could have got during [elapsedMs] spent in [state].
+ *
+ * Accumulated a step at a time rather than measured from the last fix, because a
+ * gap between fixes spans phases: a rocket that loses its fix under canopy and is
+ * next heard from on the ground would be judged against the walking-pace bound
+ * for the whole descent, and the 2 km it genuinely flew would read as a jump.
+ * Integrating phase by phase charges each stretch at its own rate.
+ */
+internal fun phaseTravelM(state: FlightStates, elapsedMs: Long): Double =
+    maxGroundSpeedMs(state) * elapsedMs.coerceAtLeast(0) / 1000.0
+
+/**
+ * At least four satellites, which is what a 3D fix takes.  Fewer cannot have
+ * produced the position being reported, whether the count means satellites used
+ * or satellites in view.
+ */
+internal fun locatorHasFix(satellites: Int, gpsStatus: SensorHealth) =
+    satellites >= 4 && gpsStatus == SensorHealth.Ok
+
+/**
+ * Whether a computed distance to the locator is worth showing.
+ *
+ * Two ways for it to be nonsense.  It can be impossible on its face — a locator
+ * 779 km away that we are receiving telemetry from, which is the reading that
+ * prompted this.  Or it can be a position the locator had no way to measure: with
+ * no fix, the coordinates in the packet are whatever the GPS module last held, or
+ * garbage, and the great-circle distance to them is a plausible-looking number
+ * with nothing behind it.
+ *
+ * The second test is a jump, not a value, and that is the point.  A locator that
+ * loses its fix on the ground goes on reporting the last position it *did*
+ * measure, and that stale distance is the number the user walks toward — blanking
+ * it would take away the only thing left to aim at, which is the same reasoning
+ * that greys a degraded fix on the map rather than hiding it (ADR-0017).  So a
+ * fixless reading is rejected only when it has moved further from the last real
+ * fix than the rocket could physically have travelled since.
+ *
+ * [lastFixDistanceM] is the distance when the locator last had a fix, null before
+ * it ever has: with nothing to compare against, only the range ceiling applies.
+ * [travelBudgetM] is how far the rocket could have moved since that fix,
+ * accumulated phase by phase — see [phaseTravelM].
+ */
+internal fun distanceIsPlausible(
+    distanceM: Int,
+    locatorHasFix: Boolean,
+    lastFixDistanceM: Int?,
+    travelBudgetM: Double,
+): Boolean = when {
+    !distanceWithinRadioRange(distanceM) -> false
+    locatorHasFix -> true
+    lastFixDistanceM == null -> true
+    else -> abs(distanceM - lastFixDistanceM) <= positionNoiseMarginM + travelBudgetM
 }
