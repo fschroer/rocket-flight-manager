@@ -3,7 +3,10 @@ package com.steampigeon.flightmanager.ui
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.content.res.Configuration
 import android.location.Location
 import android.os.Vibrator
@@ -115,6 +118,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
@@ -2090,13 +2094,60 @@ fun LocatorStats(
             }
         }
 
-        if (rocketState.rawLatitude != 0.0 && rocketState.rawLongitude != 0.0)
+        // Tapping the coordinates hands them to a mapping app. The geo: scheme is
+        // resolved by the OS, so the user's own choice of app wins — which matters
+        // here more than usual: recovery happens where there is no cell signal
+        // (ADR-0014), and only an app with offline data downloaded will show
+        // anything useful when it opens.
+        //
+        // Offered only for a position the app is willing to stand behind.
+        // ADR-0022 already refuses to quote a distance it cannot justify, and
+        // handing that same position to a navigation app would walk straight past
+        // that judgement — literally.
+        if (rocketState.rawLatitude != 0.0 && rocketState.rawLongitude != 0.0) {
+            val context = LocalContext.current
+            // BigDecimal.toString() is locale-independent. String.format without
+            // Locale.US would write a comma decimal separator in a de-DE locale,
+            // which silently corrupts the URI as well as the display.
+            val lat = BigDecimal(rocketState.rawLatitude).setScale(6, RoundingMode.HALF_UP)
+            val lon = BigDecimal(rocketState.rawLongitude).setScale(6, RoundingMode.HALF_UP)
+            // Probed with a fixed URI rather than the live one: resolution does not
+            // depend on the coordinates, and re-resolving against a URI that
+            // changes at 1 Hz would put a PackageManager IPC on every fix. Needs
+            // the <queries> geo: entry in the manifest to see anything on API 30+.
+            val mapsAppInstalled = remember {
+                context.packageManager.resolveActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=0,0")), 0
+                ) != null
+            }
+            val navigable = mapsAppInstalled &&
+                validLatLng(rocketState.rawLatitude, rocketState.rawLongitude) &&
+                distancePlausible
+            // Resolved out here: stringResource is composable and the tap lambda
+            // is not. q= drops a labelled pin; a bare geo:lat,lon only centres the
+            // camera, which is the less useful of the two when the point is to
+            // walk to it.
+            val pinLabel = locatorConfig.deviceName.ifBlank { stringResource(R.string.rocket_pin_label) }
             Text(
-                modifier = modifier,
-                text = "${BigDecimal(rocketState.rawLatitude).setScale(6, RoundingMode.HALF_UP)}," +
-                        BigDecimal(rocketState.rawLongitude).setScale(6, RoundingMode.HALF_UP).toString(),
+                modifier = if (navigable) modifier.clickable {
+                    val geoUri = Uri.parse("geo:0,0?q=$lat,$lon(${Uri.encode(pinLabel)})")
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, geoUri))
+                    } catch (_: ActivityNotFoundException) {
+                        // resolveActivity above can go stale — the maps app may be
+                        // uninstalled while the panel is on screen — and an
+                        // uncaught ActivityNotFoundException takes the app down.
+                        Toast.makeText(context, R.string.no_maps_app, Toast.LENGTH_SHORT).show()
+                    }
+                } else modifier,
+                text = "$lat,$lon",
                 style = TelemetryTextStyle,
+                // The only affordance the row can carry at this size. Absent when
+                // the tap is not offered, so it never invites a press that does
+                // nothing.
+                textDecoration = if (navigable) TextDecoration.Underline else null,
             )
+        }
     }
 
     LaunchedEffect(locatorStatisticsOffset) {

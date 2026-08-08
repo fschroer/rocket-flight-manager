@@ -59,6 +59,12 @@
     <string name="refresh">Refresh</string>
     <string name="return_to_main">Return</string>
     <string name="scan_for_devices">Scan for devices</string>
+    <!-- Shown when the tapped coordinates cannot be opened because the mapping
+         app that answered at startup is no longer installed. -->
+    <string name="no_maps_app">No mapping app available</string>
+    <!-- Pin label for coordinates handed to a mapping app, when the locator has
+         no device name of its own. -->
+    <string name="rocket_pin_label">Rocket</string>
     <string name="unknown">Unknown</string>
     <string name="update">Update</string>
     <string name="update_failed">Send Failed</string>

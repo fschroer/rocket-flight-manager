@@ -18,6 +18,20 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
+    <!-- Lets the app SEE which installed apps handle a geo: URI, so tapping the
+         locator's coordinates can offer to open them in a mapping app (and stay
+         quiet when nothing would answer).  Required from API 30: without it
+         resolveActivity() returns null on a phone with three maps apps
+         installed, and the tap target would hide itself on every modern device.
+         Launching still works without this — only the ability to ask first
+         needs declaring. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
+    </queries>
+
     <uses-feature android:name="android.software.companion_device_setup"/>
     <uses-feature android:name="android.hardware.bluetooth" android:required="true"/>
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true"/>
