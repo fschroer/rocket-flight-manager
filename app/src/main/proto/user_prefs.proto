@@ -20,6 +20,16 @@ message UserPreferences {
   // authenticates the armed case directly instead of trusting a stored id. Not
   // reused: an installed app may still have a value written under this number.
   reserved 7;
+  // Closest zoom the live map's AUTO-zoom will frame to. Pinch is not bound by
+  // it. Exists so GPS error at close range cannot make the map jump zoom levels
+  // on every fix — see MAP_ZOOM_LIMIT_DEFAULT in FlightMapScreen.kt.
+  //
+  // `optional` for explicit presence, so "the user has not chosen" stays
+  // distinguishable from any stored number. Plain proto3 would read 0 for both,
+  // and folding them together freezes every existing install at whatever the
+  // default was when they last saved — a later change to that default would
+  // never reach them.
+  optional int32 map_max_zoom = 8;
 }
 
 message KnownLocator {

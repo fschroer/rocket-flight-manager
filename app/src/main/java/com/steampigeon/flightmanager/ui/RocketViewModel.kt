@@ -180,6 +180,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 //_userPreferences.value = preferences
                 _locatorStatisticsOffset.value = IntOffset(preferences.locatorStatisticsOffsetX, preferences.locatorStatisticsOffsetY)
                 _voiceEnabled.value = preferences.voiceEnabled
+                // Left null when absent so resolveMapMaxZoom applies the default;
+                // proto3 would otherwise hand us a 0 indistinguishable from a real
+                // stored level.
+                _mapMaxZoom.value =
+                    if (preferences.hasMapMaxZoom()) preferences.mapMaxZoom else null
                 _voiceName.value = preferences.voiceName
                 _remoteReceiverConfig.update { it.copy(deviceName = preferences.receiverName) }
                 _knownLocators.value = preferences.knownLocatorsMap.mapKeys { it.key.toLong() and 0xFFFFFFFFL }
@@ -208,6 +213,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 .setLocatorStatisticsOffsetX(_locatorStatisticsOffset.value.x)
                 .setLocatorStatisticsOffsetY(_locatorStatisticsOffset.value.y)
                 .setVoiceEnabled(_voiceEnabled.value)
+                // Written only once the user has actually chosen. saveUserPreferences
+                // is called from several unrelated places (the stats-panel drag, for
+                // one), so writing it unconditionally would stamp the current default
+                // onto every install that merely moved a panel — and a later change
+                // to that default would then never reach them.
+                .apply { _mapMaxZoom.value?.let { setMapMaxZoom(it) } }
                 .setVoiceName(_voiceName.value)
                 .setReceiverName(_remoteReceiverConfig.value.deviceName)
                 .build()
@@ -219,6 +230,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateVoiceEnabled(newVoiceEnabled: Boolean) {
         _voiceEnabled.value = newVoiceEnabled
+    }
+
+    /**
+     * The closest zoom the live map's auto-zoom may frame to, or null when the
+     * user has not chosen one.  Null rather than a default value because the
+     * default and the valid range belong with the map — see [resolveMapMaxZoom],
+     * which every reader goes through.
+     */
+    private val _mapMaxZoom = MutableStateFlow<Int?>(null)
+    val mapMaxZoom: StateFlow<Int?> = _mapMaxZoom.asStateFlow()
+
+    fun updateMapMaxZoom(newMaxZoom: Int) {
+        _mapMaxZoom.value = newMaxZoom
     }
 
     private val _voiceName = MutableStateFlow<String>("us-x-iob-local")

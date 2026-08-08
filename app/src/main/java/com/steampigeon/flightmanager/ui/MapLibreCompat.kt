@@ -412,6 +412,12 @@ fun MapLibreMapView(
                         isLogoEnabled = false           // avoid overlap w/ app's bottom-left overlays
                         isAttributionEnabled = false
                     }
+                    // No setMaxZoomPreference call either: the closest-zoom setting
+                    // bounds AUTO-zoom only, and this would bound pinch as well.
+                    // Deliberately left at the SDK default so the user can always
+                    // pinch in past the limit to look at something — see where
+                    // MapCameraController clamps its own filter instead.
+                    //
                     // No setMaxPitchPreference call: 60° is already the default ceiling and
                     // also the highest value the setter accepts, so raising it isn't possible
                     // (see MAPLIBRE_MAX_PITCH). The previous 85.0 here was rejected outright.

@@ -186,6 +186,46 @@ private const val actionPanelCollapseDelay = 5000L   // auto-collapse the Rescan
 // Consistent semi-transparent overlay background used for all map UI panels and buttons.
 // Derived from secondaryContainerLight (#5D6F96) at 75% opacity.
 private val mapOverlayBg = Color(0xC05D6F96)
+// ── Live-map auto-zoom limit (App Settings) ──────────────────────────────────
+// The closest zoom AUTO-zoom will frame to. Pinch is not bound by it: the user
+// can always go closer by hand to look at something, and auto-zoom reasserts its
+// own framing when the gesture window expires, exactly as it does for any manual
+// zoom.
+//
+// This exists because of GPS error, not because of tile availability. Auto-zoom
+// frames a box containing the phone and the rocket, and at close range the
+// distance between those two reported positions is mostly the two receivers'
+// combined error rather than real separation. The box therefore changes size
+// dramatically from one fix to the next, and the fitted zoom chases it: the map
+// jumps zoom levels every second or so, exactly when the user is walking the
+// last few metres with the phone in their hand.
+//
+// Capping the fitted zoom stops it. Once the fit asks for something deeper than
+// the cap, the filter holds there and the jitter has nowhere to go — the map
+// keeps a steady frame instead of pumping.
+//
+// The cost is that auto-zoom stops short of the closest imagery, which is why it
+// is a setting rather than a constant: how much error there is depends on the
+// receivers, the sky view and the site.
+//
+// Range and default are fixed rather than derived from the provider. The
+// provider's maxOfflineZoom is a DOWNLOAD cap — chosen for storage, since each
+// level costs 4x the tiles — not a statement about what imagery exists: the
+// Mapbox source carries tiles to z22. Deriving the camera cap from it would pin
+// this control to z19/z20 and leave the deeper levels unreachable on a live
+// link, which is the opposite of letting the user find the setting that suits
+// their receivers and site.
+internal const val MAP_ZOOM_LIMIT_MIN = 18
+internal const val MAP_ZOOM_LIMIT_MAX = 22
+internal const val MAP_ZOOM_LIMIT_DEFAULT = 20
+
+/**
+ * The closest zoom the live map may use — [stored] if the user has chosen one,
+ * else [MAP_ZOOM_LIMIT_DEFAULT], clamped to the offered range either way.
+ */
+internal fun resolveMapMaxZoom(stored: Int?): Int =
+    (stored ?: MAP_ZOOM_LIMIT_DEFAULT).coerceIn(MAP_ZOOM_LIMIT_MIN, MAP_ZOOM_LIMIT_MAX)
+
 private const val landingAltitudeThreshold = 30
 private const val minimumSpokenAGLVelocity = 2 * 9.8
 
@@ -941,6 +981,10 @@ private fun MapWithOverlays(
         // Live map uses whichever satellite provider the user selected in the download
         // screen, so downloaded offline regions (same source) render here.
         val styleJson = remember { MapProviderPrefs.get(context).styleJson(context) }
+        // The closest zoom auto-zoom will frame to, from App Settings — see
+        // resolveMapMaxZoom for why it exists (GPS error, not tile supply).
+        val liveMapMaxZoom =
+            resolveMapMaxZoom(viewModel.mapMaxZoom.collectAsState().value).toDouble()
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
         val rocketFresh = lastMessageAge < messageTimeout
         // Link age is checked first: if we are not hearing from the locator, its
@@ -1025,6 +1069,7 @@ private fun MapWithOverlays(
             handheldDevicePitch = handheldDevicePitch,
             autoTargetMode = autoTargetMode,
             autoZoomMode = autoZoomMode,
+            maxZoom = liveMapMaxZoom.toFloat(),
             tiltMode = tiltMode,
             onBearingUpdate = { viewModel.updateLastHandheldDeviceAzimuth(it) },
         )
@@ -1334,6 +1379,10 @@ private fun MapCameraController(
     handheldDevicePitch: Float,
     autoTargetMode: Boolean,
     autoZoomMode: Boolean,
+    // Closest zoom auto-zoom may frame to. Enforced here and nowhere else — the
+    // map sets no max-zoom preference, so pinch is unaffected. See where
+    // smoothedZoom is clamped.
+    maxZoom: Float,
     tiltMode: MapTiltMode,
     onBearingUpdate: (Float) -> Unit,
 ) {
@@ -1479,8 +1528,34 @@ private fun MapCameraController(
         )
     else smoothedTarget
 
+    // The closest-zoom limit lives HERE, on the filter, and nowhere else. The map
+    // sets no max-zoom preference, so a pinch can always go closer than this —
+    // only auto-zoom is bound by it, which is the point of the setting.
+    //
+    // Inside the autoZoomMode branch deliberately. Applied unconditionally it
+    // would also claw back a manual zoom while auto-zoom is switched OFF: the
+    // gesture branch above seeds the filter from the native camera, so a pinch
+    // past the limit would be undone the moment the gesture window expired, with
+    // nothing on screen to explain it.
+    //
+    // getCameraForLatLngBounds is free to ask for a zoom well past the limit, and
+    // does exactly that when the two fixes are nearly coincident — walking up to a
+    // landed rocket. That separation is mostly GPS error, so the request swings
+    // hard from fix to fix. Clamping as it is filtered keeps those swings out of
+    // the stored state: unclamped, the filter tracks them above the limit and
+    // looks calm only until a swing drops back below it and the map lurches. It
+    // also avoids the unwind lag, where a filter wound up to an unreachable value
+    // must come back down at 5 % per frame before the map visibly starts zooming
+    // out as you walk away.
+    //
+    // The ceiling carries + zoomCorrection because the correction is subtracted on
+    // the way to the camera: this bounds the zoom actually applied at maxZoom
+    // rather than the pre-correction state, which under tilt would lose up to a
+    // whole level of legitimate range. It matches the formula the gesture branch
+    // uses to read state back from the native camera.
     smoothedZoom = if (autoZoomMode && autoZoom != null)
-        smoothedZoom + (autoZoom - smoothedZoom) * kalmanGainZoom
+        (smoothedZoom + (autoZoom - smoothedZoom) * kalmanGainZoom)
+            .coerceAtMost(maxZoom + zoomCorrection)
     else smoothedZoom
 
     val effectiveCompass = hasCompass && compassEnabled

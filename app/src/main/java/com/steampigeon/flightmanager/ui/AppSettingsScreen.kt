@@ -15,7 +15,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
@@ -29,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -36,6 +39,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.R
 import kotlinx.coroutines.launch
 import androidx.compose.material3.MenuAnchorType
+import kotlin.math.roundToInt
 
 private const val TAG = "AppSettings"
 
@@ -131,6 +135,45 @@ fun AppSettingsScreen(
                 viewModel.updateVoiceName(voiceName)
                 viewModel.saveUserPreferences()
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            // Closest map zoom. Stated as the absolute level, matching the Download
+            // maps screen's "Detail (max zoom): z17" so the two read the same way.
+            val maxZoom = resolveMapMaxZoom(viewModel.mapMaxZoom.collectAsState().value)
+            Text("Closest map zoom: z$maxZoom")
+            Slider(
+                value = maxZoom.toFloat(),
+                onValueChange = { viewModel.updateMapMaxZoom(it.roundToInt()) },
+                onValueChangeFinished = { coroutineScope.launch { viewModel.saveUserPreferences() } },
+                valueRange = MAP_ZOOM_LIMIT_MIN.toFloat()..MAP_ZOOM_LIMIT_MAX.toFloat(),
+                steps = MAP_ZOOM_LIMIT_MAX - MAP_ZOOM_LIMIT_MIN - 1,
+                // Keeps the track — and so the thumb at maximum — clear of the
+                // right screen edge, where a horizontal drag is the system back
+                // gesture. Dragging to the top of the range would otherwise be a
+                // coin toss between setting the value and leaving the screen,
+                // losing the drag. The parent's start padding already clears the
+                // left edge; this matches it on the right.
+                //
+                // systemGestureExclusion() would tell the OS to keep its hands off
+                // instead, but it is capped in size and best spent on controls that
+                // genuinely need the full width. A margin costs nothing here.
+                modifier = Modifier.padding(end = 40.dp),
+            )
+            Text(
+                text = "How far in the map follows the rocket on its own. You can always pinch closer. " +
+                    when {
+                        maxZoom >= MAP_ZOOM_LIMIT_MAX ->
+                            "Closest available. Expect the map to jump zoom levels within a few metres of " +
+                                "the rocket — that is GPS error on both ends, not the rocket moving."
+                        maxZoom <= MAP_ZOOM_LIMIT_MIN ->
+                            "Steadiest. The map stops well back, so the last stretch is done by eye."
+                        else ->
+                            "Lower settings hold a steadier frame as you walk up to the rocket, at the " +
+                                "cost of the closest levels of detail."
+                    },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // Capture initial and updated app configuration data.
         }
         Spacer (modifier = modifier.weight(1f))
