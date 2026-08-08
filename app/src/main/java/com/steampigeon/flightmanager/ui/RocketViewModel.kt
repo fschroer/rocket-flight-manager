@@ -386,7 +386,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int, badFrames: Int, currentTime: Long): LinkQuality.Verdict {
         quietestNoiseFloor = LinkQuality.updateQuietestFloor(quietestNoiseFloor, noiseFloor)
-        val previous = _rocketState.value.lastPreLaunchMessageTime
+        val previous = _rocketState.value.lastMessageTime
         // No previous broadcast (fresh session) is not a gap.
         val gapMs = if (previous == 0L) 0L else currentTime - previous
         // A corrupted frame is loss we can SEE, not loss inferred from a gap, and it
@@ -1130,9 +1130,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             while (true) {
                 delay(LINK_LIVENESS_TICK_MS)
                 val st = _rocketState.value
-                if (st.lastPreLaunchMessageTime == 0L) continue
+                if (st.lastMessageTime == 0L) continue
                 val now = System.currentTimeMillis()
-                val gap = now - st.lastPreLaunchMessageTime
+                val gap = now - st.lastMessageTime
                 if (gap < LinkQuality.LOSSY_GAP_MS) continue
                 // We are in a dropout right now, not remembering an old one.
                 lastLossMs = LinkQuality.updateLastLoss(lastLossMs, now, gap)
@@ -1183,7 +1183,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
-                                    lastPreLaunchMessageTime = currentTime,
+                                    lastMessageTime = currentTime,
+                                    // Only the pre-launch branch stamps this, which
+                                    // is what makes it usable for ageing the fields
+                                    // only this message carries.
+                                    lastPreLaunchDataTime = currentTime,
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
                                     rawLatitude = parsed.msg.rawLatitude,
@@ -1297,7 +1301,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
                             _rocketState.update { currentState ->
                                 currentState.copy(
-                                    lastPreLaunchMessageTime = currentTime,
+                                    lastMessageTime = currentTime,
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
                                     satellites = parsed.msg.satellites.toUByte(),
@@ -1498,10 +1502,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // every Activity recreation, and a false seed would read the already-up
             // link as a rising edge and re-request on each theme or locale change.
             var linkWasUp =
-                System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime < 5_000L
+                System.currentTimeMillis() - _rocketState.value.lastMessageTime < 5_000L
             while (true) {
                 delay(1_000L)
-                val age = System.currentTimeMillis() - _rocketState.value.lastPreLaunchMessageTime
+                val age = System.currentTimeMillis() - _rocketState.value.lastMessageTime
                 val linkUp = age < 5_000L
                 if (linkUp && !linkWasUp) versionInfoStale.value = true
                 linkWasUp = linkUp

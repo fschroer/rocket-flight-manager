@@ -79,9 +79,9 @@ fun ReceiverSettingsScreen(
         // Re-entering the screen is the user asking to see conflicts again, so a
         // dismissal from a previous visit does not persist.
         viewModel.resetConflictDismissals()
-        val lastPreLaunchMessageAge =
-            System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
-        if (lastPreLaunchMessageAge > 5_000L) {
+        val lastMessageAge =
+            System.currentTimeMillis() - rocketState.lastMessageTime
+        if (lastMessageAge > 5_000L) {
             service?.requestReceiverInfo()
         }
     }

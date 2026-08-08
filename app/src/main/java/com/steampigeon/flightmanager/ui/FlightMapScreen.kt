@@ -417,7 +417,11 @@ fun HomeScreen(
     val handheldCameraAzimuth = viewModel.handheldCameraAzimuth.collectAsState().value
     val locatorElevation = viewModel.locatorElevation.collectAsState().value
     val azimuthToLocator = viewModel.locatorAzimuth.collectAsState().value
-    val lastPreLaunchMessageAge = System.currentTimeMillis() - rocketState.lastPreLaunchMessageTime
+    val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
+    // Distinct from the above, which ages ANY message. Battery levels ride only on
+    // the pre-launch message, so once the locator switches to telemetry they stop
+    // being refreshed and this is the clock that says so.
+    val preLaunchDataAge = System.currentTimeMillis() - rocketState.lastPreLaunchDataTime
     val flightPath = viewModel.flightPath.collectAsState().value
     val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
     // Whether the locator's reported position is one we can quote a distance or a
@@ -443,7 +447,7 @@ fun HomeScreen(
             rocketSpeed = rocketState.velocity,
             rocketAttitude = rocketState.attitude,
             inFlight = isInFlight(armedState, rocketState),
-            lastPreLaunchMessageAge = lastPreLaunchMessageAge,
+            lastMessageAge = lastMessageAge,
             // Bearing and distance come out of the same vector, so a position the
             // distance test rejects aims the AR marker just as wrongly.
             bearingValid = locatorFixUsable,
@@ -463,7 +467,7 @@ fun HomeScreen(
                     AppDrawerContent(
                         bluetoothConnectionState = bluetoothConnectionState,
                         armedState = armedState,
-                        locatorActive = lastPreLaunchMessageAge < messageTimeout,
+                        locatorActive = lastMessageAge < messageTimeout,
                         onNavigate = { screen ->
                             scope.launch { drawerState.close() }
                             navController.navigate(screen.name)
@@ -503,7 +507,8 @@ fun HomeScreen(
                         azimuth = azimuth,
                         lastAzimuth = lastAzimuth,
                         handheldDevicePitch = handheldDevicePitch,
-                        lastPreLaunchMessageAge = lastPreLaunchMessageAge,
+                        lastMessageAge = lastMessageAge,
+                        preLaunchDataAge = preLaunchDataAge,
                         distanceToLocator = distanceToLocator,
                         viewModel = viewModel,
                         scaffoldSize = scaffoldSize,
@@ -721,7 +726,7 @@ private fun FlightSpeechAnnouncer(
             val state = currentRocketState
             val vector = currentVector
             val now = System.currentTimeMillis()
-            val messageAge = now - state.lastPreLaunchMessageTime
+            val messageAge = now - state.lastMessageTime
             val descentRate = state.velNed.z   // NED Down component: positive while descending
             val linkLive = messageAge < linkLossTimeout
             val fromLaunch = launchRelativePhrase(state, vector)
@@ -903,7 +908,8 @@ private fun MapWithOverlays(
     azimuth: Float,
     lastAzimuth: Float,
     handheldDevicePitch: Float,
-    lastPreLaunchMessageAge: Long,
+    lastMessageAge: Long,
+    preLaunchDataAge: Long,
     distanceToLocator: Int,
     viewModel: RocketViewModel,
     scaffoldSize: IntSize,
@@ -936,7 +942,7 @@ private fun MapWithOverlays(
         // screen, so downloaded offline regions (same source) render here.
         val styleJson = remember { MapProviderPrefs.get(context).styleJson(context) }
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
-        val rocketFresh = lastPreLaunchMessageAge < messageTimeout
+        val rocketFresh = lastMessageAge < messageTimeout
         // Link age is checked first: if we are not hearing from the locator, its
         // last-reported gpsStatus is itself stale and cannot qualify anything.
         // Only with a live link does a non-Ok gpsStatus mean what it says — the
@@ -1057,7 +1063,7 @@ private fun MapWithOverlays(
             textColor = MaterialTheme.colorScheme.secondary,
         )
 
-        if (lastPreLaunchMessageAge < messageTimeout) {
+        if (lastMessageAge < messageTimeout) {
             // A plain "Disarmed" is correct on the bench and near-invisible at the
             // pad, which is where it matters. When the locator reports a prepped
             // rocket standing disarmed (#37) the same indicator escalates: it says
@@ -1117,7 +1123,8 @@ private fun MapWithOverlays(
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
                 MapControlsColumn(
                     bluetoothConnectionState = bluetoothConnectionState,
-                    lastPreLaunchMessageAge = lastPreLaunchMessageAge,
+                    lastMessageAge = lastMessageAge,
+                    preLaunchDataAge = preLaunchDataAge,
                     rocketState = rocketState,
                     receiverDeviceName = receiverDeviceName,
                     locatorConfig = locatorConfig,
@@ -1245,7 +1252,7 @@ private fun MapWithOverlays(
             }
         }
 
-        if (lastPreLaunchMessageAge < messageTimeout) {
+        if (lastMessageAge < messageTimeout) {
             LocatorStats(
                 rocketState = rocketState,
                 armedState = armedState,
@@ -1542,7 +1549,12 @@ private fun GenericScaleBar(
 @Composable
 private fun MapControlsColumn(
     bluetoothConnectionState: BluetoothConnectionState,
-    lastPreLaunchMessageAge: Long,
+    lastMessageAge: Long,
+    // Aged separately because battery levels arrive ONLY in the pre-launch
+    // message. Everything else on this panel is carried by both message types and
+    // stays live through a flight; the batteries stop being refreshed the moment
+    // the locator switches to telemetry.
+    preLaunchDataAge: Long,
     receiverDeviceName: String,
     locatorConfig: LocatorConfig,
     rocketState: RocketState,
@@ -1675,7 +1687,12 @@ private fun MapControlsColumn(
                 )
                 val receiverBattery = rocketState.receiverBatteryLevel.coerceIn(0..7)
                 Box(modifier = Modifier.width(batteryBoxWidth), contentAlignment = Alignment.CenterStart) {
-                    if (lastPreLaunchMessageAge < messageTimeout) {
+                    // preLaunchDataAge, not lastMessageAge: the latter is refreshed
+                    // by telemetry too, which carries no battery level, so gating on
+                    // it left this icon lit for the whole flight showing whatever the
+                    // charge was on the pad. Nothing beats a stale battery reading
+                    // for being quietly wrong.
+                    if (preLaunchDataAge < messageTimeout) {
                         Icon(
                             painter = painterResource(
                                 context.resources.getIdentifier("battery_${receiverBattery}_bar", "drawable", context.packageName)
@@ -1702,7 +1719,7 @@ private fun MapControlsColumn(
                                 .size(iconSize)
                                 .alpha(rocketIconAlpha)
                         )
-                        if (lastPreLaunchMessageAge < messageTimeout) {
+                        if (lastMessageAge < messageTimeout) {
                             Text(
                                 text = buildAnnotatedString {
                                     withStyle(
@@ -1717,7 +1734,7 @@ private fun MapControlsColumn(
                     }
                 }
                 Text(
-                    text = if (lastPreLaunchMessageAge < messageTimeout) locatorConfig.deviceName else "",
+                    text = if (lastMessageAge < messageTimeout) locatorConfig.deviceName else "",
                     modifier = Modifier.width(nameWidth),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1725,7 +1742,8 @@ private fun MapControlsColumn(
                 )
                 val locatorBattery = rocketState.locatorBatteryLevel.coerceIn(0..7)
                 Box(modifier = Modifier.width(batteryBoxWidth), contentAlignment = Alignment.CenterStart) {
-                    if (lastPreLaunchMessageAge < messageTimeout) {
+                    // Same as the receiver battery above — pre-launch only.
+                    if (preLaunchDataAge < messageTimeout) {
                         Icon(
                             painter = painterResource(
                                 context.resources.getIdentifier("battery_${locatorBattery}_bar", "drawable", context.packageName)
@@ -1739,7 +1757,7 @@ private fun MapControlsColumn(
                 }
             }
             // Row 3: signal icon | RSSI value
-            if (lastPreLaunchMessageAge < messageTimeout) {
+            if (lastMessageAge < messageTimeout) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.width(iconBoxWidth), contentAlignment = Alignment.CenterStart) {
                         Icon(
@@ -2417,7 +2435,7 @@ fun CameraPreviewScreen(
     // Whether the rocket is FLYING, not whether it is armed — this screen has no
     // RocketState to decide for itself, so the caller passes the verdict (#36).
     inFlight: Boolean = false,
-    lastPreLaunchMessageAge: Long = Long.MAX_VALUE,
+    lastMessageAge: Long = Long.MAX_VALUE,
     // False when the position the bearing was computed from failed the distance
     // plausibility test. The locator marker and both gauge pointers are drawn
     // from it, and an AR overlay is more assertive than a readout: it puts a
@@ -2637,7 +2655,7 @@ fun CameraPreviewScreen(
                         "${ld.toInt()}°", vLeft - 4.dp.toPx(), ly2 + labelPx / 3f, vLabelPaint)
             }
 
-            if (inFlight && lastPreLaunchMessageAge < messageTimeout) {
+            if (inFlight && lastMessageAge < messageTimeout) {
                 // ── Velocity arc gauge (top-left) ─────────────────────────────
                 drawVelocityGauge(
                     speed = rocketSpeed,

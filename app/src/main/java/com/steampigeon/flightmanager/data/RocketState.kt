@@ -53,7 +53,27 @@ object Protocol {
  * Data class that represents the current rocket locator state]
  */
 data class RocketState(
-    val lastPreLaunchMessageTime: Long = 0,
+    /**
+     * When the last message of ANY kind arrived — pre-launch or telemetry.
+     * Link liveness, which is what nearly everything asking "are we still
+     * hearing the rocket" wants.
+     *
+     * It is NOT the right clock for a field only one message type carries.  See
+     * [lastPreLaunchDataTime].
+     *
+     * Was `lastPreLaunchMessageTime` until 2026-08-08, which read as a promise
+     * it never kept: the telemetry handler stamps it too.  The name is the whole
+     * reason the battery icons stayed lit through a flight.
+     */
+    val lastMessageTime: Long = 0,
+    /**
+     * When the last **pre-launch** message arrived, and nothing else.
+     *
+     * Battery levels ride only on that message — the locator stops sending them
+     * the moment it switches to telemetry — so anything read out of a pre-launch
+     * payload must be aged against this rather than [lastMessageTime].
+     */
+    val lastPreLaunchDataTime: Long = 0,
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val rawLatitude: Double = 0.0,
