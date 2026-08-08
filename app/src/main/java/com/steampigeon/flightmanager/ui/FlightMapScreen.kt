@@ -46,7 +46,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1768,19 +1767,17 @@ private fun MapControlsColumn(
             // Silent on Normal — which includes a distant rocket at apogee, the case
             // an SNR-only rule would false-alarm on every flight, and a locator
             // simply switched off (its channel goes quiet, so no verdict is raised).
-            when (rocketState.linkQuality) {
-                LinkQuality.Verdict.Interference -> LinkQualityNote(
-                    text = stringResource(R.string.link_interference),
-                    color = MaterialTheme.colorScheme.error,
-                    iconBoxWidth = iconBoxWidth,
-                )
-                LinkQuality.Verdict.Congested -> LinkQualityNote(
-                    text = stringResource(R.string.link_congested),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    iconBoxWidth = iconBoxWidth,
-                )
-                LinkQuality.Verdict.Normal -> Unit
-            }
+            LinkQualityNote(
+                text = when (rocketState.linkQuality) {
+                    LinkQuality.Verdict.Interference -> stringResource(R.string.link_interference)
+                    LinkQuality.Verdict.Congested -> stringResource(R.string.link_congested)
+                    LinkQuality.Verdict.Normal -> null
+                },
+                color = when (rocketState.linkQuality) {
+                    LinkQuality.Verdict.Interference -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
 
             // ── Descending action buttons ─────────────────────────────────────
             // Large, clearly labelled touch targets revealed by tapping the panel.
@@ -2285,20 +2282,27 @@ private fun DrawScope.drawRocket3D(
 
 /** One-line qualifier under the RSSI readout, aligned to the same icon gutter. */
 @Composable
-private fun LinkQualityNote(text: String, color: Color, iconBoxWidth: Dp) {
-    Row(verticalAlignment = Alignment.Top) {
-        Spacer(modifier = Modifier.width(iconBoxWidth))
-        Text(
-            text = text,
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            // Wraps to as many lines as it needs. maxLines = 2 silently truncated
-            // the interference wording mid-sentence, which is the one message here
-            // that has to be read to be acted on. Top alignment so a wrapped note
-            // stays flush with the gutter instead of centring against it.
-            modifier = Modifier.weight(1f).padding(end = 4.dp),
-        )
-    }
+private fun LinkQualityNote(text: String?, color: Color) {
+    Text(
+        // Always rendered, empty when there is nothing to say. The note appears and
+        // disappears with link conditions, and letting it size the panel made the
+        // whole status block jump every time the verdict changed — worst exactly
+        // when the user is watching it. The slot is reserved either way.
+        text = text ?: "",
+        color = color,
+        style = MaterialTheme.typography.labelSmall,
+        // minLines rather than a fixed dp height: it reserves two lines of the
+        // ACTUAL line height, so the reservation still holds at larger system font
+        // scales instead of clipping.
+        minLines = 2,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        // Full width, starting under the icon gutter. The note is prose, not a
+        // column entry, so it has no reason to line up with the readouts above and
+        // every reason to use the ~40 dp the icons leave empty — it is the
+        // difference between these messages fitting in two lines and not.
+        modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
+    )
 }
 
 // ── RSSI signal strength color ────────────────────────────────────────────────
