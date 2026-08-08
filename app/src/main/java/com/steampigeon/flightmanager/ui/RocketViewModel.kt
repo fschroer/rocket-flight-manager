@@ -893,6 +893,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // observed ground state.  Without it, an app restarted mid-flight reads its
     // first packet as a launch and erases the path of the flight it just rejoined.
     private var flightStateObserved = false
+    // Set once the flight is over as far as the app can tell — see
+    // landingConcluded. The path is frozen from then on, except for the locator's
+    // own first Landed fix.
+    private var landingConcludedThisFlight = false
+    // Set once the locator has actually reported Landed, which ends the recording
+    // for this flight outright.
+    //
+    // Both are cleared by the next launch and by resetFlightPath, and by nothing
+    // else: neither a landing nor its confirmation is walked back mid-flight.
+    private var landedStatusReceived = false
 
     private val _isFlightPathRecording = MutableStateFlow(true)
     val isFlightPathRecording: StateFlow<Boolean> = _isFlightPathRecording.asStateFlow()
@@ -972,6 +982,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun stopFlightPathRecording() { _isFlightPathRecording.value = false }
     fun resetFlightPath() {
         _flightPath.value = emptyList()
+        // Start clean means recording again, even mid-descent or with the rocket
+        // already down: a cleared path that then refused to draw would look
+        // broken. A rocket still transmitting Landed re-marks its own position,
+        // once, and stops there again.
+        landingConcludedThisFlight = false
+        landedStatusReceived = false
         // Clear the archived track too, and fall back to live. Reset is the map's
         // "start clean" control, and leaving a downloaded track drawn after it
         // would look like the reset had failed.
@@ -1283,14 +1299,30 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 startsNewFlight(_previousFlightState, newFlightState)) {
                                 _flightPath.value = emptyList()
                                 saveFlightPath()
+                                landingConcludedThisFlight = false
+                                landedStatusReceived = false
                                 // Fall back to the live track. An archived record substitutes
                                 // for the live path while displayed, so a new flight left on
                                 // the archived source would draw the old record and none of
                                 // the flight now in the air.  The download itself is kept.
                                 _showArchivedPath.value = false
                             }
+                            // Whether this fix is drawn is decided against what was
+                            // known BEFORE it arrived, so the fixes that end the
+                            // flight still land on the path.  The flags are then
+                            // set from the fix itself — on receipt, not on it being
+                            // drawn: a Landed fix that the de-duplicator drops still
+                            // ends the recording.
+                            val records = recordsPathPoint(
+                                newFlightState,
+                                landingConcludedThisFlight,
+                                landedStatusReceived,
+                            )
+                            if (landingConcluded(newFlightState, parsed.msg.agl, parsed.msg.velNed.z))
+                                landingConcludedThisFlight = true
+                            if (newFlightState == FlightStates.Landed) landedStatusReceived = true
                             if (_isFlightPathRecording.value &&
-                                newFlightState > FlightStates.WaitingLaunch &&
+                                records &&
                                 (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0) &&
                                 !repeatsLastPathPoint(parsed.msg)) {
                                 // Wall-clock, not elapsedRealtime: the path is
@@ -2241,3 +2273,57 @@ internal fun FlightStates.isAirborne() =
  */
 internal fun startsNewFlight(previous: FlightStates, current: FlightStates) =
     previous.isGrounded() && current.isAirborne()
+
+/**
+ * True when the flight is over as far as this frame can tell.
+ *
+ * Two ways to know.  The locator's own Landed state is the authority.  Short of
+ * that, telemetry on the way down reaches the point where touchdown is a second
+ * or two away — [landingImminent], the same test the landing callout speaks on —
+ * and what the locator sends after that is a rocket settling in the grass and a
+ * GPS fix wandering around it, not flight.  Drawing those turns the end of the
+ * track into a scribble over the one place the user is trying to walk to.
+ *
+ * Deliberately WITHOUT the blackout arm the callout carries
+ * ([landedThroughBlackout]).  That arm exists to announce a landing nothing was
+ * heard from, and silence records no path points to begin with — there is nothing
+ * for it to stop.  Meanwhile a frame that arrives after a long gap still
+ * reporting descent is a rocket that is still descending, and where it says it is
+ * belongs on the path.
+ */
+internal fun landingConcluded(state: FlightStates, aglM: Float, descentRateMs: Float): Boolean =
+    state == FlightStates.Landed ||
+        (state > FlightStates.Noseover && state.isAirborne() &&
+            landingImminent(aglM, descentRateMs))
+
+/**
+ * Whether an arriving fix is added to the recorded path.
+ *
+ * Both flags are the values from *before* this fix was examined, which is what
+ * lets the two fixes that end a flight be drawn rather than suppressed by the
+ * conclusion they themselves cause:
+ *
+ * - The fix the app infers the landing from is the lowest, last-known position,
+ *   and the most useful point on the whole track.
+ * - The first fix carrying Landed status is the locator's own account of where
+ *   the rocket is lying.  It outranks anything the app inferred — an inference
+ *   made from the last fix before a dropout ends the track short of where the
+ *   rocket actually came down — so it draws even though the path was already
+ *   frozen.
+ *
+ * That Landed fix is the end of it: the flight is over, the locator has said so,
+ * and the hours of fixes it goes on sending from a field are not flight.  Nothing
+ * resumes recording for this flight but the next launch or a manual reset.
+ */
+internal fun recordsPathPoint(
+    state: FlightStates,
+    landingConcluded: Boolean,
+    landedStatusReceived: Boolean,
+): Boolean = when {
+    landedStatusReceived -> false
+    state == FlightStates.Landed -> true
+    // Down as far as the app can tell, but the locator has not said so yet: draw
+    // nothing and wait for it to.
+    landingConcluded -> false
+    else -> state > FlightStates.WaitingLaunch
+}
