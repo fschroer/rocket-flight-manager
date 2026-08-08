@@ -1767,17 +1767,22 @@ private fun MapControlsColumn(
             // Silent on Normal — which includes a distant rocket at apogee, the case
             // an SNR-only rule would false-alarm on every flight, and a locator
             // simply switched off (its channel goes quiet, so no verdict is raised).
-            LinkQualityNote(
-                text = when (rocketState.linkQuality) {
-                    LinkQuality.Verdict.Interference -> stringResource(R.string.link_interference)
-                    LinkQuality.Verdict.Congested -> stringResource(R.string.link_congested)
-                    LinkQuality.Verdict.Normal -> null
-                },
-                color = when (rocketState.linkQuality) {
-                    LinkQuality.Verdict.Interference -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+            // Width is pinned to the panel's own width — the widest row above — so
+            // the note can never be what decides how wide the panel is.
+            val noteWidth = iconBoxWidth + nameWidth + batteryBoxWidth
+            when (rocketState.linkQuality) {
+                LinkQuality.Verdict.Interference -> LinkQualityNote(
+                    text = stringResource(R.string.link_interference),
+                    color = MaterialTheme.colorScheme.error,
+                    width = noteWidth,
+                )
+                LinkQuality.Verdict.Congested -> LinkQualityNote(
+                    text = stringResource(R.string.link_congested),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    width = noteWidth,
+                )
+                LinkQuality.Verdict.Normal -> Unit
+            }
 
             // ── Descending action buttons ─────────────────────────────────────
             // Large, clearly labelled touch targets revealed by tapping the panel.
@@ -2282,26 +2287,24 @@ private fun DrawScope.drawRocket3D(
 
 /** One-line qualifier under the RSSI readout, aligned to the same icon gutter. */
 @Composable
-private fun LinkQualityNote(text: String?, color: Color) {
+private fun LinkQualityNote(text: String, color: Color, width: Dp) {
     Text(
-        // Always rendered, empty when there is nothing to say. The note appears and
-        // disappears with link conditions, and letting it size the panel made the
-        // whole status block jump every time the verdict changed — worst exactly
-        // when the user is watching it. The slot is reserved either way.
-        text = text ?: "",
+        text = text,
         color = color,
         style = MaterialTheme.typography.labelSmall,
-        // minLines rather than a fixed dp height: it reserves two lines of the
-        // ACTUAL line height, so the reservation still holds at larger system font
-        // scales instead of clipping.
-        minLines = 2,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        // Full width, starting under the icon gutter. The note is prose, not a
-        // column entry, so it has no reason to line up with the readouts above and
-        // every reason to use the ~40 dp the icons leave empty — it is the
-        // difference between these messages fitting in two lines and not.
-        modifier = Modifier.fillMaxWidth().padding(end = 4.dp),
+        // FIXED width, matching the rows above, so a long message wraps instead of
+        // widening the panel. Unconstrained it laid out on one line and dragged the
+        // whole status block wider whenever the verdict changed.
+        //
+        // The width spans the icon gutter too. The note is prose, not a column
+        // entry, so it has no reason to align with the readouts above and every
+        // reason to use the ~40 dp the icons leave empty — which is what keeps
+        // these messages to one line at default font scale.
+        //
+        // Height is deliberately left free: wrapping to a second line at larger
+        // font scales is fine, and reserving a fixed number of lines would either
+        // waste one permanently or clip the message.
+        modifier = Modifier.width(width).padding(end = 4.dp),
     )
 }
 
