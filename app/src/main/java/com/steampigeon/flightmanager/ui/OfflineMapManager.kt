@@ -17,6 +17,9 @@ package com.steampigeon.flightmanager.ui
 // ---------------------------------------------------------------------------
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
@@ -125,6 +128,66 @@ object MapProviderPrefs {
     }
 }
 
+/**
+ * The one in-flight region download, held for the life of the process.
+ *
+ * A download does NOT belong to the download screen. It runs inside MapLibre's process-wide
+ * OfflineManager and keeps going whether or not [DownloadMapScreen] is composed — nothing on
+ * the exit path sets the region inactive. Screen-local state could not represent that: leaving
+ * the screen threw the progress away, so returning showed a blank slate with the Download
+ * button live again, inviting a second overlapping region on top of the one still running.
+ *
+ * Terminal results (Complete/Failed/Cancelled) are kept, not cleared, so a download that ends
+ * while the user is elsewhere still reports itself when they come back.
+ */
+object OfflineDownloadRepository {
+    /** The active or most recent download, or null if none has been started this session. */
+    data class Download(
+        val name: String,
+        val progress: OfflineMapManager.Progress,
+        /**
+         * True once the region exists and the download can actually be stopped. Part of the
+         * published state rather than a property over the handle below, so that Compose sees
+         * it change — a plain field would leave Cancel greyed out until some unrelated redraw.
+         */
+        val cancellable: Boolean = false,
+    )
+
+    private val _current = MutableStateFlow<Download?>(null)
+    val current: StateFlow<Download?> = _current.asStateFlow()
+
+    /**
+     * Stops the running download. Armed once the region exists — which is why cancel lives here
+     * and not on the manager: the region handle has to outlive the screen that started it, or a
+     * download resumed-into from a fresh screen instance would have nothing to cancel.
+     */
+    private var stop: (() -> Unit)? = null
+
+    /** True while tiles are still being fetched — the gate on starting another download. */
+    val isRunning: Boolean
+        get() = _current.value?.progress is OfflineMapManager.Progress.Downloading
+
+    internal fun publish(name: String, progress: OfflineMapManager.Progress) {
+        if (progress !is OfflineMapManager.Progress.Downloading) stop = null
+        _current.value = Download(name, progress, cancellable = stop != null)
+    }
+
+    internal fun armCancel(block: () -> Unit) {
+        stop = block
+        _current.value = _current.value?.copy(cancellable = true)
+    }
+
+    /** User-requested stop. The partial region is kept in the DB and can be resumed. */
+    fun cancel() {
+        stop?.invoke()
+    }
+
+    /** Drops a finished result once the user has seen it. No-op while a download is running. */
+    fun clearFinished() {
+        if (!isRunning) _current.value = null
+    }
+}
+
 class OfflineMapManager(
     private val context: Context,
     private val provider: SatelliteProvider = SatelliteProvider.ESRI,
@@ -133,30 +196,54 @@ class OfflineMapManager(
     private val offlineManager: OfflineManager by lazy { OfflineManager.getInstance(context) }
 
     sealed interface Progress {
-        data class Downloading(val completed: Long, val required: Long, val bytes: Long) : Progress {
-            val fraction: Float get() = if (required == 0L) 0f else (completed.toFloat() / required).coerceIn(0f, 1f)
+        /**
+         * [required] is only a real total once [precise] is true; before that MapLibre reports
+         * it as a lower bound, so a percentage computed from it reads far too high (often 100%)
+         * in the opening seconds. [fraction] is null until it can be trusted — callers should
+         * show an indeterminate state rather than a number that will visibly go backwards.
+         */
+        data class Downloading(
+            val completed: Long,
+            val required: Long,
+            val bytes: Long,
+            val precise: Boolean,
+        ) : Progress {
+            val fraction: Float?
+                get() = if (!precise || required <= 0L) null
+                else (completed.toFloat() / required).coerceIn(0f, 1f)
         }
         data object Complete : Progress
         data class Failed(val reason: String) : Progress
+        /** Stopped by the user. Whatever had downloaded stays in the DB, resumable. */
+        data object Cancelled : Progress
     }
 
     /**
      * Downloads all tiles for [bounds] across [minZoom]..[maxZoom] into the offline DB.
      * Serves the style from an embedded localhost server (started here, stopped when the
      * region reaches a terminal state).
+     *
+     * Progress goes to [OfflineDownloadRepository] rather than a caller-supplied callback:
+     * the download outlives whatever screen started it, so its status has to live somewhere
+     * that outlives the screen too.
      */
     fun downloadRegion(
         name: String,
         bounds: LatLngBounds,
         minZoom: Int,
         maxZoom: Int,
-        onProgress: (Progress) -> Unit,
     ) {
+        if (OfflineDownloadRepository.isRunning) return
+        fun publish(p: Progress) = OfflineDownloadRepository.publish(name, p)
+
+        // Claim the slot before any async work, so a second tap can't slip through.
+        publish(Progress.Downloading(0, 0, 0, precise = false))
+
         val server = LocalStyleServer(styleJson)
         try {
             server.start()
         } catch (e: IOException) {
-            onProgress(Progress.Failed("Could not start local style server: ${e.message}"))
+            publish(Progress.Failed("Could not start local style server: ${e.message}"))
             return
         }
 
@@ -167,76 +254,171 @@ class OfflineMapManager(
             maxZoom.toDouble(),
             context.resources.displayMetrics.density,
         )
-        val metadata = JSONObject().put(METADATA_NAME, name).toString().toByteArray()
+        // The provider is recorded so a later resume rebuilds the right style. Without it a
+        // region downloaded from Mapbox and resumed while Esri is selected would finish with
+        // two different imagery sources stitched into one region.
+        val metadata = JSONObject()
+            .put(METADATA_NAME, name)
+            .put(METADATA_PROVIDER, provider.name)
+            .toString().toByteArray()
 
         offlineManager.createOfflineRegion(
             definition,
             metadata,
             object : OfflineManager.CreateOfflineRegionCallback {
-                override fun onCreate(region: OfflineRegion) {
-                    region.setObserver(object : OfflineRegion.OfflineRegionObserver {
-                        override fun onStatusChanged(status: OfflineRegionStatus) {
-                            if (status.isComplete) {
-                                region.setDownloadState(OfflineRegion.STATE_INACTIVE)
-                                server.stop()
-                                onProgress(Progress.Complete)
-                            } else {
-                                onProgress(
-                                    Progress.Downloading(
-                                        status.completedResourceCount,
-                                        status.requiredResourceCount,
-                                        status.completedResourceSize,
-                                    )
-                                )
-                            }
-                        }
-
-                        override fun onError(error: OfflineRegionError) {
-                            server.stop()
-                            onProgress(Progress.Failed("${error.reason}: ${error.message}"))
-                        }
-
-                        override fun mapboxTileCountLimitExceeded(limit: Long) {
-                            server.stop()
-                            onProgress(Progress.Failed("Tile count limit exceeded: $limit"))
-                        }
-                    })
-                    region.setDownloadState(OfflineRegion.STATE_ACTIVE)
-                }
+                override fun onCreate(region: OfflineRegion) = activate(region, server, ::publish)
 
                 override fun onError(error: String) {
                     server.stop()
-                    onProgress(Progress.Failed(error))
+                    publish(Progress.Failed(error))
                 }
             },
         )
     }
 
-    data class RegionInfo(val region: OfflineRegion, val name: String, val bytes: Long)
+    /**
+     * Restarts an interrupted download for [info]'s region, picking up where it stopped.
+     *
+     * The catch is the style URL. A region's definition is immutable and permanently records the
+     * `127.0.0.1:<port>` URL from the session that created it, with an ephemeral port that is
+     * long dead. So the server is re-bound to that exact port rather than a fresh one. If the
+     * port is taken the resume still proceeds: the style is usually already in the offline DB
+     * from the first attempt, in which case no fetch happens and only the tiles are refetched.
+     */
+    fun resumeRegion(info: RegionInfo) {
+        if (OfflineDownloadRepository.isRunning) return
+        fun publish(p: Progress) = OfflineDownloadRepository.publish(info.name, p)
+        publish(Progress.Downloading(0, 0, 0, precise = false))
 
-    fun listRegions(onResult: (List<RegionInfo>) -> Unit) {
-        offlineManager.listOfflineRegions(object : OfflineManager.ListOfflineRegionsCallback {
-            override fun onList(regions: Array<OfflineRegion>?) {
-                val list = regions.orEmpty().map { r ->
-                    val nm = runCatching { JSONObject(String(r.metadata)).getString(METADATA_NAME) }
-                        .getOrDefault("(unnamed)")
-                    RegionInfo(r, nm, 0L)
-                }
-                onResult(list)
-            }
-            override fun onError(error: String) = onResult(emptyList())
-        })
+        // Resume on the source the region was started with, not whatever is selected now.
+        val json = (info.provider ?: provider).styleJson(context)
+        val server = LocalStyleServer(json)
+        runCatching { server.start(stylePortOf(info.region.definition.styleURL)) }
+
+        activate(info.region, server, ::publish)
     }
 
     /**
-     * Drops the ambient (LRU browse) cache while leaving downloaded offline regions intact.
-     * Useful to prove offline coverage honestly: after this, anything that still renders with
-     * the network off came from a downloaded region, not from incidentally-cached browsing.
+     * Attaches the progress observer to [region] and starts it downloading. Shared by a fresh
+     * download and a resume — MapLibre makes no distinction between the two, it just activates.
      */
-    fun clearAmbientCache(onDone: (Boolean) -> Unit) {
-        offlineManager.clearAmbientCache(object : OfflineManager.FileSourceCallback {
-            override fun onSuccess() = onDone(true)
-            override fun onError(message: String) = onDone(false)
+    private fun activate(region: OfflineRegion, server: LocalStyleServer, publish: (Progress) -> Unit) {
+        region.setObserver(object : OfflineRegion.OfflineRegionObserver {
+            override fun onStatusChanged(status: OfflineRegionStatus) {
+                if (status.isDefinitelyComplete()) {
+                    region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+                    server.stop()
+                    publish(Progress.Complete)
+                } else {
+                    publish(
+                        Progress.Downloading(
+                            status.completedResourceCount,
+                            status.requiredResourceCount,
+                            status.completedResourceSize,
+                            status.isRequiredResourceCountPrecise,
+                        )
+                    )
+                }
+            }
+
+            override fun onError(error: OfflineRegionError) {
+                server.stop()
+                publish(Progress.Failed("${error.reason}: ${error.message}"))
+            }
+
+            override fun mapboxTileCountLimitExceeded(limit: Long) {
+                server.stop()
+                publish(Progress.Failed("Tile count limit exceeded: $limit"))
+            }
+        })
+        OfflineDownloadRepository.armCancel {
+            // Going inactive also stops observer callbacks (MapLibre suppresses them for an
+            // inactive region unless asked otherwise), so this publish is the last word.
+            region.setDownloadState(OfflineRegion.STATE_INACTIVE)
+            server.stop()
+            publish(Progress.Cancelled)
+        }
+        region.setDownloadState(OfflineRegion.STATE_ACTIVE)
+    }
+
+    /**
+     * A region in the offline database together with how much of it is actually on disk.
+     *
+     * The row exists from the moment a download is created, so presence in this list means
+     * "started", never "finished" — [complete] is what says the region will render offline.
+     */
+    data class RegionInfo(
+        val region: OfflineRegion,
+        val name: String,
+        /**
+         * Bytes this region has downloaded. Overlapping regions share tiles, so these do not
+         * sum to the size of the offline database.
+         */
+        val bytes: Long,
+        /** null when the status query failed — reported as unknown rather than guessed. */
+        val complete: Boolean?,
+        /** Downloaded share, or null while the required total is still a lower bound. */
+        val fraction: Float?,
+        /** Source this region was downloaded from; null for regions predating that metadata. */
+        val provider: SatelliteProvider?,
+    )
+
+    /**
+     * Lists every region with its download status.
+     *
+     * Each status is a separate async query, so results are gathered and emitted once, when
+     * the last one lands. MapLibre delivers these callbacks on the main thread, which is what
+     * makes the plain counter below safe.
+     */
+    fun listRegions(onResult: (List<RegionInfo>) -> Unit) {
+        offlineManager.listOfflineRegions(object : OfflineManager.ListOfflineRegionsCallback {
+            override fun onList(regions: Array<OfflineRegion>?) {
+                val list = regions.orEmpty()
+                if (list.isEmpty()) {
+                    onResult(emptyList())
+                    return
+                }
+                val out = arrayOfNulls<RegionInfo>(list.size)
+                var remaining = list.size
+
+                fun settle(index: Int, info: RegionInfo) {
+                    out[index] = info
+                    if (--remaining == 0) onResult(out.filterNotNull())
+                }
+
+                list.forEachIndexed { i, region ->
+                    val meta = runCatching { JSONObject(String(region.metadata)) }.getOrNull()
+                    val name = meta?.optString(METADATA_NAME).orEmpty().ifBlank { "(unnamed)" }
+                    val regionProvider = meta?.optString(METADATA_PROVIDER)
+                        ?.let { saved -> SatelliteProvider.entries.firstOrNull { it.name == saved } }
+                    region.getStatus(object : OfflineRegion.OfflineRegionStatusCallback {
+                        override fun onStatus(status: OfflineRegionStatus?) {
+                            if (status == null) {
+                                settle(i, RegionInfo(region, name, 0L, null, null, regionProvider))
+                                return
+                            }
+                            settle(
+                                i,
+                                RegionInfo(
+                                    region = region,
+                                    name = name,
+                                    bytes = status.completedResourceSize,
+                                    complete = status.isDefinitelyComplete(),
+                                    fraction = if (status.isRequiredResourceCountPrecise && status.requiredResourceCount > 0L)
+                                        (status.completedResourceCount.toFloat() / status.requiredResourceCount).coerceIn(0f, 1f)
+                                    else null,
+                                    provider = regionProvider,
+                                ),
+                            )
+                        }
+
+                        override fun onError(error: String?) {
+                            settle(i, RegionInfo(region, name, 0L, null, null, regionProvider))
+                        }
+                    })
+                }
+            }
+            override fun onError(error: String) = onResult(emptyList())
         })
     }
 
@@ -249,6 +431,16 @@ class OfflineMapManager(
 
     companion object {
         private const val METADATA_NAME = "site_name"
+        private const val METADATA_PROVIDER = "provider"
+
+        /**
+         * The port out of a region's recorded `http://127.0.0.1:<port>/style.json`, or 0 (any
+         * free port) if it can't be read — a region created before this scheme, or a hosted
+         * style URL, in which case no local server is needed anyway.
+         */
+        private fun stylePortOf(styleUrl: String?): Int =
+            Regex("""^http://127\.0\.0\.1:(\d+)/""").find(styleUrl.orEmpty())
+                ?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
         /** Number of 256-px web-mercator tiles covering [bounds] across [minZoom]..[maxZoom]. */
         fun tileCount(bounds: LatLngBounds, minZoom: Int, maxZoom: Int): Long {
@@ -300,16 +492,34 @@ class OfflineMapManager(
 }
 
 /**
+ * Whether the region is finished, without the false positive built into [OfflineRegionStatus.isComplete].
+ *
+ * `isComplete` is `completedResourceCount >= requiredResourceCount`, and the required count is
+ * only a real total once [OfflineRegionStatus.isRequiredResourceCountPrecise] flips true — until
+ * the style and tile sources resolve it is a lower bound, initially zero. A region that has just
+ * been created, or one interrupted before it got going, therefore reports 0 >= 0 and calls itself
+ * complete. Requiring precision costs nothing for a genuinely finished region (its sources are by
+ * definition downloaded) and stops a barely-started one from listing as fully cached.
+ */
+private fun OfflineRegionStatus.isDefinitelyComplete(): Boolean =
+    isRequiredResourceCountPrecise && requiredResourceCount > 0L && isComplete
+
+/**
  * Single-purpose localhost HTTP/1.1 server that returns [styleJson] for any request.
- * Bound to 127.0.0.1 on an ephemeral port; used only during an offline download.
+ * Bound to 127.0.0.1 for the duration of a download — on an ephemeral port for a new region,
+ * or on the region's original port when resuming one (see [OfflineMapManager.resumeRegion]).
  */
 private class LocalStyleServer(private val styleJson: String) {
     private var serverSocket: ServerSocket? = null
     var port: Int = -1
         private set
 
-    fun start() {
-        val ss = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
+    /**
+     * Binds [port], or any free port when 0. A resume passes the port baked into the region's
+     * immutable definition, since that is the only URL that region will ever ask for.
+     */
+    fun start(requestedPort: Int = 0) {
+        val ss = ServerSocket(requestedPort, 4, InetAddress.getByName("127.0.0.1"))
         serverSocket = ss
         port = ss.localPort
         Thread {

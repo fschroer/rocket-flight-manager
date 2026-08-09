@@ -4,7 +4,9 @@ package com.steampigeon.flightmanager.ui
 // Offline map download screen. The user pans/zooms the satellite map to frame a
 // launch area, picks how deep to cache (max zoom), sees a live tile-count / storage
 // estimate, and downloads. Downloaded regions then render in the live FlightMapScreen
-// map with no connectivity. Also lists/deletes existing regions.
+// map with no connectivity. Also lists existing regions with their completion status, and
+// resumes, deletes or cancels them. A download outlives this screen — the running download's
+// state lives in OfflineDownloadRepository, not here.
 // ---------------------------------------------------------------------------
 
 import androidx.compose.foundation.background
@@ -36,7 +38,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,6 +68,9 @@ import kotlin.math.roundToInt
 /** Default box size when jumping to a manually-entered coordinate. */
 private const val MANUAL_EXTENT_KM = 8.0
 
+/** Largest region we'll accept. Past this a download is long enough to be a mistake. */
+private const val MAX_REGION_BYTES = 1_000_000_000L
+
 /** Semi-transparent backing for map-overlay text, so it stays legible over any terrain. */
 private val mapHintScrim = Color(0xC05D6F96)
 
@@ -87,8 +94,12 @@ fun DownloadMapScreen(
     // region shows nothing at z12–17, exactly when you're getting your bearings on-site).
     val minZoom = remember(maxZoom) { provider.minOfflineZoom.coerceAtMost(maxZoom) }
     var siteName by remember { mutableStateOf("") }
-    var progress by remember { mutableStateOf<OfflineMapManager.Progress?>(null) }
     var regions by remember { mutableStateOf<List<OfflineMapManager.RegionInfo>>(emptyList()) }
+
+    // Download state is process-scoped, not screen-scoped: the download keeps running after
+    // this screen is disposed, so re-entering re-attaches to it instead of showing a blank
+    // slate with the Download button armed for a second, overlapping region.
+    val active by OfflineDownloadRepository.current.collectAsState()
 
     // Preset sites (user-editable CSV) + manual coordinate entry. Both drive the picker
     // camera via a MoveRequest; the id makes re-selecting the same site move again.
@@ -101,6 +112,12 @@ fun DownloadMapScreen(
     fun refreshRegions() = manager.listRegions { regions = it }
     DisposableEffect(Unit) { refreshRegions(); onDispose { } }
 
+    // Re-read the regions whenever a download stops — finished, failed or cancelled all change
+    // what the list should say. Keyed on the verdict, not the progress value, so this doesn't
+    // re-fire on every tick.
+    val downloadSettled = active?.progress?.let { it !is OfflineMapManager.Progress.Downloading } == true
+    LaunchedEffect(downloadSettled) { if (downloadSettled) refreshRegions() }
+
     val tiles = remember(bounds, minZoom, maxZoom) {
         bounds?.let { OfflineMapManager.tileCount(it, minZoom, maxZoom) } ?: 0L
     }
@@ -108,7 +125,7 @@ fun DownloadMapScreen(
     val estBytes = remember(bounds, minZoom, maxZoom, provider) {
         bounds?.let { OfflineMapManager.estimateBytes(it, minZoom, maxZoom, provider) } ?: 0L
     }
-    val downloading = progress is OfflineMapManager.Progress.Downloading
+    val downloading = active?.progress is OfflineMapManager.Progress.Downloading
 
     Column(modifier = modifier.fillMaxSize()) {
         // Region picker map — frames the area to download.
@@ -286,13 +303,6 @@ fun DownloadMapScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
             )
-            if (estBytes > 1_000_000_000L) {
-                Text(
-                    "⚠ Over 1 GB — tighten the area or lower the zoom.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
 
             OutlinedTextField(
                 value = siteName,
@@ -303,57 +313,115 @@ fun DownloadMapScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            when (val p = progress) {
+            // Named in every state, because this block now also reports a download the user
+            // started, navigated away from, and came back to — "which one?" is a real question.
+            val activeName = active?.name.orEmpty()
+            when (val p = active?.progress) {
                 is OfflineMapManager.Progress.Downloading -> {
-                    LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth())
-                    Text(
-                        "Downloading… ${(p.fraction * 100).toInt()}%  (${p.completed}/${p.required} tiles, ${formatBytes(p.bytes)})",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    val fraction = p.fraction
+                    if (fraction == null) {
+                        // Required-tile count is still a lower bound; any percentage here would
+                        // read near 100% and then fall back as the real total resolves.
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "Preparing “$activeName”… (${p.completed} tiles, ${formatBytes(p.bytes)})",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "Downloading “$activeName”… ${(fraction * 100).toInt()}%  " +
+                                "(${p.completed}/${p.required} tiles, ${formatBytes(p.bytes)})",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Keeps running if you leave this screen — it stops only if the app closes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Only once the region exists — for the moment between the button press
+                        // and the region being created there is nothing to stop.
+                        TextButton(
+                            onClick = { OfflineDownloadRepository.cancel() },
+                            enabled = active?.cancellable == true,
+                        ) { Text("Cancel") }
+                    }
                 }
-                is OfflineMapManager.Progress.Complete ->
-                    Text("✓ Downloaded — renders offline on the map.", color = MaterialTheme.colorScheme.primary)
-                is OfflineMapManager.Progress.Failed ->
-                    Text("✗ ${p.reason}", color = MaterialTheme.colorScheme.error)
+                is OfflineMapManager.Progress.Complete -> FinishedResult(
+                    text = "✓ “$activeName” downloaded — renders offline on the map.",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                is OfflineMapManager.Progress.Failed -> FinishedResult(
+                    text = "✗ “$activeName” failed: ${p.reason}",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                is OfflineMapManager.Progress.Cancelled -> FinishedResult(
+                    text = "“$activeName” cancelled — what downloaded is kept, resume it below.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 null -> {}
             }
 
+            // The size limit states itself in the label. As a separate warning line it sat rows
+            // away from the control it disables, so an over-budget region read as a dead button.
+            val overBudget = estBytes > MAX_REGION_BYTES
             Button(
                 onClick = {
                     val b = bounds ?: return@Button
-                    progress = OfflineMapManager.Progress.Downloading(0, 0, 0)
                     manager.downloadRegion(
                         name = siteName.ifBlank { "Launch site" },
                         bounds = b,
                         minZoom = minZoom,
                         maxZoom = maxZoom,
-                    ) { p ->
-                        progress = p
-                        if (p is OfflineMapManager.Progress.Complete) refreshRegions()
-                    }
+                    )
                 },
-                enabled = bounds != null && !downloading && estBytes <= 1_000_000_000L,
+                enabled = bounds != null && !downloading && !overBudget,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Download this area for offline") }
-
-            // Verification aid: clears incidentally-cached browse tiles but keeps downloaded
-            // regions, so an offline check can't be fooled by the ambient cache.
-            OutlinedButton(
-                onClick = { manager.clearAmbientCache { ok -> progress = if (ok) null else OfflineMapManager.Progress.Failed("Cache clear failed") } },
-                enabled = !downloading,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Clear ambient cache (offline test)") }
+            ) {
+                Text(
+                    if (overBudget) "Over 1 GB — tighten the area or lower the zoom"
+                    else "Download this area for offline"
+                )
+            }
 
             if (regions.isNotEmpty()) {
-                Text("Downloaded regions", style = MaterialTheme.typography.titleSmall)
-                Column(modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())) {
+                // "Offline regions", not "Downloaded regions": the database row is written when a
+                // download STARTS, so this list has always included partial regions — it just used
+                // to present them as finished, which is the one thing it must never do.
+                Text("Offline regions", style = MaterialTheme.typography.titleSmall)
+                Column(modifier = Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
                     regions.forEach { info ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(info.name, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { manager.deleteRegion(info.region) { refreshRegions() } }) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(info.name)
+                                Text(
+                                    text = regionStatusText(info),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (info.complete == true) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else MaterialTheme.colorScheme.error,
+                                )
+                            }
+                            // Resuming picks up where the interrupted download stopped; already
+                            // downloaded tiles are not refetched.
+                            if (info.complete == false) {
+                                TextButton(
+                                    onClick = { manager.resumeRegion(info) },
+                                    enabled = !downloading,
+                                ) { Text("Resume") }
+                            }
+                            // Deleting is blocked outright during a download. MapLibre forbids
+                            // any further call on a deleted region, and this list can't tell
+                            // which row is the one currently downloading into.
+                            IconButton(
+                                onClick = { manager.deleteRegion(info.region) { refreshRegions() } },
+                                enabled = !downloading,
+                            ) {
                                 Icon(Icons.Filled.Delete, contentDescription = "Delete region")
                             }
                         }
@@ -361,6 +429,32 @@ fun DownloadMapScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * A finished download's outcome, with a dismiss.
+ *
+ * The result outlives the screen now, so without this it would greet the user on every later
+ * visit with no way to clear it.
+ */
+@Composable
+private fun FinishedResult(text: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(text, color = color, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        TextButton(onClick = { OfflineDownloadRepository.clearFinished() }) { Text("Dismiss") }
+    }
+}
+
+/** One line per region saying whether it will actually render offline. */
+private fun regionStatusText(info: OfflineMapManager.RegionInfo): String {
+    val complete = info.complete
+    val fraction = info.fraction
+    return when {
+        complete == null -> "status unknown"
+        complete -> "complete · ${formatBytes(info.bytes)}"
+        fraction != null -> "incomplete — ${(fraction * 100).toInt()}% of tiles · ${formatBytes(info.bytes)}"
+        else -> "incomplete · ${formatBytes(info.bytes)}"
     }
 }
 

@@ -898,7 +898,6 @@ private fun AppDrawerContent(
 ) {
     val items = buildList {
         add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
-        add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
         if (bluetoothConnectionState == BluetoothConnectionState.Ready)
             add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
         if (locatorActive && !armedState) {
@@ -907,6 +906,9 @@ private fun AppDrawerContent(
         }
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
+        // Last: site prep done at home on Wi-Fi, not something reached for at the pad, so it
+        // sits below the entries that track what is currently connected and armed.
+        add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
     }
 
     Column(modifier = Modifier.padding(0.dp)) {
