@@ -226,6 +226,65 @@ internal const val MAP_ZOOM_LIMIT_DEFAULT = 20
 internal fun resolveMapMaxZoom(stored: Int?): Int =
     (stored ?: MAP_ZOOM_LIMIT_DEFAULT).coerceIn(MAP_ZOOM_LIMIT_MIN, MAP_ZOOM_LIMIT_MAX)
 
+// ── Auto-center deadband ─────────────────────────────────────────────────────
+// The zoom cap above stops auto-zoom pumping on GPS error; this stops auto-CENTER
+// doing the same thing to the map's position. Both receivers keep reporting new
+// fixes while sitting still, so the framed center wanders by a few meters a
+// second forever, and the camera — filtered, but never deadbanded — followed
+// every bit of it. The imagery crept under a stationary rocket.
+//
+// So the camera holds an ANCHOR and only re-latches it when the live center has
+// drifted further than the two receivers could plausibly have invented. Inside
+// that distance the map does not move at all.
+//
+// Floor and ceiling on the computed distance. The floor keeps an
+// optimistically-reported fix from producing a deadband so small it never trips;
+// the ceiling keeps a bad one (a locator under canopy claiming hundreds of
+// meters) from pinning the camera somewhere stale while the user walks.
+internal const val RECENTER_DEADBAND_MIN_M = 5f
+internal const val RECENTER_DEADBAND_MAX_M = 40f
+
+/**
+ * How far the auto-center target may drift before the camera follows it, in meters.
+ *
+ * Built in three steps, because the obvious √(σ_locator² + σ_phone²) is wrong in
+ * two compensating-looking ways that do not actually cancel:
+ *
+ *  1. **The target is a midpoint, not a fix.** With both receivers framed the
+ *     camera targets the point between them, and a midpoint moves only half as
+ *     far as the two independent errors it is drawn from:
+ *     σ_target = ½·√(σ_locator² + σ_phone²). Passing [trackerAccuracyM] as null
+ *     says the phone is NOT part of the framing (no fix yet), in which case the
+ *     target is the rocket itself and carries the locator's full error.
+ *  2. **Both ends of the comparison are noisy.** The deadband is measured from a
+ *     latched anchor, and that anchor is itself one noisy sample — so what has to
+ *     clear it is the difference of two independent draws, which is √2 times as
+ *     jumpy as either: σ_drift = √2·σ_target. Sizing against σ_target instead
+ *     costs a factor of √2 of real deadband and trips several times more often
+ *     than the arithmetic suggests.
+ *  3. **2σ, not 1σ.** A deadband at 1σ is crossed by a large fraction of fixes,
+ *     which would leave the camera nudging nearly as often as no deadband at all.
+ *
+ * Which multiplies out to 2·√2·σ_target — about 8 m for a good fix at both ends
+ * (3 m locator, 5 m phone), around 35 m for a poor one.
+ *
+ * @param locatorHaccM the locator's reported horizontal accuracy — the same
+ *   figure drawn as the accuracy ring around the rocket marker.
+ * @param trackerAccuracyM the phone's reported accuracy, or null when the phone
+ *   has no fix to contribute. Non-positive values mean "not reported" and are
+ *   treated as an unknown-but-perfect receiver; the floor covers the shortfall.
+ */
+internal fun recenterDeadbandM(locatorHaccM: Float, trackerAccuracyM: Float?): Float {
+    fun sane(v: Float?) = if (v != null && v.isFinite() && v > 0f) v else 0f
+    val locator = sane(locatorHaccM)
+    val sigmaTarget = if (trackerAccuracyM != null) {
+        val phone = sane(trackerAccuracyM)
+        0.5f * sqrt(locator * locator + phone * phone)
+    } else locator
+    return (2f * sqrt(2f) * sigmaTarget)
+        .coerceIn(RECENTER_DEADBAND_MIN_M, RECENTER_DEADBAND_MAX_M)
+}
+
 private const val landingAltitudeThreshold = 30
 private const val minimumSpokenAGLVelocity = 2 * 9.8
 
@@ -272,6 +331,27 @@ private fun validLatLng(lat: Double, lon: Double) =
     (lat != 0.0 || lon != 0.0)
 
 private fun LatLng.isFix() = validLatLng(latitude, longitude)
+
+/**
+ * Ground distance in meters between two coordinates.
+ *
+ * Equirectangular rather than haversine, deliberately: the camera controller asks
+ * this on every display frame (~120/s measured) and only ever about separations
+ * of a few tens of meters, where the two formulas agree to far less than a
+ * millimeter. The great-circle version buys nothing here and costs three more
+ * transcendentals per frame.
+ *
+ * The longitude difference is wrapped to ±180° so a pair straddling the
+ * antimeridian measures the short way round rather than most of the way about
+ * the planet — the same ±540 idiom the compass filter uses on bearings.
+ */
+internal fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val earthR = 6378137.0
+    val dLat = (lat2 - lat1) * PI / 180.0
+    val dLonDeg = ((lon2 - lon1 + 540.0) % 360.0) - 180.0
+    val dLon = dLonDeg * PI / 180.0 * cos((lat1 + lat2) / 2.0 * PI / 180.0)
+    return earthR * sqrt(dLat * dLat + dLon * dLon)
+}
 
 /**
  * The spoken position of the rocket relative to the launch point — " 250 meters
@@ -1395,6 +1475,12 @@ private fun MapCameraController(
 
     var lastUserGestureTime by remember { mutableLongStateOf(0L) }
     var smoothedTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
+    // The center the camera is actually filtering toward — re-latched from the live
+    // auto-center target only when that target has drifted past the GPS-error
+    // deadband. Null means "no anchor yet", which latches on the next frame that
+    // has a target: at startup, after a gesture, and whenever a camera control is
+    // tapped. See where recenterDeadbandM is applied.
+    var anchorTarget by remember { mutableStateOf<LatLng?>(null) }
     var smoothedZoom by remember { mutableFloatStateOf(12f) }
     var smoothedTilt by remember { mutableFloatStateOf(0f) }
 
@@ -1430,8 +1516,13 @@ private fun MapCameraController(
     // but its early-return blocks EVERY camera change — so after a manual
     // pan/zoom/rotate, hitting 3D (or auto-center, auto-zoom, compass) did
     // nothing at all until the 5 s window expired.
+    //
+    // The anchor is dropped for the same reason: re-enabling auto-center means
+    // "center on it now", and an anchor left over from before the toggle would
+    // hold the camera off-target until GPS noise happened to cross the deadband.
     LaunchedEffect(tiltMode, autoTargetMode, autoZoomMode, compassEnabled) {
         lastUserGestureTime = 0L
+        anchorTarget = null
     }
 
     if (!isMapLoaded) return
@@ -1460,6 +1551,12 @@ private fun MapCameraController(
         smoothedTarget = cameraState.position.target
         smoothedZoom   = cameraState.position.zoom + (smoothedTilt / 90f * 1.5f)
         smoothedTilt   = cameraState.position.tilt
+        // Drop the anchor along with the rest of the filter state. A pan moves the
+        // camera to somewhere the anchor knows nothing about, so keeping it would
+        // mean auto-center resumed by measuring the deadband from a stale point:
+        // pan a short way and the drift back would never trip, leaving the map
+        // parked off the rocket with no way to explain it.
+        anchorTarget = null
         onBearingUpdate(cameraState.position.bearing)
         return   // leave the camera untouched so gestures work freely in every tilt mode
     }
@@ -1523,10 +1620,42 @@ private fun MapCameraController(
     // Drive the Kalman state (smoothedTarget / smoothedZoom) toward the ideal auto values.
     // Use the remembered smoothed values as the Kalman base — not cameraPositionState.position
     // — so that the zoom correction applied at the end doesn't feed back into the next frame.
-    smoothedTarget = if (autoTargetMode && autoTarget != null)
+    //
+    // The filter follows the ANCHOR, not the live target. Re-latch the anchor only
+    // once the live target has drifted past what the two receivers' combined error
+    // can account for; inside that distance the anchor does not move, the filter
+    // has nothing to converge toward, and the map is genuinely still.
+    //
+    // Deadbanding the anchor rather than the filter output is what makes it settle.
+    // The obvious alternative — skip the filter step whenever the live target is
+    // within the deadband of the CAMERA — never converges: the camera creeps
+    // toward the target, re-enters the deadband a full deadband short of it, and
+    // stops there, so it permanently trails the rocket by up to that distance and
+    // stutters along the boundary as noise pushes it in and out. Against a latched
+    // anchor the filter always has a fixed point to reach, reaches it, and stops.
+    //
+    // Only the framing that the phone contributes to counts as a midpoint; with no
+    // tracker fix the target is the rocket alone and carries its full error.
+    if (autoTargetMode && autoTarget != null) {
+        val deadbandM = recenterDeadbandM(
+            rocketState.hacc,
+            if (trackerHasGps) trackerLocation.accuracy else null,
+        )
+        val anchor = anchorTarget
+        if (anchor == null ||
+            metersBetween(
+                anchor.latitude, anchor.longitude,
+                autoTarget.latitude, autoTarget.longitude,
+            ) > deadbandM
+        ) {
+            anchorTarget = autoTarget
+        }
+    }
+    val followTarget = anchorTarget
+    smoothedTarget = if (autoTargetMode && followTarget != null)
         LatLng(
-            smoothedTarget.latitude  + (autoTarget.latitude  - smoothedTarget.latitude)  * kalmanGainTarget,
-            smoothedTarget.longitude + (autoTarget.longitude - smoothedTarget.longitude) * kalmanGainTarget,
+            smoothedTarget.latitude  + (followTarget.latitude  - smoothedTarget.latitude)  * kalmanGainTarget,
+            smoothedTarget.longitude + (followTarget.longitude - smoothedTarget.longitude) * kalmanGainTarget,
         )
     else smoothedTarget
 
