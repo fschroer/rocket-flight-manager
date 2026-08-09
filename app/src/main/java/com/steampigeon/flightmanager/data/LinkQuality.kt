@@ -168,7 +168,7 @@ object LinkQuality {
      *                      [NOISE_FLOOR_UNKNOWN] before any sample has arrived
      * @param lossy       whether a broadcast has been missed recently — see
      *                    [isLossy], which is what keeps this from being a
-     *                    single-packet judgement
+     *                    single-packet judgment
      * @param foreignLocator whether another locator's broadcast has been received
      *                    on this channel recently — see the note below, this is
      *                    the strongest evidence available and needs no inference

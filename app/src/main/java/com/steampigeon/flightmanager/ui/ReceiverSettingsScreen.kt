@@ -88,7 +88,7 @@ fun ReceiverSettingsScreen(
 
     // After a config update is sent, request ReceiverInfo to solicit confirmation.
     // PreLaunchData may no longer arrive (locator/receiver LoRa channel mismatch),
-    // so ReceiverInfo over BLE is the only reliable acknowledgement path.
+    // so ReceiverInfo over BLE is the only reliable acknowledgment path.
     LaunchedEffect(receiverConfigMessageState) {
         if (receiverConfigMessageState == LocatorMessageState.Sent) {
             delay(300L)
@@ -273,7 +273,7 @@ fun ReceiverSettingsScreen(
                     if (receiverConfigMessageState == LocatorMessageState.Idle) {
                         // A channel change points the receiver at a (possibly different)
                         // locator.  Arm recognition first so the next PreLaunchData on the
-                        // new channel is recognised, challenged for a password, or reverted.
+                        // new channel is recognized, challenged for a password, or reverted.
                         if (stagedReceiverConfig.channel != remoteReceiverConfig.channel) {
                             viewModel.beginChannelChangeRecognition(remoteReceiverConfig.channel)
                         }
@@ -382,7 +382,7 @@ private fun ChannelSurveySection(
                     )
                 }
                 // Relative bar: quietest channel in this sweep is the reference, the
-                // loudest is full scale. Deliberately unlabelled in dBm.
+                // loudest is full scale. Deliberately unlabeled in dBm.
                 val quietest = survey.ranked.first().level
                 val loudest = survey.ranked.last().level
                 val span = (loudest - quietest).coerceAtLeast(1)

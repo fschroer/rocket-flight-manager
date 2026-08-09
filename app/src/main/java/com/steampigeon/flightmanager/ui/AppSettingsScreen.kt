@@ -163,7 +163,7 @@ fun AppSettingsScreen(
                 text = "How far in the map follows the rocket on its own. You can always pinch closer. " +
                     when {
                         maxZoom >= MAP_ZOOM_LIMIT_MAX ->
-                            "Closest available. Expect the map to jump zoom levels within a few metres of " +
+                            "Closest available. Expect the map to jump zoom levels within a few meters of " +
                                 "the rocket — that is GPS error on both ends, not the rocket moving."
                         maxZoom <= MAP_ZOOM_LIMIT_MIN ->
                             "Steadiest. The map stops well back, so the last stretch is done by eye."

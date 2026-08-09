@@ -112,7 +112,7 @@ fun DownloadMapScreen(
     fun refreshRegions() = manager.listRegions { regions = it }
     DisposableEffect(Unit) { refreshRegions(); onDispose { } }
 
-    // Re-read the regions whenever a download stops — finished, failed or cancelled all change
+    // Re-read the regions whenever a download stops — finished, failed or canceled all change
     // what the list should say. Keyed on the verdict, not the progress value, so this doesn't
     // re-fire on every tick.
     val downloadSettled = active?.progress?.let { it !is OfflineMapManager.Progress.Downloading } == true
@@ -346,7 +346,7 @@ fun DownloadMapScreen(
                         // and the region being created there is nothing to stop.
                         TextButton(
                             onClick = { OfflineDownloadRepository.cancel() },
-                            enabled = active?.cancellable == true,
+                            enabled = active?.cancelable == true,
                         ) { Text("Cancel") }
                     }
                 }
@@ -358,8 +358,8 @@ fun DownloadMapScreen(
                     text = "✗ “$activeName” failed: ${p.reason}",
                     color = MaterialTheme.colorScheme.error,
                 )
-                is OfflineMapManager.Progress.Cancelled -> FinishedResult(
-                    text = "“$activeName” cancelled — what downloaded is kept, resume it below.",
+                is OfflineMapManager.Progress.Canceled -> FinishedResult(
+                    text = "“$activeName” canceled — what downloaded is kept, resume it below.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 null -> {}
@@ -475,7 +475,7 @@ private fun formatBytes(bytes: Long): String = when {
 }
 
 /**
- * Non-interactive inset showing the imagery at the region centre at exactly [zoom] — a
+ * Non-interactive inset showing the imagery at the region center at exactly [zoom] — a
  * preview of the detail the chosen max zoom actually buys.
  *
  * Deliberately a separate MapView rather than zooming the picker: the picker's visible

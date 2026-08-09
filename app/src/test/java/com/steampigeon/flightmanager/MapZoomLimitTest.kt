@@ -12,7 +12,7 @@ import org.junit.Test
  * The closest zoom the live map will go to.
  *
  * A GPS-error control, not a tile-supply one. Auto-zoom frames a box containing
- * the phone and the rocket; within a few metres that box is mostly the two
+ * the phone and the rocket; within a few meters that box is mostly the two
  * receivers' combined error, so it changes size sharply from fix to fix and the
  * fitted zoom chases it — the map jumps zoom levels every second or so, exactly
  * while the user is walking the last stretch. Capping the closest zoom gives the
@@ -29,7 +29,7 @@ class MapZoomLimitTest {
     }
 
     @Test
-    fun aStoredChoiceIsHonoured() {
+    fun aStoredChoiceIsHonored() {
         for (z in MAP_ZOOM_LIMIT_MIN..MAP_ZOOM_LIMIT_MAX) {
             assertEquals(z, resolveMapMaxZoom(z))
         }

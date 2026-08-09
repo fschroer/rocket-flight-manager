@@ -50,7 +50,7 @@ class PathDedupTest {
 
     @Test
     fun aSlowDriftIsNotSwallowed() {
-        // Under canopy in light wind the rocket moves centimetres per fix. Those
+        // Under canopy in light wind the rocket moves centimeters per fix. Those
         // are real measurements and must all be recorded; a tolerance-based
         // comparison would erase the drift and with it the landing track.
         var last = point(alt = 300f)          // the fix the drift starts from

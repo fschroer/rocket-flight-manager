@@ -118,7 +118,7 @@ class ChannelSurveyTest {
         // Real trace, locator several feet from the receiver, home channel 22.
         // Coarse read -115 everywhere; confirmation caught the 1 Hz burst on every
         // channel because the dwell exceeds one broadcast period. 3 dB of spread —
-        // the transmitter is bleeding across the band and favours nothing.
+        // the transmitter is bleeding across the band and favors nothing.
         val levels = MutableList(64) { -115 }
         levels[45] = -71; levels[58] = -74; levels[62] = -72
         levels[2] = -71;  levels[4] = -71

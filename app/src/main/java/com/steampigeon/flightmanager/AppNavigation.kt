@@ -269,7 +269,7 @@ fun RocketApp(
     // Device picker state
     //
     // Shown whenever bluetoothConnectionState == DevicesFound.
-    // Dismissed by selecting a device (→ Paired) or cancelling (→ Enabled,
+    // Dismissed by selecting a device (→ Paired) or canceling (→ Enabled,
     // which will trigger a re-scan next time the user initiates).
     // -----------------------------------------------------------------------
 

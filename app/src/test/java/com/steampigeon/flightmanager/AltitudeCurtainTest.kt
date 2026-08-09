@@ -17,7 +17,7 @@ import kotlin.math.hypot
  * Geometry for the 3D flight-path altitude curtain.
  *
  * The wall is built by offsetting perpendicular to each track segment. That
- * offset has to be computed in metres — longitude degrees shrink by cos(lat) —
+ * offset has to be computed in meters — longitude degrees shrink by cos(lat) —
  * or the wall silently skews and widens with latitude, which is invisible on a
  * tilted 3D map until you measure it.
  */
@@ -33,7 +33,7 @@ class AltitudeCurtainTest {
     }
 
     /**
-     * Offset [northM]/[eastM] metres from the reference point.  Timestamps are
+     * Offset [northM]/[eastM] meters from the reference point.  Timestamps are
      * irrelevant to the curtain, so they default to a 50 ms cadence by index.
      */
     private fun offset(
@@ -47,7 +47,7 @@ class AltitudeCurtainTest {
     private fun heights(fc: org.maplibre.geojson.FeatureCollection): List<Double> =
         fc.features()!!.map { it.getNumberProperty("height").toDouble() }
 
-    /** Ground distance in metres between two lng/lat points near the test site. */
+    /** Ground distance in meters between two lng/lat points near the test site. */
     private fun metersBetween(
         lon0: Double, lat0: Double, lon1: Double, lat1: Double,
     ): Double {
@@ -115,10 +115,10 @@ class AltitudeCurtainTest {
         //
         // The quad backstop is driven by SUMMED |altitude change|, which cannot
         // distinguish flight profile from sensor noise. Raw baro at the 20 Hz
-        // archive cadence jitters a few metres per sample, so summing absolute
-        // differences over ~2000 samples reports thousands of metres of
+        // archive cadence jitters a few meters per sample, so summing absolute
+        // differences over ~2000 samples reports thousands of meters of
         // "variation" for a flight that only climbed ~120 m. With a low ceiling
-        // that inflated the riser from 0.25 m to several metres — coarsening the
+        // that inflated the riser from 0.25 m to several meters — coarsening the
         // wall precisely on the densest data, which is the opposite of intended.
         val rng = java.util.Random(7)
         val noisy = (0..2000).map { i ->
@@ -202,8 +202,8 @@ class AltitudeCurtainTest {
 
     @Test
     fun wallWidthIsCorrectInMetersRegardlessOfHeading() {
-        // Guards the half-width constant and the normalisation step. Note this
-        // does NOT catch a missing cos(lat) correction: the normal is normalised
+        // Guards the half-width constant and the normalization step. Note this
+        // does NOT catch a missing cos(lat) correction: the normal is normalized
         // to a fixed length before being converted back to degrees, so its
         // magnitude survives that bug and only its direction skews — which is
         // what wallIsPerpendicularToItsSegment covers (verified by injecting the
@@ -235,10 +235,10 @@ class AltitudeCurtainTest {
         val ring = poly.coordinates()[0]
         val cosLat = cos(LAT * PI / 180.0)
 
-        // Segment direction (metres) from corner 0 to corner 1.
+        // Segment direction (meters) from corner 0 to corner 1.
         val segX = (ring[1].longitude() - ring[0].longitude()) * METERS_PER_DEG_LAT * cosLat
         val segY = (ring[1].latitude() - ring[0].latitude()) * METERS_PER_DEG_LAT
-        // Width direction (metres) from corner 0 to corner 3.
+        // Width direction (meters) from corner 0 to corner 3.
         val widX = (ring[3].longitude() - ring[0].longitude()) * METERS_PER_DEG_LAT * cosLat
         val widY = (ring[3].latitude() - ring[0].latitude()) * METERS_PER_DEG_LAT
 

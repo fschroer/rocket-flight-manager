@@ -545,7 +545,7 @@ fun FlightProfilesScreen(
         val maxAccel    = rawMaxAccel
         val minAccel    = rawMinAccel
 
-        // ── Colours ───────────────────────────────────────────────────────
+        // ── Colors ────────────────────────────────────────────────────────
         val gridColor        = MaterialTheme.colorScheme.onPrimary
         val aglColor         = MaterialTheme.colorScheme.primary
         val legendColor      = MaterialTheme.colorScheme.secondaryContainer
@@ -688,7 +688,7 @@ fun FlightProfilesScreen(
                                     color    = legendColor.toArgb()
                                     textSize = chartAxisTextSize
                                 }
-                                // Sub-metre gridlines need a decimal, or a zoomed
+                                // Sub-meter gridlines need a decimal, or a zoomed
                                 // axis reads as several identical labels.
                                 val label = if (yGridInterval < 1f)
                                     "${gridAlt.toBigDecimal().setScale(1, RoundingMode.HALF_UP)}m"

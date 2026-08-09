@@ -105,7 +105,7 @@ fun LocatorSettingsScreen(
             }
 
             // Capture initial and updated locator configuration data.
-            // Used for configuration screen and confirming locator update acknowledgement.
+            // Used for configuration screen and confirming locator update acknowledgment.
             Text(stringResource(R.string.deployment_channel_1))
             EnumDropdown(
                 DeployMode::class,

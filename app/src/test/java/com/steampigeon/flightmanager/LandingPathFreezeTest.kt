@@ -11,7 +11,7 @@ import org.junit.Test
 /**
  * Where the drawn flight path stops.
  *
- * The track exists to be walked to, and its last few metres were the least
+ * The track exists to be walked to, and its last few meters were the least
  * useful part of it: the app kept appending fixes while the rocket lay in the
  * grass, so the end of the path — the bit the user zooms into — was a scribble of
  * GPS wander around the landing site rather than a point.
@@ -28,7 +28,7 @@ class LandingPathFreezeTest {
         var landedSeen = false
         val points = mutableListOf<String>()
 
-        /** Records one fix, labelled so the resulting track is readable. */
+        /** Records one fix, labeled so the resulting track is readable. */
         fun fix(state: FlightStates, agl: Float, descentRate: Float, label: String) {
             val records = recordsPathPoint(state, concluded, landedSeen)
             if (landingConcluded(state, agl, descentRate)) concluded = true
@@ -101,7 +101,7 @@ class LandingPathFreezeTest {
         // The de-duplicator drops a Landed fix identical to the point already
         // ending the path. The flight is over all the same — the flag is set on
         // the status being received, not on a point being appended, so a later
-        // Landed fix that HAS drifted a metre cannot reopen the recording.
+        // Landed fix that HAS drifted a meter cannot reopen the recording.
         val r = Recorder()
         r.fix(FlightStates.MainPrimaryEvent, 12f, 5f, "touching down")
         // Stands in for the dedup rejecting it: the recorder was willing, the
@@ -163,7 +163,7 @@ class LandingPathFreezeTest {
     }
 
     @Test
-    fun anUnrecognisedStateAfterALandingDoesNotResumeDrawing() {
+    fun anUnrecognizedStateAfterALandingDoesNotResumeDrawing() {
         // NoSignal is what any state byte the app does not know decodes to, and it
         // sorts above Landed. It must not read as "flying again" and start
         // appending ground fixes to a concluded flight.

@@ -7,7 +7,7 @@
 #
 # Format:  name,latitude,longitude[,width_km[,height_km]]
 #   - latitude/longitude: decimal degrees (south/west negative)
-#   - width_km/height_km: total extent of the area, centred on lat/lon.
+#   - width_km/height_km: total extent of the area, centered on lat/lon.
 #       both omitted -> 10 x 10 km;  height omitted -> square (width x width)
 #   - names MAY contain commas (the TRAILING numeric fields are parsed as the values)
 #   - lines starting with # are ignored

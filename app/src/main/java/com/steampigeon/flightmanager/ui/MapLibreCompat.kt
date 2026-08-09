@@ -80,7 +80,7 @@ const val REASON_GESTURE = MapLibreMap.OnCameraMoveStartedListener.REASON_API_GE
 // MapLibre's hard tilt ceiling (MapLibreConstants.MAXIMUM_PITCH). Camera tilt above this is
 // silently clamped, and setMaxPitchPreference refuses any value outside 0..60 — it logs
 // "value is in unsupported range" and leaves the limit untouched. Surfaced here so
-// MapCameraController can keep its tilt range inside what the SDK will actually honour.
+// MapCameraController can keep its tilt range inside what the SDK will actually honor.
 const val MAPLIBRE_MAX_PITCH = 60f
 
 /**
@@ -134,7 +134,7 @@ private fun CamPos.isImperceptiblyCloseTo(other: CamPos): Boolean =
     kotlin.math.abs(((bearing - other.bearing + 540f) % 360f) - 180f) < CAM_EPS_DEG_BEARING
 
 /**
- * Compose-observable camera state, the MapLibre analogue of maps-compose's
+ * Compose-observable camera state, the MapLibre analog of maps-compose's
  * `CameraPositionState`. Reading [position] observes the live camera; assigning
  * [position] moves the map. [moveStartedReason] mirrors Google's
  * `cameraMoveStartedReason` (compare against [REASON_GESTURE]).
@@ -216,7 +216,7 @@ fun loadSatelliteStyleJson(context: Context): String =
 // Layer / source ids
 /**
  * One recorded point of the rocket's track: ground position, altitude above
- * ground level in metres, and the wall-clock time the fix was received.
+ * ground level in meters, and the wall-clock time the fix was received.
  *
  * The altitude used to be discarded at the map boundary, which is why the path
  * drew flat on the terrain in 3D.
@@ -266,12 +266,12 @@ private const val LYR_ROCKET = "rocket-dot"
 // Lever 1 — riser height.  Each interval is split into sub-quads, budgeted by
 // ALTITUDE change rather than a fixed count.  A fixed count divides the *ground*
 // run evenly, which is the wrong axis: on a near-vertical boost the track barely
-// advances while altitude climbs hundreds of metres, so risers stay tall no
+// advances while altitude climbs hundreds of meters, so risers stay tall no
 // matter how finely the run is chopped.
 //
 // Lever 2 — the shape between points, see [PathSpline].  Shrinking risers alone
 // leaves a chain of straight chords meeting at a visible corner on every
-// telemetry point, which on the ~1 Hz live path is the dominant artefact: a
+// telemetry point, which on the ~1 Hz live path is the dominant artifact: a
 // second of boost is ~100 m of climb drawn as one straight line.
 private const val CURTAIN_TARGET_RISER_M = 0.25f
 
@@ -280,9 +280,9 @@ private const val CURTAIN_TARGET_RISER_M = 0.25f
 //
 // Deliberately set high enough NOT to bind on a normal flight, because the term
 // that drives it — summed |altitude change| — cannot tell signal from noise, and
-// that bit hard.  Raw baro at the 20 Hz archive cadence jitters a few metres
+// that bit hard.  Raw baro at the 20 Hz archive cadence jitters a few meters
 // sample to sample, and summing ABSOLUTE differences over ~2000 samples turns
-// that jitter into thousands of metres: a 122 m flight measured 244 m of
+// that jitter into thousands of meters: a 122 m flight measured 244 m of
 // variation clean, but 4000 m with ±3 m of noise.  With the old ceiling of 2000
 // quads that inflated the riser from the intended 0.25 m to ~2 m, and on a
 // longer record to 4-6 m — so the budget was silently undoing the very smoothing
@@ -300,7 +300,7 @@ private const val CURTAIN_MAX_QUADS = 20_000
 // first sample after a radio dropout) can't consume the whole budget itself.
 private const val CURTAIN_MAX_SUBDIVISIONS = 512
 
-// Half-width of each curtain quad, in metres.  Wide enough that the wall stays
+// Half-width of each curtain quad, in meters.  Wide enough that the wall stays
 // visible edge-on when the camera looks along the track, narrow enough not to
 // misrepresent the track's ground position.
 private const val CURTAIN_HALF_WIDTH_M = 0.75
@@ -337,10 +337,10 @@ private const val MAX_GEOJSON_ZOOM = 22
 
 private const val COLOR_GREEN = 0xFF00FF00.toInt()
 private const val COLOR_RED = 0xFFFF0000.toInt()
-// Neutral mid-grey: reads as "no colour signal" against both the green and red
+// Neutral mid-gray: reads as "no color signal" against both the green and red
 // states, and stays legible over satellite imagery behind the white outline the
 // sprite already draws.
-private const val COLOR_GREY = 0xFF9E9E9E.toInt()
+private const val COLOR_GRAY = 0xFF9E9E9E.toInt()
 private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
 private const val COLOR_PATH = 0xFFFF6600.toInt()
 // Cyan against the path's orange: near-complementary, so the second markers
@@ -349,7 +349,7 @@ private const val COLOR_PATH_TICK = 0xFF00E5FF.toInt()
 
 /**
  * How much the displayed rocket position can be trusted, which drives the marker
- * and accuracy-ring colour.
+ * and accuracy-ring color.
  *
  * The two ways a position goes bad are independent and need to be told apart:
  * the link can go quiet (we stop hearing anything), or the link can be perfectly
@@ -373,7 +373,7 @@ enum class RocketMarkerState {
  * and flight-path polyline drawn as GeoJSON style layers. Compose overlays (compass,
  * scale bar, gauges) sit on top exactly as they did over GoogleMap.
  *
- * @param markerState drives green / grey / red styling of the marker and accuracy ring.
+ * @param markerState drives green / gray / red styling of the marker and accuracy ring.
  */
 @SuppressLint("MissingPermission") // guarded by an explicit ACCESS_FINE_LOCATION check
 @Composable
@@ -552,7 +552,7 @@ private fun setupContentLayers(style: Style) {
             PropertyFactory.fillExtrusionHeight(Expression.get("height")),
             PropertyFactory.fillExtrusionBase(0f),
             // Mostly opaque. The curtain is a chain of separate prisms, so each
-            // segment carries end-cap faces where it meets its neighbour; at low
+            // segment carries end-cap faces where it meets its neighbor; at low
             // opacity those internal faces all show through and the wall reads
             // as a ladder. Higher opacity hides them behind the front face while
             // still letting terrain show through enough to keep bearings.
@@ -566,7 +566,7 @@ private fun setupContentLayers(style: Style) {
     )
     // One-second markers, added after the curtain so they sort in front of it
     // where the two overlap.  Fully opaque: these are the reference marks the
-    // curtain is read against, so they must not pick up the wall's colour.
+    // curtain is read against, so they must not pick up the wall's color.
     style.addLayer(
         FillExtrusionLayer(LYR_PATH_TICKS, SRC_PATH_TICKS).withProperties(
             PropertyFactory.fillExtrusionColor(COLOR_PATH_TICK),
@@ -592,7 +592,7 @@ private fun setupContentLayers(style: Style) {
 
 /**
  * Rasterises the rocket vector drawable once per [RocketMarkerState] — tinted
- * green, grey, and red — and registers all three with the style.  Must run before
+ * green, gray, and red — and registers all three with the style.  Must run before
  * the symbol layer references them, and again on every style reload (a style
  * change drops its image sprite).
  */
@@ -619,10 +619,10 @@ private fun addRocketIcons(context: Context, style: Style) {
         draw(bodyColor, (ROCKET_ICON_PX * 0.08f).toInt())
         return bitmap
     }
-    // Tinted rather than full-colour so the trust distinction the dot carried
+    // Tinted rather than full-color so the trust distinction the dot carried
     // survives — anything but green means the position can't be relied on.
     style.addImage(IMG_ROCKET_FRESH, sprite(COLOR_GREEN))
-    style.addImage(IMG_ROCKET_DEGRADED, sprite(COLOR_GREY))
+    style.addImage(IMG_ROCKET_DEGRADED, sprite(COLOR_GRAY))
     style.addImage(IMG_ROCKET_STALE, sprite(COLOR_RED))
 }
 
@@ -634,12 +634,12 @@ private fun updateContentLayers(
     accuracyRadiusM: Double,
     flightPath: List<PathPoint>,
 ) {
-    // The accuracy ring is coloured from the same state as the marker: its radius
+    // The accuracy ring is colored from the same state as the marker: its radius
     // comes from hAcc, which latches along with lat/lon, so a green ring around a
-    // grey marker would assert a precision the fix no longer has.
+    // gray marker would assert a precision the fix no longer has.
     val color = when (markerState) {
         RocketMarkerState.Live     -> COLOR_GREEN
-        RocketMarkerState.Degraded -> COLOR_GREY
+        RocketMarkerState.Degraded -> COLOR_GRAY
         RocketMarkerState.Stale    -> COLOR_RED
     }
 
@@ -680,7 +680,7 @@ private fun updateContentLayers(
  * path down to the ground, whose top edge traces the altitude profile.
  *
  * Each output feature is a thin rectangle in plan view carrying a `height`
- * property (metres AGL) for `fill-extrusion-height`.  Because that height is
+ * property (meters AGL) for `fill-extrusion-height`.  Because that height is
  * constant across a feature, consecutive features form steps; each telemetry
  * interval is therefore split into linearly interpolated sub-segments, as many
  * as it takes to keep every riser under [CURTAIN_MAX_RISER_M], so the steps read
@@ -719,7 +719,7 @@ internal fun altitudeCurtain(path: List<PathPoint>): FeatureCollection {
             if (height < CURTAIN_MIN_ALT_M) continue
 
             // Offset perpendicular to the sub-segment to give the wall width.
-            // Longitude degrees shrink by cos(latitude), so convert to metres
+            // Longitude degrees shrink by cos(latitude), so convert to meters
             // before taking the normal or the wall skews with latitude.
             val cosLat = cos(lat0 * PI / 180.0).coerceAtLeast(1e-6)
             val dxM = (lon1 - lon0) * metersPerDegLat * cosLat
@@ -796,11 +796,11 @@ internal fun curtainRiser(path: List<PathPoint>): Float {
  * stays exactly flat.
  *
  * *Position* uses ordinary Catmull-Rom tangents.  A ground track has no
- * meaningful extremum to preserve, and its overshoot is sub-metre on a curve of
+ * meaningful extremum to preserve, and its overshoot is sub-meter on a curve of
  * hundreds — well under the GPS accuracy the points themselves carry — while
  * monotone limiting there would flatten genuine curvature in a turn.
  *
- * Parameterised by point index, matching how the curtain walks intervals, so a
+ * Parameterized by point index, matching how the curtain walks intervals, so a
  * caller with a *time* fraction inside interval `i` can pass it straight in.
  */
 internal class PathSpline(private val path: List<PathPoint>) {
@@ -817,7 +817,7 @@ internal class PathSpline(private val path: List<PathPoint>) {
         }
     }
 
-    /** Centred differences, one-sided at the ends. */
+    /** Centered differences, one-sided at the ends. */
     private inline fun catmullRomTangents(value: (Int) -> Double, out: DoubleArray) {
         for (i in 0 until n) {
             val prev = value(if (i == 0) 0 else i - 1)
@@ -829,7 +829,7 @@ internal class PathSpline(private val path: List<PathPoint>) {
     }
 
     /**
-     * Fritsch–Carlson: start from centred differences, then clamp so no interval
+     * Fritsch–Carlson: start from centered differences, then clamp so no interval
      * can overshoot the values bracketing it.
      */
     private fun monotoneTangents() {
@@ -933,7 +933,7 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
     val metersPerDegLat = 111_320.0
     // The same curve the curtain is built from.  Interpolating a mark linearly
     // while the wall beside it curves would stand the post's top off the wall's
-    // top edge — by metres, where the two disagree most.
+    // top edge — by meters, where the two disagree most.
     val spline = PathSpline(path)
     var index = firstReal    // walks forward with the marks; both are ordered
 

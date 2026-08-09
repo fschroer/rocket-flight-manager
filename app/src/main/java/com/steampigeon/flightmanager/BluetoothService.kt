@@ -411,9 +411,9 @@ class BluetoothService : Service() {
     // condition would let an Arm land on the wrong rocket.
     //
     // Holds the connected locator's id rather than a flag, because since ADR-0020
-    // that id is ALSO what addresses the command. The thing that authorises a send
+    // that id is ALSO what addresses the command. The thing that authorizes a send
     // and the thing that addresses it are now the same value, so they cannot drift
-    // apart — a command can never go out authorised but unaddressed.
+    // apart — a command can never go out authorized but unaddressed.
     @Volatile var connectedLocatorId: Long? = null
 
     /** Receiver-directed messages go point-to-point over BLE and are never relayed,

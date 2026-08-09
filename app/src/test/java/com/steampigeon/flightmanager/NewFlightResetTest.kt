@@ -69,7 +69,7 @@ class NewFlightResetTest {
     }
 
     @Test
-    fun anUnrecognisedStateMidFlightDoesNotReset() {
+    fun anUnrecognizedStateMidFlightDoesNotReset() {
         // NoSignal is what FlightStates.fromUByte returns for ANY state byte the
         // app does not know, so a state added to the firmware later decodes as
         // NoSignal on an older app. If that counted as grounded, the next real

@@ -12,7 +12,7 @@ import org.junit.Test
  * When the app decides the rocket has landed.
  *
  * The case that matters is the one observed in the field: the link dies in the
- * last few hundred metres, because that is where line of sight to a rocket
+ * last few hundred meters, because that is where line of sight to a rocket
  * across a field runs out, and it does not come back until someone walks toward
  * it. A landing callout that waits to *hear* the touchdown therefore almost
  * never fires — which is the bug these tests exist to keep fixed.

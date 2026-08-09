@@ -53,7 +53,7 @@ class LocatorAuthTest {
     fun telemetryAuthTagRoundTrip() {
         // TelemetryData carries the same trailing locator_id + auth_tag pair, so an
         // ARMED locator authenticates by the identical rule — only the base size
-        // differs. This is what lets the app recognise a locator it has never heard
+        // differs. This is what lets the app recognize a locator it has never heard
         // a PreLaunchData from this session.
         val size = Protocol.TELEMETRY_BASE_STRUCT_SIZE
         val frame = ByteArray(size + 2) { (it * 5 + 11).toByte() }   // + appended rssi

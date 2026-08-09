@@ -29,7 +29,7 @@ class SecondMarkersTest {
         const val T0 = 1_700_000_000_000L   // arbitrary wall-clock epoch
     }
 
-    /** A fix [tMs] after T0, [northM] metres north of the reference point. */
+    /** A fix [tMs] after T0, [northM] meters north of the reference point. */
     private fun fix(tMs: Long, northM: Double, altM: Float) = PathPoint(
         LAT + northM / METERS_PER_DEG_LAT, LON, altM, T0 + tMs,
     )

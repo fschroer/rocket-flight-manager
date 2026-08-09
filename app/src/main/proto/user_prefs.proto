@@ -10,8 +10,8 @@ message UserPreferences {
   bool voice_enabled = 3;
   string voice_name = 4;
   string receiver_name = 5;
-  // Locators the app has been authorised to connect to (keyed by locator_id).
-  // Presence + a matching password_key lets the app recognise a locator's
+  // Locators the app has been authorized to connect to (keyed by locator_id).
+  // Presence + a matching password_key lets the app recognize a locator's
   // PreLaunchData without re-prompting for its password.
   map<uint32, KnownLocator> known_locators = 6;
   // Field 7 was last_locator_id, a persisted recognition restored at startup so

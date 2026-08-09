@@ -137,7 +137,7 @@ object MapProviderPrefs {
  * the screen threw the progress away, so returning showed a blank slate with the Download
  * button live again, inviting a second overlapping region on top of the one still running.
  *
- * Terminal results (Complete/Failed/Cancelled) are kept, not cleared, so a download that ends
+ * Terminal results (Complete/Failed/Canceled) are kept, not cleared, so a download that ends
  * while the user is elsewhere still reports itself when they come back.
  */
 object OfflineDownloadRepository {
@@ -148,9 +148,9 @@ object OfflineDownloadRepository {
         /**
          * True once the region exists and the download can actually be stopped. Part of the
          * published state rather than a property over the handle below, so that Compose sees
-         * it change — a plain field would leave Cancel greyed out until some unrelated redraw.
+         * it change — a plain field would leave Cancel grayed out until some unrelated redraw.
          */
-        val cancellable: Boolean = false,
+        val cancelable: Boolean = false,
     )
 
     private val _current = MutableStateFlow<Download?>(null)
@@ -169,12 +169,12 @@ object OfflineDownloadRepository {
 
     internal fun publish(name: String, progress: OfflineMapManager.Progress) {
         if (progress !is OfflineMapManager.Progress.Downloading) stop = null
-        _current.value = Download(name, progress, cancellable = stop != null)
+        _current.value = Download(name, progress, cancelable = stop != null)
     }
 
     internal fun armCancel(block: () -> Unit) {
         stop = block
-        _current.value = _current.value?.copy(cancellable = true)
+        _current.value = _current.value?.copy(cancelable = true)
     }
 
     /** User-requested stop. The partial region is kept in the DB and can be resumed. */
@@ -215,7 +215,7 @@ class OfflineMapManager(
         data object Complete : Progress
         data class Failed(val reason: String) : Progress
         /** Stopped by the user. Whatever had downloaded stays in the DB, resumable. */
-        data object Cancelled : Progress
+        data object Canceled : Progress
     }
 
     /**
@@ -336,7 +336,7 @@ class OfflineMapManager(
             // inactive region unless asked otherwise), so this publish is the last word.
             region.setDownloadState(OfflineRegion.STATE_INACTIVE)
             server.stop()
-            publish(Progress.Cancelled)
+            publish(Progress.Canceled)
         }
         region.setDownloadState(OfflineRegion.STATE_ACTIVE)
     }

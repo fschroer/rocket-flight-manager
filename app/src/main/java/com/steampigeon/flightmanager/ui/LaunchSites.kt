@@ -17,7 +17,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 
-/** A named area to cache, centred on [lat]/[lon] with total extents in km. */
+/** A named area to cache, centered on [lat]/[lon] with total extents in km. */
 data class LaunchSite(
     val name: String,
     val lat: Double,
@@ -42,7 +42,7 @@ fun LatLngBounds.groundSizeKm(): Pair<Double, Double> {
     return Pair(abs(widthKm), abs(heightKm))
 }
 
-/** Bounding box of [widthKm] x [heightKm] centred on a point. */
+/** Bounding box of [widthKm] x [heightKm] centered on a point. */
 fun boundsAround(lat: Double, lon: Double, widthKm: Double, heightKm: Double): LatLngBounds {
     val latDelta = (heightKm / 2.0) / 111.32
     // Longitude degrees shrink with latitude; guard the cos term near the poles.
@@ -57,7 +57,7 @@ object LaunchSiteRepository {
 
     private const val FILE_NAME = "launch_sites.csv"
 
-    /** Extent used when a site line gives only a centre point. */
+    /** Extent used when a site line gives only a center point. */
     const val DEFAULT_EXTENT_KM = 10.0
 
     /** The user-editable CSV. Shown in the UI so the file is findable. */

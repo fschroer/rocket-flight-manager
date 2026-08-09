@@ -296,7 +296,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // for the jump test, so the envelope of believable movement always grows from
     // a real measurement rather than from another unverified reading.
     private var lastFixDistanceM: Int? = null
-    // How far the rocket could have travelled since that fix, integrated a step at
+    // How far the rocket could have traveled since that fix, integrated a step at
     // a time at the bound for the phase it was in — a fixless stretch that starts
     // under canopy and ends on the ground is charged descent rates and then ground
     // rates, not one or the other for the whole gap.
@@ -668,7 +668,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             _challenge.value = LocatorChallenge(locatorId, deviceName, channelChangePreviousChannel)
             return
         }
-        // Passive: unrecognised traffic on the current channel — warn, and (if we are
+        // Passive: unrecognized traffic on the current channel — warn, and (if we are
         // not already connected) prompt to connect on first contact with this locator.
         if (locatorId !in dismissedConflictIds) { _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis() }
         if (knownLocatorsLoaded && _connectedLocatorId.value == null && _challenge.value == null &&
@@ -698,7 +698,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _challengeError.value = false
     }
 
-    /** Submit a password for the active challenge. Correct → remember + recognise +
+    /** Submit a password for the active challenge. Correct → remember + recognize +
      *  close. Wrong → keep the dialog open with an error so the user can retry. */
     suspend fun submitPassword(password: String): Boolean {
         val challenge = _challenge.value ?: return false
@@ -953,7 +953,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val flightPath: StateFlow<List<PathPoint>> = _flightPath.asStateFlow()
     private var _previousFlightState = FlightStates.WaitingLaunch
     // False until a telemetry packet has actually been seen, so the WaitingLaunch
-    // that _previousFlightState is *initialised* to is never mistaken for an
+    // that _previousFlightState is *initialized* to is never mistaken for an
     // observed ground state.  Without it, an app restarted mid-flight reads its
     // first packet as a launch and erases the path of the flight it just rejoined.
     private var flightStateObserved = false
@@ -1138,7 +1138,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // carries the reason it is *connected* and not merely authorized.
         val sendGateJob = viewModelScope.launch {
             // Carries the id, not a flag: since ADR-0020 that same id addresses every
-            // locator-directed command, so authorising and addressing a send are one
+            // locator-directed command, so authorizing and addressing a send are one
             // value and cannot disagree.
             connectedLocatorId.collect { service.connectedLocatorId = it }
         }
@@ -1274,7 +1274,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     noseAxis = parsed.msg.noseAxis,
                                 )
                             }
-                            } // end recognised-locator gate
+                            } // end recognized-locator gate
                             // Receiver metadata (channel/name) is the user's own receiver,
                             // not the locator — reflect it regardless of recognition so the
                             // Receiver Settings channel display and challenge flow still work.
@@ -1406,7 +1406,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             _previousFlightState = newFlightState
                             flightStateObserved = true
-                            } // end recognised-locator gate
+                            } // end recognized-locator gate
                         }
                         is ParsedMessage.DeploymentTest -> {
                             val deploymentTestCountdown = parsed.msg.count
@@ -1548,7 +1548,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // All four are cancelled together on the next call.  The version loop
+        // All four are canceled together on the next call.  The version loop
         // matters as much as the packet collector: it transmits, so a leaked copy
         // is a redundant VersionRequest on the air every few seconds, forever.
         inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob, linkLivenessJob)
@@ -1827,7 +1827,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             for (i in 1..50) {
                 delay(100)
                 // The receiver echoes its channel back via PreLaunchData but never its name,
-                // so compare only the channel for acknowledgement.  The name is accepted
+                // so compare only the channel for acknowledgment.  The name is accepted
                 // optimistically once the channel is confirmed.
                 if (_remoteReceiverConfig.value.channel == stagedReceiverConfig.channel) {
                     _remoteReceiverConfig.update { it.copy(deviceName = stagedReceiverConfig.deviceName) }
@@ -2314,7 +2314,7 @@ internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, a
  * On the ground: waiting for a launch, or landed from the last one.
  *
  * NoSignal is deliberately NOT grounded.  [FlightStates.fromUByte] falls back to
- * it for any state byte the app does not recognise, so a state added to the
+ * it for any state byte the app does not recognize, so a state added to the
  * firmware later would decode as NoSignal on an older app — and treating that as
  * "on the ground" would make the next real packet look like a fresh launch and
  * wipe the track of the flight still in the air.
@@ -2430,7 +2430,7 @@ internal fun distanceWithinRadioRange(distanceM: Int) =
  *
  * One number for the whole flight had to be the boost number, which left it
  * uselessly loose everywhere else — a rocket sitting in a field was allowed to
- * have moved kilometres between reports.
+ * have moved kilometers between reports.
  *
  * - **Boost and coast (Launched, Burnout):** 400 m/s.  Not the airframe's speed
  *   but the horizontal component of it, which is small on a vertical flight and
@@ -2451,7 +2451,7 @@ internal fun maxGroundSpeedMs(state: FlightStates): Double = when {
     state == FlightStates.Launched || state == FlightStates.Burnout -> 400.0
     state.isAirborne() -> 200.0
     state.isGrounded() -> 5.0
-    // NoSignal, which is also what any state byte the app does not recognise
+    // NoSignal, which is also what any state byte the app does not recognize
     // decodes to. Unknown phase: be permissive rather than blank a distance on
     // the strength of a state we failed to understand.
     else -> 400.0
@@ -2494,9 +2494,9 @@ internal fun locatorHasFix(satellites: Int, gpsStatus: SensorHealth) =
  * loses its fix on the ground goes on reporting the last position it *did*
  * measure, and that stale distance is the number the user walks toward — blanking
  * it would take away the only thing left to aim at, which is the same reasoning
- * that greys a degraded fix on the map rather than hiding it (ADR-0017).  So a
+ * that grays a degraded fix on the map rather than hiding it (ADR-0017).  So a
  * fixless reading is rejected only when it has moved further from the last real
- * fix than the rocket could physically have travelled since.
+ * fix than the rocket could physically have traveled since.
  *
  * [lastFixDistanceM] is the distance when the locator last had a fix, null before
  * it ever has: with nothing to compare against, only the range ceiling applies.

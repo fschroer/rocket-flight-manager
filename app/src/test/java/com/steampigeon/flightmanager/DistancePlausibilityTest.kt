@@ -24,7 +24,7 @@ import org.junit.Test
  * The thing NOT to do is blank every distance the moment the fix degrades. A
  * locator that loses its fix on the ground keeps reporting the last position it
  * did measure, and that stale distance is what the user walks toward — the same
- * reason ADR-0017 greys a degraded fix on the map instead of hiding it. So a
+ * reason ADR-0017 grays a degraded fix on the map instead of hiding it. So a
  * fixless reading is rejected on having *jumped*, not on being fixless.
  */
 class DistancePlausibilityTest {
@@ -74,7 +74,7 @@ class DistancePlausibilityTest {
 
     @Test
     fun theCeilingCannotFireOnARealFlight() {
-        // Recovery distances are hundreds of metres to a few km; the ceiling sits
+        // Recovery distances are hundreds of meters to a few km; the ceiling sits
         // several times past practical LoRa range, so nothing flyable reaches it.
         assertTrue(distanceWithinRadioRange(0))
         assertTrue(distanceWithinRadioRange(2_000))
@@ -104,7 +104,7 @@ class DistancePlausibilityTest {
     fun theLocatorSayingItsGpsIsUnhealthyIsNotAFix() {
         // Plenty of satellites and a module reporting itself sick: the position is
         // latched, not current. Stale is also what fromUByte falls back to for a
-        // health byte the app does not recognise.
+        // health byte the app does not recognize.
         assertFalse(locatorHasFix(11, SensorHealth.Error))
         assertFalse(locatorHasFix(11, SensorHealth.Stale))
     }
@@ -130,7 +130,7 @@ class DistancePlausibilityTest {
 
     @Test
     fun gpsNoiseAroundAStationaryRocketIsNotAJump() {
-        // A latched position still wanders a few metres between reports, and with
+        // A latched position still wanders a few meters between reports, and with
         // no elapsed time the budget is zero — the noise margin has to carry it.
         assertTrue(
             distanceIsPlausible(
@@ -245,7 +245,7 @@ class DistancePlausibilityTest {
     }
 
     @Test
-    fun anUnrecognisedStateIsJudgedPermissively() {
+    fun anUnrecognizedStateIsJudgedPermissively() {
         // NoSignal is the fallback for any state byte the app does not know, so a
         // state added to the firmware later decodes to it on an older app.
         // Blanking a distance on the strength of a state we failed to parse is the

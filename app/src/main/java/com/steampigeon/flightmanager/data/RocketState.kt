@@ -146,7 +146,7 @@ data class LocatorConfig(
  * to supply something the firmware can read, and to get it right. Both
  * polarities count as vertical for the alert.
  *
- * Auto keeps the pre-#36 detect-on-arm behaviour. Values mirror the firmware
+ * Auto keeps the pre-#36 detect-on-arm behavior. Values mirror the firmware
  * NoseAxis enum — keep in sync.
  */
 enum class NoseAxis(val value: UByte) {
@@ -177,7 +177,7 @@ enum class PadAlertState {
         /**
          * Wire encoding: 0 quiet, 1 alerting, 2+n snoozed with n minutes left.
          *
-         * Anything unrecognised resolves to a warning, never to [Quiet] — a
+         * Anything unrecognized resolves to a warning, never to [Quiet] — a
          * value this build cannot interpret must not present as "nothing wrong".
          */
         fun fromUByte(v: UByte): PadAlertState = when (v.toInt()) {
@@ -428,7 +428,7 @@ enum class MsgType(val value: UByte) {
     FlightDataRequest(9u),      // Request from the app, via the receiver, for the data in one flight profile.
     FlightData(10u),            // Flight profile data response from the locator to the app via the receiver consisting of multiple packets, which the app acknowledges via the receiver.
     FlightDataParity(11u),      // Parity packet to allow the app to reconstruct profile data if one packet is lost.
-    FlightDataAck(12u),         // Profile data acknowledgement sent from the app via the receiver.
+    FlightDataAck(12u),         // Profile data acknowledgment sent from the app via the receiver.
     DeploymentTestRequest(13u), // Request from the app, via the receiver, for the locator to execute a deployment test.
     DeploymentTest(14u),        // Deployment test countdown sent from the locator to the app via the receiver.
     ReceiverInfoRequest(15u),   // Request from the app to the receiver for its current channel and name.

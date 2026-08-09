@@ -198,7 +198,7 @@ private val mapOverlayBg = Color(0xC05D6F96)
 // combined error rather than real separation. The box therefore changes size
 // dramatically from one fix to the next, and the fitted zoom chases it: the map
 // jumps zoom levels every second or so, exactly when the user is walking the
-// last few metres with the phone in their hand.
+// last few meters with the phone in their hand.
 //
 // Capping the fitted zoom stops it. Once the fit asks for something deeper than
 // the cap, the filter holds there and the jitter has nowhere to go — the map
@@ -264,7 +264,7 @@ private data class ChannelConfig(val mode: DeployMode?, val isArmed: Boolean)
  *
  * Shared by the camera framing and the speech announcer: a 0,0 placeholder fed
  * into a great-circle distance produces a plausible-looking number thousands of
- * kilometres wide, which the announcer would happily read out loud.
+ * kilometers wide, which the announcer would happily read out loud.
  */
 private fun validLatLng(lat: Double, lon: Double) =
     lat.isFinite() && lon.isFinite() &&
@@ -327,7 +327,7 @@ internal fun landingImminent(aglM: Float, descentRateMs: Float): Boolean =
  * from it.
  *
  * The link almost always dies before the landing does — the last few hundred
- * metres are where line of sight to a rocket across a field runs out — so a
+ * meters are where line of sight to a rocket across a field runs out — so a
  * landing callout that waits to *hear* the touchdown mostly never comes.  This
  * flies the rocket the rest of the way down on the last altitude and descent rate
  * it managed to send: once that much wall-clock has passed with no contact, it is
@@ -1014,7 +1014,7 @@ private fun MapWithOverlays(
         // camera falls back to 0,0), and auto-target only kicks in once the rocket
         // has GPS.  So as soon as the phone's own position is known — and while the
         // rocket still has none — snap the camera to the phone once, mirroring the
-        // pre-render behaviour without reintroducing the blank-screen wait.
+        // pre-render behavior without reintroducing the blank-screen wait.
         var didInitialCenter by remember { mutableStateOf(false) }
         LaunchedEffect(isMapLoaded, trackerLocation.latitude, trackerLocation.longitude) {
             val trackerValid = trackerLocation.latitude != 0.0 || trackerLocation.longitude != 0.0
@@ -1042,7 +1042,7 @@ private fun MapWithOverlays(
             //
             // The archived track substitutes for the live one rather than drawing
             // alongside it: they are the same quantity measured two ways (EKF vs
-            // raw GPS), so overlaying them at the same colour would read as one
+            // raw GPS), so overlaying them at the same color would read as one
             // noisy path rather than two estimates.
             flightPath = if (showArchivedPath && archivedFlightPath.isNotEmpty())
                 archivedFlightPath
@@ -1480,7 +1480,7 @@ private fun MapCameraController(
         // builder it replaced — throws InvalidLatLngBoundsException from build() when only one
         // point was included. The tracker has no fix for the first moments after the map is
         // re-created (e.g. returning here from flight profiles), so that is a routine state,
-        // not an edge case: with only the rocket known, centre on it and don't touch the zoom.
+        // not an edge case: with only the rocket known, center on it and don't touch the zoom.
         //
         // Ask the SDK to compute the framing. getCameraForLatLngBounds is a PURE query — it
         // returns a CameraPosition without touching the map — so unlike the old
@@ -1590,7 +1590,7 @@ private fun GenericScaleBar(
     val zoom = cameraState.position.zoom
     val lat  = cameraState.position.target.latitude
     // 78271.516… = half the 256-px-tile constant: MapLibre reports zoom in the 512-px-tile
-    // convention, so its metres/pixel at zoom z is half of Google Maps' at the same z.
+    // convention, so its meters/pixel at zoom z is half of Google Maps' at the same z.
     val metersPerPx = 78271.51696 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble())
     val totalMeters = metersPerPx * widthPx
 
@@ -1684,7 +1684,7 @@ private fun MapControlsColumn(
 
         // ── Arm/disarm feedback state ─────────────────────────────────────────
         // While a command is in flight the rocket icon blinks toward its target
-        // colour (green when arming, white when disarming) until armedState
+        // color (green when arming, white when disarming) until armedState
         // reflects the change or the 2 s timeout elapses.
         var armCommandPending by remember { mutableStateOf(false) }
         LaunchedEffect(armCommandPending) {
@@ -1697,7 +1697,7 @@ private fun MapControlsColumn(
             stringResource(R.string.armed_state_disarmed)
         LaunchedEffect(armedState) {
             textToSpeech?.speak(armedStateText, TextToSpeech.QUEUE_FLUSH, null, null)
-            armCommandPending = false   // acknowledgement received
+            armCommandPending = false   // acknowledgment received
         }
         // Continuous blink animation — applied only while a command is pending.
         val blinkTransition = rememberInfiniteTransition(label = "rocketBlink")
@@ -1896,7 +1896,7 @@ private fun MapControlsColumn(
             }
 
             // ── Descending action buttons ─────────────────────────────────────
-            // Large, clearly labelled touch targets revealed by tapping the panel.
+            // Large, clearly labeled touch targets revealed by tapping the panel.
             AnimatedVisibility(
                 visible = actionsExpanded,
                 enter = expandVertically() + fadeIn(),
@@ -1966,7 +1966,7 @@ private fun MapControlsColumn(
                     Button(
                         onClick = {
                             onActionsExpandedChange(false)
-                            // Mirror the locator rule: a disarm is only honoured while
+                            // Mirror the locator rule: a disarm is only honored while
                             // the rocket is waiting for launch or has landed.  Block it
                             // in the app during flight so we don't send a request the
                             // locator would silently ignore, and say why with an
@@ -2198,7 +2198,7 @@ fun LocatorStats(
         // Offered only for a position the app is willing to stand behind.
         // ADR-0022 already refuses to quote a distance it cannot justify, and
         // handing that same position to a navigation app would walk straight past
-        // that judgement — literally.
+        // that judgment — literally.
         if (rocketState.rawLatitude != 0.0 && rocketState.rawLongitude != 0.0) {
             val context = LocalContext.current
             // BigDecimal.toString() is locale-independent. String.format without
@@ -2219,7 +2219,7 @@ fun LocatorStats(
                 validLatLng(rocketState.rawLatitude, rocketState.rawLongitude) &&
                 distancePlausible
             // Resolved out here: stringResource is composable and the tap lambda
-            // is not. q= drops a labelled pin; a bare geo:lat,lon only centres the
+            // is not. q= drops a labeled pin; a bare geo:lat,lon only centers the
             // camera, which is the less useful of the two when the point is to
             // walk to it.
             val pinLabel = locatorConfig.deviceName.ifBlank { stringResource(R.string.rocket_pin_label) }
@@ -2303,7 +2303,7 @@ private fun DrawScope.drawVelocityGauge(
         )
     }
 
-    // Coloured arc showing current speed
+    // Colored arc showing current speed
     val speedFrac = (speed / maxSpeed).coerceIn(0f, 1f)
     val speedColor = when {
         speedFrac < 0.5f -> gaugeColor
@@ -2333,7 +2333,7 @@ private fun DrawScope.drawVelocityGauge(
     )
     drawCircle(Color.White, radius = stroke * 2.5f, center = Offset(cx, cy))
 
-    // Speed text in centre
+    // Speed text in center
     val speedPaint = android.graphics.Paint().apply {
         color = android.graphics.Color.WHITE
         textAlign = android.graphics.Paint.Align.CENTER
@@ -2490,8 +2490,8 @@ private fun rssiColor(rssi: Int): Color = when {
 // near apogee, so this reads as "margin is thinning", not "something is wrong".
 // Whether the cause is distance or another emitter is the separate, quieter
 // verdict under this row, which stays silent unless the signal is *also* strong
-// (ADR-0019). Colouring SNR by the interference rule would put the apogee false
-// alarm back in, as colour instead of text.
+// (ADR-0019). Coloring SNR by the interference rule would put the apogee false
+// alarm back in, as color instead of text.
 private fun snrColor(snr: Int): Color = when {
     snr >= 5  -> Color(0xFF4CAF50)  // green  — wide margin
     snr >= 0  -> Color(0xFFFFC107)  // amber  — comfortable
@@ -2612,7 +2612,7 @@ fun CameraPreviewScreen(
             } else if (lx in -radius..(scrW + radius) && ly in -radius..(scrH + radius)) {
                 drawCircle(locatorColor, radius, Offset(lx, ly), style = Stroke(stroke))
             } else {
-                // Clamp circle centre to screen edge with a small margin, then
+                // Clamp circle center to screen edge with a small margin, then
                 // draw a triangle arrow pointing from the edge toward the locator.
                 val em = 20.dp.toPx()
                 val ex = lx.coerceIn(em, scrW - em)
@@ -2632,7 +2632,7 @@ fun CameraPreviewScreen(
             }
 
             // ── Horizontal HUD gauge (bottom, shows left/right delta) ─────────
-            val gaugeRange  = 45f      // degrees shown each side of centre
+            val gaugeRange  = 45f      // degrees shown each side of center
             val tickMinor   = 5f       // minor tick every 5°
             val tickMajorMod = 15      // major tick every 15°
 
@@ -2660,7 +2660,7 @@ fun CameraPreviewScreen(
                 }
                 d += tickMinor
             }
-            // Centre reference (zero mark)
+            // Center reference (zero mark)
             drawLine(Color.White, Offset(cx, hTop), Offset(cx, hBottom), stroke * 1.5f)
 
             // Indicator triangle above the bar, tip pointing down into it

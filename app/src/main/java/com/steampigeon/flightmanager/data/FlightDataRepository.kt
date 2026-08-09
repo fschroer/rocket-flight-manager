@@ -224,7 +224,7 @@ object FlightDataRepository {
     fun cancelTransfer() {
         beginTransfer()
         draining = true
-        Log.d(TAG, "Transfer cancelled — draining stale packets")
+        Log.d(TAG, "Transfer canceled — draining stale packets")
     }
 
     /** Clear metadata (call before requesting new metadata). */
@@ -426,7 +426,7 @@ object FlightDataRepository {
     // -------------------------------------------------------------------------
 
     /**
-     * Accept or initialise the transfer header fields.
+     * Accept or initialize the transfer header fields.
      * A new transfer_id resets all state. Returns false if the packet should
      * be discarded (e.g. stale packet from a previous transfer).
      */
@@ -436,7 +436,7 @@ object FlightDataRepository {
         rxTotalSamples: Long,
     ): Boolean {
         if (rxTransferId == 0) return false  // 0 is reserved
-        if (draining) return false           // user cancelled — refuse stale packets
+        if (draining) return false           // user canceled — refuse stale packets
 
         if (transferId == 0 || rxTransferId != transferId) {
             // New or changed transfer — reset and adopt the new ID
