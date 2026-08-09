@@ -13,6 +13,7 @@ import android.os.Vibrator
 import android.os.VibrationEffect
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -382,6 +383,24 @@ fun HomeScreen(
     modifier: Modifier
 ) {
     val context = LocalContext.current
+
+    // Hold the screen on while the live map is up. A flight is minutes of watching
+    // the map and listening to callouts without touching the phone, which is
+    // exactly the input-idle the system screen timeout is built to catch — it was
+    // blanking the display mid-flight.
+    //
+    // Scoped to this screen rather than the activity window. Held activity-wide it
+    // also covered settings, flight profiles and map download, where the phone is
+    // being actively used or left to grind through a long download, and where the
+    // display — normally the largest single draw on the device — has no reason to
+    // stay lit. Leaving the screen returns the device to its normal timeout, and
+    // backgrounding the app does so too, exactly as before.
+    val activityWindow = (context as? Activity)?.window
+    DisposableEffect(activityWindow) {
+        activityWindow?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { activityWindow?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+
     val bluetoothConnectionState = BluetoothManagerRepository.bluetoothConnectionState.collectAsState().value
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
