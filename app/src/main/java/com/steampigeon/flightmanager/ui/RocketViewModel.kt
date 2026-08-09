@@ -3,7 +3,6 @@ package com.steampigeon.flightmanager.ui
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.hardware.GeomagneticField
 import android.hardware.SensorManager
 import android.location.Location
 import android.util.Log
@@ -14,8 +13,6 @@ import androidx.datastore.dataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import org.maplibre.android.geometry.LatLng
-import com.mutualmobile.composesensors.AccelerometerSensorState
-import com.mutualmobile.composesensors.MagneticFieldSensorState
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
@@ -1738,40 +1735,6 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             else           -> 0.55f
         }
         return delta * factor
-    }
-
-    fun handheldDeviceOrientation(accelerometerState: AccelerometerSensorState, magneticFieldState: MagneticFieldSensorState, location: Location?, landscapeOrientation: Boolean) {
-        val lastAccelerometer = FloatArray(3)
-        lastAccelerometer[0] = accelerometerState.xForce
-        lastAccelerometer[1] = accelerometerState.yForce
-        lastAccelerometer[2] = accelerometerState.zForce
-        val lastMagnetometer = FloatArray(3)
-        lastMagnetometer[0] = magneticFieldState.xStrength
-        lastMagnetometer[1] = magneticFieldState.yStrength
-        lastMagnetometer[2] = magneticFieldState.zStrength
-        val rotationMatrix = FloatArray(9)
-        val orientation = FloatArray(3)
-        SensorManager.getRotationMatrix(rotationMatrix, null, lastAccelerometer, lastMagnetometer)
-        val rotationMatrixLandscape = FloatArray(9)
-        if (landscapeOrientation) {
-            SensorManager.remapCoordinateSystem(rotationMatrix, SensorManager.AXIS_X, SensorManager.AXIS_Z, rotationMatrixLandscape)
-            SensorManager.getOrientation(rotationMatrixLandscape, orientation)
-        }
-        else
-            SensorManager.getOrientation(rotationMatrix, orientation)
-        //_lastHandheldDeviceAzimuth.value = _handheldDeviceAzimuth.value
-        location?.let {
-            val geoField = GeomagneticField(it.latitude.toFloat(), it.longitude.toFloat(), it.altitude.toFloat(), System.currentTimeMillis())
-            val declination = geoField.declination  // in degrees
-            _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + declination + 360) % 360).toFloat()
-        } ?: run {
-            _handheldDeviceAzimuth.value = ((Math.toDegrees(orientation[0].toDouble()) + 360) % 360).toFloat()
-        }
-        // Signed −90..+90, matching updateOrientation's convention (see the doc on
-        // _handheldDevicePitch). This previously wrapped to 0..360, which read identically
-        // to the signed form through the AR overlay's ((a - b + 540) % 360) - 180 delta but
-        // would break any consumer using the raw value — e.g. the map's tilt-follow mode.
-        _handheldDevicePitch.value = Math.toDegrees(-orientation[1].toDouble()).toFloat()
     }
 
     fun locatorVector(latLng1: LatLng, latLng2: LatLng): Vector {

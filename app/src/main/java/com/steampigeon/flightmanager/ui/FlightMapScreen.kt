@@ -141,9 +141,6 @@ import com.google.android.gms.location.Priority
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
-import com.mutualmobile.composesensors.SensorDelay
-import com.mutualmobile.composesensors.rememberAccelerometerSensorState
-import com.mutualmobile.composesensors.rememberMagneticFieldSensorState
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.NavDestination
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
@@ -403,10 +400,6 @@ fun HomeScreen(
     val locatorArmedMessageState = BluetoothManagerRepository.locatorArmedMessageState.collectAsState().value
     val orientation = LocalConfiguration.current.orientation
     val hasCompass = context.packageManager.hasSystemFeature(PackageManager.FEATURE_SENSOR_COMPASS)
-
-    // Sensor states reserved for future orientation tracking
-    val accelerometerState = rememberAccelerometerSensorState(sensorDelay = SensorDelay.Normal)
-    val magneticFieldState = rememberMagneticFieldSensorState(sensorDelay = SensorDelay.Normal)
 
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     // ViewModel-scoped so the fix survives navigation to the flight profiles screen and back.
