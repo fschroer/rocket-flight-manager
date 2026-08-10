@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.content.res.Configuration
+import android.hardware.SensorManager
 import android.location.Location
 import android.os.Vibrator
 import android.os.VibrationEffect
@@ -697,6 +698,15 @@ fun HomeScreen(
     val handheldCameraAzimuth = viewModel.handheldCameraAzimuth.collectAsState().value
     val locatorElevation = viewModel.locatorElevation.collectAsState().value
     val azimuthToLocator = viewModel.locatorAzimuth.collectAsState().value
+    // Only UNRELIABLE disqualifies the heading — one level below what raises the
+    // calibration prompt, because the two cost different things. Suppressing the
+    // overlay is the more destructive act: it removes the thing the user is walking
+    // by. Measured on a Pixel 9 Pro XL, a calibrated phone away from interference
+    // rests at MEDIUM and never reaches HIGH, so gating on HIGH would have taken
+    // the overlay away permanently. See compassNeedsCalibration in MapWithOverlays
+    // for the warning threshold, and ADR-0023 for both.
+    val compassUsable = hasCompass &&
+        viewModel.compassAccuracy.collectAsState().value != SensorManager.SENSOR_STATUS_UNRELIABLE
     val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
     // Distinct from the above, which ages ANY message. Battery levels ride only on
     // the pre-launch message, so once the locator switches to telemetry they stop
@@ -729,8 +739,11 @@ fun HomeScreen(
             inFlight = isInFlight(armedState, rocketState),
             lastMessageAge = lastMessageAge,
             // Bearing and distance come out of the same vector, so a position the
-            // distance test rejects aims the AR marker just as wrongly.
-            bearingValid = locatorFixUsable,
+            // distance test rejects aims the AR marker just as wrongly. An
+            // uncalibrated compass breaks the other half of the same subtraction:
+            // the marker lands on a patch of sky chosen by whatever iron is near
+            // the phone, and looks exactly as confident as a good one.
+            bearingValid = locatorFixUsable && compassUsable,
         )
     } else {
         ModalNavigationDrawer(
@@ -1207,6 +1220,14 @@ private fun MapWithOverlays(
         val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
         // Password gating: only the connected locator may be armed from the app.
         val locatorConnected = viewModel.locatorConnected.collectAsState().value
+        // Warn from LOW downward — one step below the UNRELIABLE threshold that
+        // suppresses the AR overlay, so the prompt arrives while the heading is
+        // merely suspect rather than only once it has been given up on. Gated on
+        // hasCompass so a device without a magnetometer, which cannot report
+        // anything better, is not nagged to calibrate hardware it does not have.
+        val compassNeedsCalibration = hasCompass &&
+            viewModel.compassAccuracy.collectAsState().value <=
+                SensorManager.SENSOR_STATUS_ACCURACY_LOW
         var autoTargetMode by remember { mutableStateOf(true) }
         var autoZoomMode by remember { mutableStateOf(true) }
         var compassEnabled by remember { mutableStateOf(true) }
@@ -1335,6 +1356,23 @@ private fun MapWithOverlays(
                 modifier = Modifier
                     .size(48.dp)
                     .rotate(-azimuth),
+            )
+        }
+        // The heading cannot be repaired from here — the fusion owns the
+        // magnetometer and there is no path into its calibration — so the prompt
+        // asks for the one thing that does fix it: the figure-eight, which feeds
+        // the estimator the varied orientations it needs to re-solve for the local
+        // hard-iron offset. Sited against the compass rose rather than centre
+        // screen because it qualifies that rose, and because the centre is
+        // reserved for the pad alert.
+        if (compassNeedsCalibration) {
+            Text(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = 72.dp, y = (-108).dp),
+                text = "Compass off\nfigure-8 to fix",
+                color = Color.Yellow,
+                style = typography.labelSmall,
             )
         }
         val density = LocalDensity.current

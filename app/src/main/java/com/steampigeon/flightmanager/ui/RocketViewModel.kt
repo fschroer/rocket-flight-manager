@@ -3,6 +3,7 @@ package com.steampigeon.flightmanager.ui
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.hardware.GeomagneticField
 import android.hardware.SensorManager
 import android.location.Location
 import android.util.Log
@@ -76,6 +77,27 @@ import kotlin.math.sin
 import kotlin.math.abs
 
 private const val TAG = "RocketViewModel"
+
+/**
+ * How far the phone must move before the magnetic declination is recomputed.
+ *
+ * Declination gradients run around 1° per 100 km in the continental US, so 10 km
+ * buys well under a tenth of a degree — far below what the compass itself can
+ * resolve. Large enough that a stationary phone reporting a fix every three
+ * seconds never re-runs the field model, small enough that the drive to a launch
+ * site does.
+ */
+private const val declinationRefreshM = 10_000f
+
+/**
+ * How long a degraded magnetometer accuracy reading is held before the published
+ * value is allowed to recover — see `updateCompassAccuracy`.
+ *
+ * Long enough to bridge the 30 ms chatter measured under a magnet, short enough
+ * that walking away from a source clears the warning while the user still
+ * associates the two.
+ */
+private const val compassAccuracyHoldMs = 3_000L
 
 sealed class ParsedMessage {
     data class Prelaunch(val msg: PrelaunchParsed)           : ParsedMessage()
@@ -257,6 +279,114 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _locatorStatisticsOffset.value = newOffset
     }
 
+    // Degrees to add to a magnetic heading to get a true one; east is positive.
+    // TYPE_ROTATION_VECTOR reports azimuth against MAGNETIC north, while
+    // locatorVector() computes a great-circle bearing against TRUE north. Comparing
+    // the two without this term leaves the declination as a standing error in the
+    // AR overlay and in the map rotation — measured at +15.0° where this is flown —
+    // and it does not average out: it is a bias, not noise, which is why it read as
+    // "the compass is a bit off" rather than as a bug. See ADR-0023.
+    //
+    // The device side is what gets corrected, not the locator bearing. MapLibre's
+    // camera bearing is true-north referenced too, so pushing everything to magnetic
+    // would fix the overlay and leave the rotated map wrong by the same angle.
+    private val _magneticDeclination = MutableStateFlow(0f)
+    // Where the declination in force was evaluated, so a 3-second location update
+    // does not re-run the WMM. Declination moves ~1° per 100 km at mid-latitudes,
+    // so anything short of a long drive changes nothing a compass rose can show.
+    private var declinationAnchor: Location? = null
+
+    /**
+     * How much to trust [handheldDeviceAzimuth], as one of the
+     * `SensorManager.SENSOR_STATUS_*` constants.
+     *
+     * Sourced from the raw magnetometer, not from the fused rotation vector that
+     * supplies the heading itself. On a Pixel 9 Pro XL the fused sensor never fires
+     * `onAccuracyChanged` at all — not on registration, and not with a magnet swept
+     * around the case, which is as uncalibrated as a magnetometer gets. A warning
+     * hung off it is unreachable code that looks like a working feature. The raw
+     * sensor on the same device reports correctly and responds within milliseconds.
+     *
+     * Starts at [SensorManager.SENSOR_STATUS_ACCURACY_HIGH] rather than at
+     * `UNRELIABLE`: a device whose compass is fine may never deliver an accuracy
+     * callback at all, and opening on a warning that no sensor event will ever
+     * clear is worse than opening on a claim the first callback can withdraw.
+     */
+    private val _compassAccuracy = MutableStateFlow(SensorManager.SENSOR_STATUS_ACCURACY_HIGH)
+    val compassAccuracy: StateFlow<Int> = _compassAccuracy.asStateFlow()
+    // Distinguishes "the sensor reports HIGH" from "the sensor has never spoken",
+    // which the flow alone cannot do because HIGH is also its opening value. Logging
+    // only on change is what made the inert fused sensor look identical to a
+    // perfectly calibrated one.
+    private var compassAccuracyEverReported = false
+    // Latest reading as delivered, before the hold below is applied.
+    private var rawCompassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private var compassAccuracyReleaseJob: Job? = null
+
+    /**
+     * Publish a magnetometer accuracy reading, worst-case over a trailing window.
+     *
+     * Under real interference this sensor does not degrade and stay degraded — it
+     * chatters. Measured on a Pixel 9 Pro XL with a magnet swept around the case:
+     * UNRELIABLE↔LOW and UNRELIABLE↔MEDIUM transitions with dwell times as short as
+     * 30 ms, sustained for seconds. Fed straight to the UI that is a warning that
+     * strobes and an AR marker that blinks — unreadable, and it under-reports the
+     * problem by spending half its time looking fine.
+     *
+     * So a degraded reading takes effect at once and is then held for
+     * [compassAccuracyHoldMs] past the last bad reading. Recovery is what waits;
+     * the warning never does. The same phone at rest produced zero transitions in
+     * 25 s, so the hold is not covering for a noisy signal in ordinary use — it
+     * only engages when something is genuinely disturbing the field.
+     */
+    fun updateCompassAccuracy(accuracy: Int) {
+        if (!compassAccuracyEverReported || rawCompassAccuracy != accuracy) {
+            compassAccuracyEverReported = true
+            SpLog.d("Compass", "magnetometer accuracy → ${accuracyName(accuracy)}")
+        }
+        rawCompassAccuracy = accuracy
+
+        if (accuracy <= _compassAccuracy.value) {
+            // Worse than what is published (or equal, which re-arms the hold).
+            _compassAccuracy.value = accuracy
+            compassAccuracyReleaseJob?.cancel()
+            compassAccuracyReleaseJob = viewModelScope.launch {
+                delay(compassAccuracyHoldMs)
+                // Whatever the sensor settled on, not the reading that opened the
+                // window — a burst that ends better than it started recovers to
+                // where it actually ended.
+                _compassAccuracy.value = rawCompassAccuracy
+            }
+        } else if (compassAccuracyReleaseJob?.isActive != true) {
+            // An improvement outside any hold window applies immediately; inside
+            // one it is ignored, which is what stops the chatter from surfacing.
+            _compassAccuracy.value = accuracy
+        }
+    }
+
+    private var lastFusedAccuracy: Int? = null
+
+    /**
+     * Diagnosis only — the fused rotation vector's own accuracy claim, which nothing
+     * consumes. Recorded so a device whose fused sensor really does track
+     * calibration can be told apart from one whose accuracy field never moves.
+     */
+    fun logFusedAccuracy(accuracy: Int) {
+        if (lastFusedAccuracy != accuracy) {
+            lastFusedAccuracy = accuracy
+            SpLog.d("Compass", "rotation-vector accuracy → ${accuracyName(accuracy)} (not consumed)")
+        }
+    }
+
+    private fun accuracyName(accuracy: Int): String = when (accuracy) {
+        SensorManager.SENSOR_STATUS_NO_CONTACT      -> "NO_CONTACT"
+        SensorManager.SENSOR_STATUS_UNRELIABLE      -> "UNRELIABLE"
+        SensorManager.SENSOR_STATUS_ACCURACY_LOW    -> "LOW"
+        SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM -> "MEDIUM"
+        SensorManager.SENSOR_STATUS_ACCURACY_HIGH   -> "HIGH"
+        else                                        -> "UNKNOWN($accuracy)"
+    }
+
     private val _handheldDeviceAzimuth = MutableStateFlow<Float>(0f)
     val handheldDeviceAzimuth: StateFlow<Float> = _handheldDeviceAzimuth.asStateFlow()
     private val _lastHandheldDeviceAzimuth = MutableStateFlow<Float>(0f)
@@ -346,6 +476,28 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     val trackerLocation: StateFlow<Location?> = _trackerLocation.asStateFlow()
     fun updateTrackerLocation(newTrackerLocation: Location) {
         _trackerLocation.value = newTrackerLocation
+        refreshDeclination(newTrackerLocation)
+    }
+
+    /**
+     * Re-evaluate [_magneticDeclination] for a new fix, if the fix has moved far
+     * enough from the one behind the current value to matter.
+     *
+     * The threshold is distance, not time: the field model is quoted for an epoch
+     * and drifts by a fraction of a degree per year, so nothing about sitting still
+     * invalidates it, while driving to a launch site can.
+     */
+    private fun refreshDeclination(location: Location) {
+        val anchor = declinationAnchor
+        if (anchor != null && anchor.distanceTo(location) < declinationRefreshM) return
+        declinationAnchor = location
+        _magneticDeclination.value = GeomagneticField(
+            location.latitude.toFloat(),
+            location.longitude.toFloat(),
+            location.altitude.toFloat(),
+            System.currentTimeMillis(),
+        ).declination
+        SpLog.d("Compass", "declination → %.2f°".format(_magneticDeclination.value))
     }
 
     private val _remoteLocatorConfig = MutableStateFlow<LocatorConfig>(LocatorConfig())
@@ -1698,10 +1850,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
         SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
 
+        // Magnetic → true. Everything downstream of updateOrientation is compared
+        // against true-north references (the great-circle bearing from
+        // locatorVector, MapLibre's camera bearing), so the conversion belongs
+        // here, once, rather than at each consumer.
+        val declination = _magneticDeclination.value
+
         // Azimuth: derive from the un-remapped portrait frame.
         SensorManager.getOrientation(rotationMatrix, orientation)
         val azimuthDeg = Math.toDegrees(orientation[0].toDouble()).toFloat()
-        val az = (azimuthDeg + 360f) % 360f
+        val az = (azimuthDeg + declination + 360f) % 360f
 
         // Apply Google‑Maps‑style smoothing for the map bearing.
         val delta   = ((az - _lastHandheldDeviceAzimuth.value + 540f) % 360f) - 180f
@@ -1722,8 +1880,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         SensorManager.getOrientation(landscapeMatrix, orientation)
         // After the remap the new Y axis is the old Z axis (camera direction), so
         // orientation[0] is the compass bearing the camera is actually pointing —
-        // this is the correct azimuth for the landscape AR overlay.
-        _handheldCameraAzimuth.value = (Math.toDegrees(orientation[0].toDouble()).toFloat() + 360f) % 360f
+        // this is the correct azimuth for the landscape AR overlay. Declination
+        // applies here for the same reason it applies above: this is the value the
+        // AR overlay differences against a true-north bearing.
+        _handheldCameraAzimuth.value =
+            (Math.toDegrees(orientation[0].toDouble()).toFloat() + declination + 360f) % 360f
         _handheldDevicePitch.value   = Math.toDegrees(-orientation[1].toDouble()).toFloat()
     }
 
