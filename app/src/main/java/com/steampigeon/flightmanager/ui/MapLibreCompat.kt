@@ -180,11 +180,28 @@ class MapLibreCameraState(initial: CamPos) {
             // write here (rather than relying on the controller noticing) makes
             // the hand-off immediate and independent of recomposition timing.
             if (_gesturing) return
-            _position = value
             // Skip sub-perceptual moves. Compared against the last APPLIED
             // position so tiny changes accumulate until they matter, rather
             // than the camera slowly drifting out of sync.
+            //
+            // The deadband gates the COMPOSE STATE WRITE as well as the native
+            // move, and it has to: _position is snapshot state, so assigning a
+            // structurally-different CamPos invalidates every reader. With the
+            // filters emitting ~120 marginally-different values a second (see
+            // above), writing _position first — as this did — recomposed the whole
+            // map screen at display rate on an idle map, forever. The native
+            // moveCamera flood stopped at this line; the recomposition flood did
+            // not, and it is the more expensive of the two: MapCameraController
+            // itself, the gesture snapshotFlow (allocating a Pair per frame) and
+            // GenericScaleBar (re-running Mercator math per frame) all read
+            // position, and the controller's own writes kept re-triggering them.
+            //
+            // Nothing downstream needs the sub-perceptual values: the controller
+            // filters from its own remembered smoothed state, not from here, and
+            // reads position back only for bearing — where "the bearing actually
+            // applied to the map" is the correct answer anyway.
             if (value.isImperceptiblyCloseTo(_lastApplied)) return
+            _position = value
             _lastApplied = value
             map?.moveCamera(CameraUpdateFactory.newCameraPosition(value.toMapLibre()))
         }

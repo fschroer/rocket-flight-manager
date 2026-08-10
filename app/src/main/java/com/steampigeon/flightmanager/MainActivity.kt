@@ -6,7 +6,6 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModelProvider
@@ -23,14 +22,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // Must run before any MapLibre view/offline API is touched (FlightMapScreen's map).
         MapLibre.getInstance(applicationContext)
         super.onCreate(savedInstanceState)
-
-        // Hold the screen on for as long as this window is in the foreground.  A
-        // flight is minutes of watching the map and listening to callouts without
-        // touching the phone, which is exactly the input-idle the system screen
-        // timeout is built to catch — it was blanking the display mid-flight.  The
-        // flag is scoped to this window, so backgrounding the app returns the
-        // device to its normal timeout.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         viewModel = ViewModelProvider(this)[RocketViewModel::class.java]
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
@@ -50,10 +41,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         super.onResume()
 
         val rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        // SENSOR_DELAY_UI (~60 ms), not SENSOR_DELAY_GAME (~20 ms). GAME is a rate
+        // for something being aimed; what consumes this is a compass rose and the
+        // AR overlay's heading, both of which are eased on the way out
+        // (easeAngle) and neither of which can show 50 distinct headings a second.
+        // The samples are not free: each one runs the rotation-matrix math on the
+        // main thread and writes four StateFlows that FlightMapScreen collects, so
+        // the rate set here is also a recomposition rate for the whole map screen.
         sensorManager.registerListener(
             this,
             rotationVector,
-            SensorManager.SENSOR_DELAY_GAME
+            SensorManager.SENSOR_DELAY_UI
         )
     }
 
