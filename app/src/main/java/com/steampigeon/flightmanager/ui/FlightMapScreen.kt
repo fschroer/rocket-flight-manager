@@ -285,6 +285,40 @@ internal fun recenterDeadbandM(locatorHaccM: Float, trackerAccuracyM: Float?): F
         .coerceIn(RECENTER_DEADBAND_MIN_M, RECENTER_DEADBAND_MAX_M)
 }
 
+/**
+ * [recenterDeadbandM] limited to what the screen can actually absorb.
+ *
+ * The statistical band knows nothing about zoom, and at recovery range that is
+ * not a detail: with the camera framed a few meters across, a band computed from
+ * a phone reporting 7 m of accuracy comes out wider than the whole viewport, and
+ * the anchor can sit far enough off that a marker leaves the screen. That was
+ * reported from the field as "the locator or the phone would be off screen", and
+ * it is the failure this exists to prevent.
+ *
+ * The cap is [BOUNDS_FIT_MARGIN_FRACTION] of the visible width — not an
+ * arbitrary fraction, but exactly the margin the bounds fit reserves outside the
+ * two markers. Spending that margin on center drift is precisely the slack that
+ * is there to be spent, and no more.
+ *
+ * The cap outranks [RECENTER_DEADBAND_MIN_M]. That floor exists so an
+ * optimistic fix cannot produce a band too small to ever trip; a screen showing
+ * less ground than the floor is a different situation, and there the floor is
+ * the thing that is wrong.
+ *
+ * @param metersPerDevicePx from [metersPerDevicePx] — device pixels, not logical
+ *   ones. Using logical pixels here is what made the original viewport check off
+ *   by the display density and let it pass while the real geometry did not.
+ */
+internal fun viewportLimitedDeadbandM(
+    bandM: Float,
+    viewportWidthPx: Int,
+    metersPerDevicePx: Double,
+): Float {
+    if (viewportWidthPx <= 0 || !metersPerDevicePx.isFinite() || metersPerDevicePx <= 0.0) return bandM
+    val visibleWidthM = viewportWidthPx * metersPerDevicePx
+    return minOf(bandM, (BOUNDS_FIT_MARGIN_FRACTION * visibleWidthM).toFloat())
+}
+
 // ── Auto-zoom deadband ───────────────────────────────────────────────────────
 // The centering deadband above stopped the map creeping; this stops it breathing.
 // Auto-zoom fits a box around the phone and the rocket, so its input is the
@@ -403,6 +437,61 @@ private fun LatLng.isFix() = validLatLng(latitude, longitude)
  * antimeridian measures the short way round rather than most of the way about
  * the planet — the same ±540 idiom the compass filter uses on bearings.
  */
+/**
+ * Ground meters per LOGICAL (dp) pixel at [zoom] and [latitude].
+ *
+ * 78271.516… = half the 256-px-tile constant: MapLibre reports zoom in the
+ * 512-px-tile convention, so its meters per pixel at zoom z is half of Google
+ * Maps' at the same z.
+ *
+ * **Logical, not device, pixels** — this is the unit MapLibre's zoom is defined
+ * in, and the distinction is a factor of the display density (2.25 on a 360 dpi
+ * phone, more on a denser one). Anything sizing itself against the screen in
+ * device pixels wants [metersPerDevicePx]; mixing the two silently inflates
+ * every distance, which is how the scale bar came to overstate by 2.4x and how
+ * the centering deadband came to be checked against a viewport twice the size of
+ * the real one.
+ */
+internal fun metersPerDp(zoom: Float, latitude: Double): Double =
+    78271.51696 * cos(latitude * PI / 180.0) / 2.0.pow(zoom.toDouble())
+
+/**
+ * Ground meters per DEVICE pixel — what to use when comparing a real distance
+ * against a real number of screen pixels. [density] is `LocalDensity.density`.
+ */
+internal fun metersPerDevicePx(zoom: Float, latitude: Double, density: Float): Double =
+    metersPerDp(zoom, latitude) / density
+
+// Share of each viewport dimension the bounds fit gives away as margin, so the
+// two markers are never hard against an edge.
+//
+// A FRACTION, because the previous value was 300 device pixels on every side and
+// absolute pixels mean different things on different screens: on a 1008 px-wide
+// phone that surrendered 600 px, 60% of the width, before anything was framed —
+// which is why the markers sat in a fifth of the screen with room to spare all
+// round. It also has to clear the overlays that sit on top of the map (status
+// card, stats panel, control column), and those are laid out in fractions of the
+// viewport too, so a fraction is the unit that actually tracks them.
+private const val BOUNDS_FIT_MARGIN_FRACTION = 0.14f
+
+/**
+ * Padding for `getCameraForLatLngBounds`, in device pixels, as
+ * `[left, top, right, bottom]`.
+ *
+ * Sized from the viewport rather than fixed, and clamped so that a very small or
+ * not-yet-measured viewport cannot ask for padding that meets in the middle —
+ * the fit degenerates and zooms far out when it does, which looks exactly like
+ * the bug this replaces.
+ */
+internal fun autoZoomPadding(viewportWidthPx: Int, viewportHeightPx: Int): IntArray {
+    if (viewportWidthPx <= 0 || viewportHeightPx <= 0) return intArrayOf(0, 0, 0, 0)
+    val h = (viewportWidthPx * BOUNDS_FIT_MARGIN_FRACTION).toInt()
+        .coerceAtMost(viewportWidthPx / 2 - 1).coerceAtLeast(0)
+    val v = (viewportHeightPx * BOUNDS_FIT_MARGIN_FRACTION).toInt()
+        .coerceAtMost(viewportHeightPx / 2 - 1).coerceAtLeast(0)
+    return intArrayOf(h, v, h, v)
+}
+
 internal fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val earthR = 6378137.0
     val dLat = (lat2 - lat1) * PI / 180.0
@@ -1115,6 +1204,7 @@ private fun MapWithOverlays(
         // Handle used only for pure camera queries (getCameraForLatLngBounds) — never to
         // move the camera from the controller.
         var mapLibre by remember { mutableStateOf<MapLibreMap?>(null) }
+        var mapViewSize by remember { mutableStateOf(IntSize.Zero) }
         var tiltMode by remember { mutableStateOf(MapTiltMode.Flat) }
 
         val context = LocalContext.current
@@ -1193,11 +1283,14 @@ private fun MapWithOverlays(
                 actionsExpanded = false
             },
             onMapReady = { mapLibre = it },
-            onSizeChanged = { },
+            // Captured, not discarded: the bounds fit needs real viewport pixels to
+            // size its padding against. See autoZoomPadding.
+            onSizeChanged = { mapViewSize = it },
         )
 
         MapCameraController(
             map = mapLibre,
+            mapViewSize = mapViewSize,
             trackerLocation = trackerLocation,
             rocketState = rocketState,
             cameraState = cameraState,
@@ -1508,6 +1601,9 @@ private fun tiltFromDevicePitch(pitchDeg: Float): Float {
 @Composable
 private fun MapCameraController(
     map: MapLibreMap?,
+    // Real viewport pixels, for sizing the bounds-fit padding. Zero until the map
+    // view has been measured, which autoZoomPadding handles.
+    mapViewSize: IntSize,
     trackerLocation: Location,
     rocketState: RocketState,
     cameraState: MapLibreCameraState,
@@ -1526,6 +1622,10 @@ private fun MapCameraController(
     tiltMode: MapTiltMode,
     onBearingUpdate: (Float) -> Unit,
 ) {
+    // For converting the camera zoom into ground meters per DEVICE pixel, which is
+    // what the viewport-relative deadband cap has to reason in.
+    val displayDensity = LocalDensity.current.density
+
     val kalmanGainTarget  = 0.1f
     val kalmanGainZoom    = 0.05f
     val kalmanGainTilt    = 0.05f
@@ -1663,7 +1763,10 @@ private fun MapCameraController(
         val cam = remember(
             rocketState.latitude, rocketState.longitude,
             trackerLocation.latitude, trackerLocation.longitude,
-            trackerHasGps, map,
+            // Viewport included: the padding is derived from it, so a rotation or
+            // any resize has to re-ask for the fit rather than keep one computed
+            // against the old dimensions.
+            trackerHasGps, map, mapViewSize,
         ) {
             if (!trackerHasGps) null
             else {
@@ -1671,7 +1774,11 @@ private fun MapCameraController(
                     .include(rocketLatLng)
                     .include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
                     .build()
-                map?.getCameraForLatLngBounds(bounds, intArrayOf(300, 300, 300, 300), 0.0, 0.0)
+                map?.getCameraForLatLngBounds(
+                    bounds,
+                    autoZoomPadding(mapViewSize.width, mapViewSize.height),
+                    0.0, 0.0,
+                )
             }
         }
         if (trackerHasGps) Pair(cam?.target, cam?.zoom?.toFloat())
@@ -1700,9 +1807,19 @@ private fun MapCameraController(
     // Only the framing that the phone contributes to counts as a midpoint; with no
     // tracker fix the target is the rocket alone and carries its full error.
     if (autoTargetMode && autoTarget != null) {
-        val deadbandM = recenterDeadbandM(
-            rocketState.hacc,
-            if (trackerHasGps) trackerLocation.accuracy else null,
+        val deadbandM = viewportLimitedDeadbandM(
+            recenterDeadbandM(
+                rocketState.hacc,
+                if (trackerHasGps) trackerLocation.accuracy else null,
+            ),
+            mapViewSize.width,
+            // The zoom actually applied to the camera, which is the post-correction
+            // one — that is what determines how much ground is on screen.
+            metersPerDevicePx(
+                smoothedZoom - zoomCorrection,
+                smoothedTarget.latitude,
+                displayDensity,
+            ),
         )
         val anchor = anchorTarget
         if (anchor == null ||
@@ -1811,15 +1928,17 @@ private fun GenericScaleBar(
     barColor: Color = MaterialTheme.colorScheme.primary,
     textColor: Color = MaterialTheme.colorScheme.secondary,
 ) {
-    val density = LocalDensity.current
-    val widthPx = with(density) { width.toPx() }
-
     val zoom = cameraState.position.zoom
     val lat  = cameraState.position.target.latitude
-    // 78271.516… = half the 256-px-tile constant: MapLibre reports zoom in the 512-px-tile
-    // convention, so its meters/pixel at zoom z is half of Google Maps' at the same z.
-    val metersPerPx = 78271.51696 * cos(lat * PI / 180.0) / 2.0.pow(zoom.toDouble())
-    val totalMeters = metersPerPx * widthPx
+    // Length the bar REPRESENTS, from its length in dp — because metersPerDp is
+    // per logical pixel. This used to multiply by width.toPx(), i.e. by device
+    // pixels, which overstated every distance on the bar by the display density:
+    // measured at 2.43x on a 2.25-density phone, against four captures where the
+    // separation the bar implied between the markers was compared with the Dist
+    // the app printed in the same frame. The bar is the only on-screen check a
+    // user has on how far away anything is, so it read as the map lying about
+    // scale — which is exactly how it was reported.
+    val totalMeters = metersPerDp(zoom, lat) * width.value
 
     val niceDistances = listOf(1, 2, 5, 10, 20, 50, 100, 200, 500,
         1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000)

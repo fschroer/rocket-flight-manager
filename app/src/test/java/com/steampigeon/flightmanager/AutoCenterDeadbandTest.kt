@@ -2,8 +2,12 @@ package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.ui.RECENTER_DEADBAND_MAX_M
 import com.steampigeon.flightmanager.ui.RECENTER_DEADBAND_MIN_M
+import com.steampigeon.flightmanager.ui.autoZoomPadding
 import com.steampigeon.flightmanager.ui.metersBetween
+import com.steampigeon.flightmanager.ui.metersPerDevicePx
+import com.steampigeon.flightmanager.ui.metersPerDp
 import com.steampigeon.flightmanager.ui.recenterDeadbandM
+import com.steampigeon.flightmanager.ui.viewportLimitedDeadbandM
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -235,19 +239,121 @@ class AutoCenterDeadbandTest {
         assertTrue("lag reached $worstLag m against a $deadband m band", worstLag <= deadband + 2.0)
     }
 
+    // ── Viewport limit ────────────────────────────────────────────────────────
+
     @Test
-    fun aGoodFixStaysWellInsideTheViewportAtTheDefaultZoomCap() {
-        // The deadband is the distance the target is allowed to sit off-center, so
-        // it has to stay a modest fraction of the screen or the rocket marker will
-        // wander out of view while the map sits still. Checked at the default
-        // closest-zoom cap (z20), which is as deep as auto-zoom goes out of the
-        // box, with accuracies a working setup actually reports.
+    fun theBandIsCutDownToWhatTheScreenCanAbsorb() {
+        // The regression this exists for, with the numbers that produced it: a
+        // Pixel at 360 dpi (density 2.25), 1008 px wide, framed at the scale the
+        // field capture actually showed — 0.0133 m per device pixel, so about
+        // 13 m of ground across the whole screen.
         //
-        // metersPerPx in the 512-px-tile convention MapLibre reports zoom in,
-        // matching GenericScaleBar.
-        val metersPerPx = 78271.51696 * cos(40.0 * PI / 180.0) / Math.pow(2.0, 20.0) / 2.0
-        val halfScreenM = metersPerPx * 540  // half of a ~1080 px viewport
-        val band = recenterDeadbandM(3f, 5f)
-        assertTrue("band $band m vs half-screen $halfScreenM m", band < halfScreenM)
+        // The statistical band for a phone reporting 7 m of accuracy is ~10 m,
+        // which is most of the visible width. Uncapped, the anchor could sit far
+        // enough off-center to push a marker off the screen, which is exactly what
+        // was reported from the field.
+        val metersPerDevicePx = 0.0133
+        val raw = recenterDeadbandM(1f, 7f)
+        val capped = viewportLimitedDeadbandM(raw, 1008, metersPerDevicePx)
+        assertTrue("raw band $raw m should exceed the visible width", raw > 1008 * metersPerDevicePx / 2)
+        assertTrue("capped band $capped m still too wide", capped < raw)
+        // The cap is the margin the bounds fit reserves outside the two markers,
+        // so spending it on center drift can just reach the edge and no further.
+        assertEquals((0.14 * 1008 * metersPerDevicePx).toFloat(), capped, 0.01f)
+    }
+
+    @Test
+    fun aWideViewLeavesTheStatisticalBandAlone() {
+        // Zoomed out — a kilometer of ground on screen — the screen is not the
+        // binding constraint and the cap must not interfere with the sizing that
+        // the receivers' own error justifies.
+        val raw = recenterDeadbandM(3f, 5f)
+        assertEquals(raw, viewportLimitedDeadbandM(raw, 1008, 1.0), 1e-4f)
+    }
+
+    @Test
+    fun anUnmeasuredViewportDoesNotCollapseTheBand() {
+        // The map view reports zero size until it has been laid out, and a zero
+        // there must not produce a zero band — that would re-latch the anchor on
+        // every fix, which is the creep this whole mechanism removes.
+        val raw = recenterDeadbandM(3f, 5f)
+        assertEquals(raw, viewportLimitedDeadbandM(raw, 0, 0.0133), 1e-4f)
+        assertEquals(raw, viewportLimitedDeadbandM(raw, 1008, 0.0), 1e-4f)
+        assertEquals(raw, viewportLimitedDeadbandM(raw, 1008, Double.NaN), 1e-4f)
+    }
+
+    // ── Screen scale ──────────────────────────────────────────────────────────
+
+    @Test
+    fun metersPerPixelDistinguishesLogicalFromDevicePixels() {
+        // The bug behind both the scale bar overstating distances and this file's
+        // previous viewport check passing when the real geometry did not: MapLibre
+        // reports zoom in LOGICAL pixels, and anything comparing against real
+        // screen pixels has to divide by the display density first.
+        val logical = metersPerDp(20f, 47.6148)
+        assertEquals(logical / 2.25, metersPerDevicePx(20f, 47.6148, 2.25f), 1e-9)
+        // Density 1 is the only case where the two agree, which is why the bug
+        // survived review and every emulator it was tried on.
+        assertEquals(logical, metersPerDevicePx(20f, 47.6148, 1f), 1e-9)
+        // A denser screen shows LESS ground per pixel, never more.
+        assertTrue(metersPerDevicePx(20f, 47.6148, 3.5f) < metersPerDevicePx(20f, 47.6148, 2.25f))
+    }
+
+    // Absolute calibration deliberately is not asserted here. The recovered field
+    // value (~0.015 m per device pixel at zoom 20.58 on a 2.25-density screen) came
+    // from inverting this same formula, so a test of it would be circular, and the
+    // independent check — on-screen marker separation against the Dist the app
+    // printed — carries about 10% of uncertainty from the rocket icon's anchor
+    // point. Whether the constant is right is a device question: put both markers
+    // on screen, measure their pixel separation against the reported Dist, and
+    // compare with what the scale bar claims. That ratio was 2.43 before this fix
+    // and should be 1.0 after it.
+
+    @Test
+    fun zoomingInOneLevelHalvesTheGroundPerPixel() {
+        for (z in 10..21) {
+            assertEquals(
+                metersPerDp(z.toFloat(), 47.6148) / 2.0,
+                metersPerDp(z + 1f, 47.6148),
+                1e-9,
+            )
+        }
+    }
+
+    // ── Bounds-fit padding ────────────────────────────────────────────────────
+
+    @Test
+    fun paddingIsAFractionOfTheViewportNotAFixedPixelCount() {
+        // The previous value was 300 px on every side regardless of screen. On a
+        // 1008 px-wide phone that gave away 600 px — 60% of the width — before
+        // anything was framed, which is why the markers occupied a fifth of the
+        // screen.
+        val (l, t, r, b) = autoZoomPadding(1008, 2244).let {
+            listOf(it[0], it[1], it[2], it[3])
+        }
+        assertEquals(l, r)
+        assertEquals(t, b)
+        assertTrue("horizontal padding $l px is not less than the old 300", l < 300)
+        assertTrue("padding should leave most of the viewport", 2 * l < 1008 / 2)
+        assertTrue("vertical padding should scale with height", t > l)
+    }
+
+    @Test
+    fun paddingNeverMeetsInTheMiddle() {
+        // Padding that exceeds half the viewport degenerates the fit and zooms far
+        // out — indistinguishable from the bug being fixed, and far harder to spot
+        // because it only happens on small or transient viewport sizes.
+        for (w in listOf(1, 2, 10, 100, 480, 1008, 2400)) {
+            for (h in listOf(1, 2, 10, 100, 800, 2244, 3000)) {
+                val p = autoZoomPadding(w, h)
+                assertTrue("w=$w padding ${p[0]}", p[0] + p[2] < w)
+                assertTrue("h=$h padding ${p[1]}", p[1] + p[3] < h)
+                assertTrue("negative padding", p.all { it >= 0 })
+            }
+        }
+        assertTrue(autoZoomPadding(0, 0).all { it == 0 })
+        assertTrue(autoZoomPadding(-5, 100).all { it == 0 })
     }
 }
+
+private operator fun <T> List<T>.component4(): T = this[3]
