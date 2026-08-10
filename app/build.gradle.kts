@@ -23,6 +23,31 @@ android {
 
     buildTypes {
         release {
+            // OFF DELIBERATELY — this is not a flag waiting to be flipped.
+            //
+            // R8 would have to be told to keep three things this app reaches
+            // reflectively or through JNI, and proguard-rules.pro is still the
+            // commented-out template:
+            //   - full protobuf-java (NOT lite), which backs the DataStore
+            //     settings store — the closest-zoom setting, launch sites, the
+            //     locator password
+            //   - jSerialComm, which loads a native library
+            //   - MapLibre, whose Java/JNI boundary is wide
+            //
+            // The failure mode is what makes this worth a comment rather than an
+            // attempt: R8 problems appear at RUNTIME, not build time. A release
+            // that compiles clean and then silently fails to deserialize settings,
+            // discovered at a launch site, is a worse outcome than a 66 MB APK.
+            // Validating it means signing a release build — there is no signing
+            // config here, `assembleRelease` produces an unsigned APK — and then
+            // smoke-testing settings persistence, BLE connect, map render and
+            // flight-profile transfer.
+            //
+            // Debug logging does NOT depend on this. It is gated at the source in
+            // SpLog, on BuildConfig.DEBUG, so nothing prints from a release build
+            // either way. What minification would additionally buy is removing the
+            // log strings from the APK — they are still readable to anyone who
+            // unpacks it — plus the size reduction.
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
