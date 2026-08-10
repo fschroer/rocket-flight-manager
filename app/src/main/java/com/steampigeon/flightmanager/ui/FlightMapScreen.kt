@@ -285,6 +285,64 @@ internal fun recenterDeadbandM(locatorHaccM: Float, trackerAccuracyM: Float?): F
         .coerceIn(RECENTER_DEADBAND_MIN_M, RECENTER_DEADBAND_MAX_M)
 }
 
+// ── Auto-zoom deadband ───────────────────────────────────────────────────────
+// The centering deadband above stopped the map creeping; this stops it breathing.
+// Auto-zoom fits a box around the phone and the rocket, so its input is the
+// SEPARATION between them — and at recovery range that separation is mostly the
+// two receivers disagreeing. Measured on a stationary locator: Dist read 6, 7 and
+// 11 m within a couple of minutes, and the camera zoom swung 0.6 levels following
+// it.
+//
+// The closest-zoom setting does not cover this, which is worth being precise
+// about because it looks like it should. That limit binds how far IN auto-zoom
+// may go; the swings measured here happen at and below it, where there is
+// nothing to clamp. Recovering the zoom from the rendered scale bar across four
+// captures gave 20.57, 20.46, 20.01 and 19.96 while Dist read 6, 7, 11 and 11 m
+// — tracking continuously, which a clamped value cannot do.
+//
+// Band floor and ceiling, in zoom levels. The ceiling matters more than it looks:
+// the honest statistics say that when separation and error are comparable the
+// fitted zoom carries several levels of uncertainty and should never move at all,
+// which would leave the map framed for 30 m while you stood 5 m away. Capping the
+// band means the last stretch of an approach re-frames once rather than never.
+internal const val AUTO_ZOOM_DEADBAND_MIN_LEVELS = 0.25f
+internal const val AUTO_ZOOM_DEADBAND_MAX_LEVELS = 1.5f
+
+/**
+ * How far the fitted zoom may drift before the camera follows it, in zoom levels.
+ *
+ * Same shape as [recenterDeadbandM] — 2σ of the drift between two noisy samples —
+ * but the σ is derived differently, and the difference is not cosmetic:
+ *
+ *  - **No halving.** The centering target is the midpoint between the two fixes,
+ *    which moves half as far as they do. Separation is a *difference* between
+ *    them, so both errors land on it at full weight: σ_separation =
+ *    √(σ_locator² + σ_phone²).
+ *  - **Converted through the log.** Zoom is logarithmic in separation, so a fixed
+ *    error in meters is a large zoom error when the two are close together and a
+ *    negligible one when they are far apart: σ_zoom = σ_separation / (D·ln2).
+ *    This is what makes the band self-scaling — wide where the separation is
+ *    mostly noise, narrow where it is real.
+ *
+ * @param separationM current distance between the two fixes. Non-positive or
+ *   non-finite values yield the widest band, which is the right failure
+ *   direction: an unknown separation is not evidence that the zoom should move.
+ */
+internal fun autoZoomDeadbandLevels(
+    locatorHaccM: Float,
+    trackerAccuracyM: Float?,
+    separationM: Double,
+): Float {
+    fun sane(v: Float?) = if (v != null && v.isFinite() && v > 0f) v else 0f
+    val locator = sane(locatorHaccM)
+    val phone = sane(trackerAccuracyM)
+    val sigmaSeparation = sqrt(locator * locator + phone * phone)
+    if (!separationM.isFinite() || separationM <= 0.0) return AUTO_ZOOM_DEADBAND_MAX_LEVELS
+    val sigmaZoom = sigmaSeparation / (separationM * ln(2.0)).toFloat()
+    return (2f * sqrt(2f) * sigmaZoom)
+        .coerceIn(AUTO_ZOOM_DEADBAND_MIN_LEVELS, AUTO_ZOOM_DEADBAND_MAX_LEVELS)
+}
+
 private const val landingAltitudeThreshold = 30
 private const val minimumSpokenAGLVelocity = 2 * 9.8
 
@@ -1481,6 +1539,9 @@ private fun MapCameraController(
     // has a target: at startup, after a gesture, and whenever a camera control is
     // tapped. See where recenterDeadbandM is applied.
     var anchorTarget by remember { mutableStateOf<LatLng?>(null) }
+    // The zoom's equivalent, in zoom levels. Holds the UNCLAMPED fit — see where
+    // autoZoomDeadbandLevels is applied for why it is not the clamped value.
+    var anchorZoom by remember { mutableStateOf<Float?>(null) }
     var smoothedZoom by remember { mutableFloatStateOf(12f) }
     var smoothedTilt by remember { mutableFloatStateOf(0f) }
 
@@ -1523,6 +1584,7 @@ private fun MapCameraController(
     LaunchedEffect(tiltMode, autoTargetMode, autoZoomMode, compassEnabled) {
         lastUserGestureTime = 0L
         anchorTarget = null
+        anchorZoom = null
     }
 
     if (!isMapLoaded) return
@@ -1557,6 +1619,7 @@ private fun MapCameraController(
         // pan a short way and the drift back would never trip, leaving the map
         // parked off the rocket with no way to explain it.
         anchorTarget = null
+        anchorZoom = null
         onBearingUpdate(cameraState.position.bearing)
         return   // leave the camera untouched so gestures work freely in every tilt mode
     }
@@ -1684,8 +1747,43 @@ private fun MapCameraController(
     // rather than the pre-correction state, which under tilt would lose up to a
     // whole level of legitimate range. It matches the formula the gesture branch
     // uses to read state back from the native camera.
-    smoothedZoom = if (autoZoomMode && autoZoom != null)
-        (smoothedZoom + (autoZoom - smoothedZoom) * kalmanGainZoom)
+    //
+    // The zoom follows an ANCHOR for the same reason the target does, and the
+    // limit above is not a substitute for it: the limit binds how far IN the fit
+    // may go, while these swings happen at and below it, where there is nothing
+    // to clamp. Measured on a stationary locator, the fit moved 0.6 levels while
+    // Dist read 6, 7 and 11 m — all of it the two receivers disagreeing.
+    //
+    // Compared in ZOOM space rather than meters of separation. The two are not
+    // interchangeable: zoom is logarithmic in separation, so the same few meters
+    // of error is most of a zoom level when the fixes are close together and
+    // nothing at all when they are far apart. Deadbanding the separation directly
+    // would need a band wider than the separation itself at recovery range, which
+    // is the regime this exists for.
+    //
+    // The anchor is the UNCLAMPED fit, while the filter output is clamped to the
+    // limit. Comparing like with like is the point: clamping the anchor too would
+    // make every fit past the limit compare equal, so a genuine move further in
+    // could never re-latch once one had.
+    if (autoZoomMode && autoZoom != null) {
+        val separationM =
+            if (rocketHasGps && trackerHasGps) metersBetween(
+                rocketState.latitude, rocketState.longitude,
+                trackerLocation.latitude, trackerLocation.longitude,
+            ) else 0.0
+        val bandLevels = autoZoomDeadbandLevels(
+            rocketState.hacc,
+            if (trackerHasGps) trackerLocation.accuracy else null,
+            separationM,
+        )
+        val anchor = anchorZoom
+        if (anchor == null || abs(autoZoom - anchor) > bandLevels) {
+            anchorZoom = autoZoom
+        }
+    }
+    val followZoom = anchorZoom
+    smoothedZoom = if (autoZoomMode && followZoom != null)
+        (smoothedZoom + (followZoom - smoothedZoom) * kalmanGainZoom)
             .coerceAtMost(maxZoom + zoomCorrection)
     else smoothedZoom
 
