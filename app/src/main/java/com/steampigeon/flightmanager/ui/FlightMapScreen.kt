@@ -94,6 +94,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -1598,9 +1599,51 @@ private fun tiltFromDevicePitch(pitchDeg: Float): Float {
 }
 
 /**
+ * The camera filter's working state, held deliberately as PLAIN FIELDS rather
+ * than Compose snapshot state.
+ *
+ * This is the whole point of the frame-loop rewrite. These values are written on
+ * every display frame, and as `mutableStateOf` each write invalidated the
+ * composable that had just read them — a self-sustaining loop that recomposed the
+ * camera controller at display rate forever, whether or not anything had moved.
+ * Measured at 120 fps on a still map with nothing connected.
+ *
+ * The filters converge asymptotically, so they never stop emitting marginally
+ * different values and the loop never ran out of fuel. Ordinary snapshot state is
+ * the wrong tool for something ticked by the clock rather than by data: nothing
+ * outside the tick reads these, so nothing should be woken by them.
+ */
+private class CameraFilterState {
+    var lastUserGestureTime = 0L
+    var smoothedTarget = LatLng(0.0, 0.0)
+    var smoothedZoom = 12f
+    var smoothedTilt = 0f
+    /**
+     * The center the camera is actually filtering toward — re-latched from the
+     * live auto-center target only when that target has drifted past the
+     * GPS-error deadband. Null means "no anchor yet", which latches on the next
+     * frame that has a target: at startup, after a gesture, and whenever a camera
+     * control is tapped. See where recenterDeadbandM is applied.
+     */
+    var anchorTarget: LatLng? = null
+    /**
+     * The zoom's equivalent, in zoom levels. Holds the UNCLAMPED fit — see where
+     * autoZoomDeadbandLevels is applied for why it is not the clamped value.
+     */
+    var anchorZoom: Float? = null
+}
+
+/**
  * Headless composable that keeps the map camera smoothly framing both the tracker
  * and the rocket using a Kalman filter. Backs off for 5 s after a user gesture
  * so that manual panning is not immediately overridden.
+ *
+ * The filter is ticked from a [withFrameNanos] loop, NOT from composition. It has
+ * to run every frame — that is what makes the motion smooth — but running it *as*
+ * composition meant every frame was also a recomposition, forever. Composition now
+ * happens only when the inputs actually change (roughly once per fix), and the
+ * per-frame work touches no snapshot state except the camera position, which
+ * carries its own sub-perceptual deadband.
  *
  * When tilted (see [MapTiltMode]):
  * - Tilt is merged into the final CameraPosition so only one native map move occurs per frame.
@@ -1643,44 +1686,56 @@ private fun MapCameraController(
     val kalmanGainTilt    = 0.05f
     val kalmanGainBearing = 0.01f
 
-    var lastUserGestureTime by remember { mutableLongStateOf(0L) }
-    var smoothedTarget by remember { mutableStateOf(LatLng(0.0, 0.0)) }
-    // The center the camera is actually filtering toward — re-latched from the live
-    // auto-center target only when that target has drifted past the GPS-error
-    // deadband. Null means "no anchor yet", which latches on the next frame that
-    // has a target: at startup, after a gesture, and whenever a camera control is
-    // tapped. See where recenterDeadbandM is applied.
-    var anchorTarget by remember { mutableStateOf<LatLng?>(null) }
-    // The zoom's equivalent, in zoom levels. Holds the UNCLAMPED fit — see where
-    // autoZoomDeadbandLevels is applied for why it is not the clamped value.
-    var anchorZoom by remember { mutableStateOf<Float?>(null) }
-    var smoothedZoom by remember { mutableFloatStateOf(12f) }
-    var smoothedTilt by remember { mutableFloatStateOf(0f) }
+    val filter = remember { CameraFilterState() }
 
-    LaunchedEffect(Unit) {
-        // Include position so the flow re-emits on every camera frame, not just when the
-        // reason first changes. This keeps lastUserGestureTime rolling forward for the
-        // entire duration of a continuous gesture (long pan, slow pinch, etc.) so the
-        // 5 s recovery window always starts from the last frame of user input.
-        // Keyed on isGesturing, not moveStartedReason: our own programmatic
-        // moves fire onCameraMoveStarted with REASON_API_ANIMATION and used to
-        // overwrite the user's REASON_API_GESTURE within milliseconds, so this
-        // collector frequently never saw the gesture at all.
-        snapshotFlow { cameraState.isGesturing to cameraState.position }
-            .collect { (gesturing, _) ->
-                // ONLY isGesturing. moveStartedReason must not be consulted here:
-                // it is stale-sticky — a real gesture sets it to REASON_GESTURE and
-                // nothing clears it — while this flow re-emits on every camera
-                // position change, including our own writes. That let a
-                // long-finished gesture re-arm the backoff one frame after it was
-                // cleared, so the controller got a single frame of camera motion
-                // per 5 s cycle: tilt froze part-way, each isolated write showed
-                // as a jump, and auto-zoom crawled. isGesturing is latched on a
-                // real gesture and cleared on camera idle, so it cannot go stale.
-                if (gesturing) {
-                    lastUserGestureTime = System.currentTimeMillis()
-                }
-            }
+    val rocketHasGps  = validLatLng(rocketState.latitude, rocketState.longitude)
+    val trackerHasGps = validLatLng(trackerLocation.latitude, trackerLocation.longitude)
+
+    // Hoisted out of the tick because remember{} is a composition tool and the tick
+    // is not composition. Position is unchanged: a native JNI query cached on the
+    // two fixes, so it re-runs about once a second rather than once a frame.
+    //
+    // Ask the SDK to compute the framing. getCameraForLatLngBounds is a PURE query — it
+    // returns a CameraPosition without touching the map — so unlike the old
+    // moveCamera(newLatLngBounds(...)) "probe" it cannot move the camera mid-frame (that
+    // was the auto-zoom wobble: two native moves per frame, drawn by the continuously
+    // rendering GL thread).
+    //
+    // It also beats hand-rolled Mercator math, which has to get the pixel-density and
+    // tile-size conventions exactly right to land the fit — and silently mis-frames when
+    // it doesn't.
+    //
+    // Fit NORTH-UP and FLAT (bearing 0, tilt 0), matching what Google's newLatLngBounds
+    // always did. The default overload fits for the *current* bearing/tilt, which zooms
+    // out further — a rotated box needs a bigger viewport, and with the compass on the
+    // bearing is arbitrary. Worse, tilt is already compensated below (zoomCorrection),
+    // so letting the SDK account for it too corrects twice and over-zooms out.
+    //
+    // Bounds need BOTH points. MapLibre's LatLngBounds.Builder — unlike the Google Maps
+    // builder it replaced — throws InvalidLatLngBoundsException from build() when only one
+    // point was included. The tracker has no fix for the first moments after the map is
+    // re-created (e.g. returning here from flight profiles), so that is a routine state,
+    // not an edge case: with only the rocket known, center on it and don't touch the zoom.
+    val boundsCam = remember(
+        rocketState.latitude, rocketState.longitude,
+        trackerLocation.latitude, trackerLocation.longitude,
+        // Viewport included: the padding is derived from it, so a rotation or
+        // any resize has to re-ask for the fit rather than keep one computed
+        // against the old dimensions.
+        rocketHasGps, trackerHasGps, map, mapViewSize,
+    ) {
+        if (!trackerHasGps || !rocketHasGps) null
+        else {
+            val bounds = LatLngBounds.Builder()
+                .include(LatLng(rocketState.latitude, rocketState.longitude))
+                .include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
+                .build()
+            map?.getCameraForLatLngBounds(
+                bounds,
+                autoZoomPadding(mapViewSize.width, mapViewSize.height),
+                0.0, 0.0,
+            )
+        }
     }
 
     // Tapping a camera control is an explicit command, not something to defer to.
@@ -1694,236 +1749,227 @@ private fun MapCameraController(
     // "center on it now", and an anchor left over from before the toggle would
     // hold the camera off-target until GPS noise happened to cross the deadband.
     LaunchedEffect(tiltMode, autoTargetMode, autoZoomMode, compassEnabled) {
-        lastUserGestureTime = 0L
-        anchorTarget = null
-        anchorZoom = null
+        filter.lastUserGestureTime = 0L
+        filter.anchorTarget = null
+        filter.anchorZoom = null
     }
 
-    if (!isMapLoaded) return
+    // One frame's worth of filtering. Held through rememberUpdatedState so the
+    // frame loop below always calls the latest version — closing over the current
+    // composition's inputs — without the loop being torn down and restarted every
+    // time one of them changes.
+    val tick by rememberUpdatedState(fun CameraFilterState.() {
+        if (!isMapLoaded) return
 
-    val now = System.currentTimeMillis()
-    val userGestureRecent = now - lastUserGestureTime <= 5000
-
-    // Compute the target tilt for this frame.
-    // Tilt: 0° = straight down, larger = closer to the horizon. MapLibre's hard ceiling is
-    // MapLibreConstants.MAXIMUM_PITCH = 60°, and it silently clamps anything above that —
-    // so the range must live entirely below 60, not straddle it. (The pre-MapLibre code
-    // ramped 60→67.5° against Google's 67.5° limit; ported over, every value above 60 was
-    // clamped away and the tilt sat at a constant 60°.)
-    // Open up toward the horizon as the rocket climbs: 45° on the pad, reaching the 60°
-    // ceiling at 450 m AGL.
-    val targetTilt = when (tiltMode) {
-        MapTiltMode.FollowDevice -> tiltFromDevicePitch(handheldDevicePitch)
-        MapTiltMode.Altitude ->
-            (45f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(45f, MAPLIBRE_MAX_PITCH)
-        MapTiltMode.Flat -> 0f
-    }
-    // During a gesture (pan, zoom, rotate) sync the smoothed state from the native camera so
-    // that Kalman resumes from the actual position when the gesture window expires.
-    // Outside gestures, filter smoothedTilt toward targetTilt.
-    if (userGestureRecent) {
-        smoothedTarget = cameraState.position.target
-        smoothedZoom   = cameraState.position.zoom + (smoothedTilt / 90f * 1.5f)
-        smoothedTilt   = cameraState.position.tilt
-        // Drop the anchor along with the rest of the filter state. A pan moves the
-        // camera to somewhere the anchor knows nothing about, so keeping it would
-        // mean auto-center resumed by measuring the deadband from a stale point:
-        // pan a short way and the drift back would never trip, leaving the map
-        // parked off the rocket with no way to explain it.
-        anchorTarget = null
-        anchorZoom = null
-        onBearingUpdate(cameraState.position.bearing)
-        return   // leave the camera untouched so gestures work freely in every tilt mode
-    }
-    smoothedTilt += (targetTilt - smoothedTilt) * kalmanGainTilt
-    // zoomCorrection is driven by smoothedTilt so it fades in/out with the tilt transition
-    // rather than snapping to 0 the instant the tilt mode changes.
-    val zoomCorrection = smoothedTilt / 90f * 1.5f
-
-    // No recent gesture — safe to probe/compute ideal bounds.
-    // Only include the rocket if it has a valid GPS fix — excluding 0,0 prevents the bounds
-    // from spanning to null-island and pulling the Kalman zoom filter toward world level.
-    val rocketHasGps  = validLatLng(rocketState.latitude, rocketState.longitude)
-    val trackerHasGps = validLatLng(trackerLocation.latitude, trackerLocation.longitude)
-
-    val (autoTarget, autoZoom) = if ((autoTargetMode || autoZoomMode) && rocketHasGps) {
-        val rocketLatLng = LatLng(rocketState.latitude, rocketState.longitude)
-        // Bounds need BOTH points. MapLibre's LatLngBounds.Builder — unlike the Google Maps
-        // builder it replaced — throws InvalidLatLngBoundsException from build() when only one
-        // point was included. The tracker has no fix for the first moments after the map is
-        // re-created (e.g. returning here from flight profiles), so that is a routine state,
-        // not an edge case: with only the rocket known, center on it and don't touch the zoom.
+        // Gesture state is read here rather than collected through a snapshotFlow.
+        // The flow keyed on `isGesturing to position` re-emitted on every camera
+        // frame and allocated a Pair each time; polling the same latched flag once
+        // per frame is equivalent and free.
         //
-        // Ask the SDK to compute the framing. getCameraForLatLngBounds is a PURE query — it
-        // returns a CameraPosition without touching the map — so unlike the old
-        // moveCamera(newLatLngBounds(...)) "probe" it cannot move the camera mid-frame (that
-        // was the auto-zoom wobble: two native moves per frame, drawn by the continuously
-        // rendering GL thread).
+        // ONLY isGesturing. moveStartedReason must not be consulted: it is
+        // stale-sticky — a real gesture sets it to REASON_GESTURE and nothing
+        // clears it — so a long-finished gesture could re-arm the backoff one
+        // frame after it was cleared, leaving the controller a single frame of
+        // camera motion per 5 s cycle: tilt froze part-way, each isolated write
+        // showed as a jump, and auto-zoom crawled. isGesturing is latched on a
+        // real gesture and cleared on camera idle, so it cannot go stale.
         //
-        // It also beats hand-rolled Mercator math, which has to get the pixel-density and
-        // tile-size conventions exactly right to land the fit — and silently mis-frames when
-        // it doesn't.
+        // Polled every frame, which is what keeps lastUserGestureTime rolling
+        // forward for the whole duration of a continuous gesture (long pan, slow
+        // pinch) so the 5 s recovery window starts from the last frame of input.
+        if (cameraState.isGesturing) {
+            lastUserGestureTime = System.currentTimeMillis()
+        }
+
+        val now = System.currentTimeMillis()
+        val userGestureRecent = now - lastUserGestureTime <= 5000
+
+        // Compute the target tilt for this frame.
+        // Tilt: 0° = straight down, larger = closer to the horizon. MapLibre's hard ceiling is
+        // MapLibreConstants.MAXIMUM_PITCH = 60°, and it silently clamps anything above that —
+        // so the range must live entirely below 60, not straddle it. (The pre-MapLibre code
+        // ramped 60→67.5° against Google's 67.5° limit; ported over, every value above 60 was
+        // clamped away and the tilt sat at a constant 60°.)
+        // Open up toward the horizon as the rocket climbs: 45° on the pad, reaching the 60°
+        // ceiling at 450 m AGL.
+        val targetTilt = when (tiltMode) {
+            MapTiltMode.FollowDevice -> tiltFromDevicePitch(handheldDevicePitch)
+            MapTiltMode.Altitude ->
+                (45f + rocketState.altitudeAboveGroundLevel / 30f).coerceIn(45f, MAPLIBRE_MAX_PITCH)
+            MapTiltMode.Flat -> 0f
+        }
+        // During a gesture (pan, zoom, rotate) sync the smoothed state from the native camera so
+        // that Kalman resumes from the actual position when the gesture window expires.
+        // Outside gestures, filter smoothedTilt toward targetTilt.
+        if (userGestureRecent) {
+            smoothedTarget = cameraState.position.target
+            smoothedZoom   = cameraState.position.zoom + (smoothedTilt / 90f * 1.5f)
+            smoothedTilt   = cameraState.position.tilt
+            // Drop the anchor along with the rest of the filter state. A pan moves the
+            // camera to somewhere the anchor knows nothing about, so keeping it would
+            // mean auto-center resumed by measuring the deadband from a stale point:
+            // pan a short way and the drift back would never trip, leaving the map
+            // parked off the rocket with no way to explain it.
+            anchorTarget = null
+            anchorZoom = null
+            onBearingUpdate(cameraState.position.bearing)
+            return   // leave the camera untouched so gestures work freely in every tilt mode
+        }
+        smoothedTilt += (targetTilt - smoothedTilt) * kalmanGainTilt
+        // zoomCorrection is driven by smoothedTilt so it fades in/out with the tilt transition
+        // rather than snapping to 0 the instant the tilt mode changes.
+        val zoomCorrection = smoothedTilt / 90f * 1.5f
+
+        // No recent gesture — safe to use the computed ideal bounds.
+        // Only include the rocket if it has a valid GPS fix — excluding 0,0 prevents the bounds
+        // from spanning to null-island and pulling the Kalman zoom filter toward world level.
+        val (autoTarget, autoZoom) = if ((autoTargetMode || autoZoomMode) && rocketHasGps) {
+            val rocketLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+            if (trackerHasGps) Pair(boundsCam?.target, boundsCam?.zoom?.toFloat())
+            else Pair(rocketLatLng, null)
+        } else {
+            Pair(null, null)
+        }
+
+        // Drive the Kalman state (smoothedTarget / smoothedZoom) toward the ideal auto values.
+        // Use the remembered smoothed values as the Kalman base — not cameraPositionState.position
+        // — so that the zoom correction applied at the end doesn't feed back into the next frame.
         //
-        // Fit NORTH-UP and FLAT (bearing 0, tilt 0), matching what Google's newLatLngBounds
-        // always did. The default overload fits for the *current* bearing/tilt, which zooms
-        // out further — a rotated box needs a bigger viewport, and with the compass on the
-        // bearing is arbitrary. Worse, tilt is already compensated below (zoomCorrection),
-        // so letting the SDK account for it too corrects twice and over-zooms out.
-        // Cached on the inputs. This is a native JNI query, and the controller
-        // re-runs every display frame (~120/s measured), but the answer only
-        // changes when one of the two positions does — roughly once a second.
-        val cam = remember(
-            rocketState.latitude, rocketState.longitude,
-            trackerLocation.latitude, trackerLocation.longitude,
-            // Viewport included: the padding is derived from it, so a rotation or
-            // any resize has to re-ask for the fit rather than keep one computed
-            // against the old dimensions.
-            trackerHasGps, map, mapViewSize,
-        ) {
-            if (!trackerHasGps) null
-            else {
-                val bounds = LatLngBounds.Builder()
-                    .include(rocketLatLng)
-                    .include(LatLng(trackerLocation.latitude, trackerLocation.longitude))
-                    .build()
-                map?.getCameraForLatLngBounds(
-                    bounds,
-                    autoZoomPadding(mapViewSize.width, mapViewSize.height),
-                    0.0, 0.0,
-                )
+        // The filter follows the ANCHOR, not the live target. Re-latch the anchor only
+        // once the live target has drifted past what the two receivers' combined error
+        // can account for; inside that distance the anchor does not move, the filter
+        // has nothing to converge toward, and the map is genuinely still.
+        //
+        // Deadbanding the anchor rather than the filter output is what makes it settle.
+        // The obvious alternative — skip the filter step whenever the live target is
+        // within the deadband of the CAMERA — never converges: the camera creeps
+        // toward the target, re-enters the deadband a full deadband short of it, and
+        // stops there, so it permanently trails the rocket by up to that distance and
+        // stutters along the boundary as noise pushes it in and out. Against a latched
+        // anchor the filter always has a fixed point to reach, reaches it, and stops.
+        //
+        // Only the framing that the phone contributes to counts as a midpoint; with no
+        // tracker fix the target is the rocket alone and carries its full error.
+        if (autoTargetMode && autoTarget != null) {
+            val deadbandM = viewportLimitedDeadbandM(
+                recenterDeadbandM(
+                    rocketState.hacc,
+                    if (trackerHasGps) trackerLocation.accuracy else null,
+                ),
+                mapViewSize.width,
+                // The zoom actually applied to the camera, which is the post-correction
+                // one — that is what determines how much ground is on screen.
+                metersPerDevicePx(
+                    smoothedZoom - zoomCorrection,
+                    smoothedTarget.latitude,
+                    displayDensity,
+                ),
+            )
+            val anchor = anchorTarget
+            if (anchor == null ||
+                metersBetween(
+                    anchor.latitude, anchor.longitude,
+                    autoTarget.latitude, autoTarget.longitude,
+                ) > deadbandM
+            ) {
+                anchorTarget = autoTarget
             }
         }
-        if (trackerHasGps) Pair(cam?.target, cam?.zoom?.toFloat())
-        else Pair(rocketLatLng, null)
-    } else {
-        Pair(null, null)
-    }
+        val followTarget = anchorTarget
+        smoothedTarget = if (autoTargetMode && followTarget != null)
+            LatLng(
+                smoothedTarget.latitude  + (followTarget.latitude  - smoothedTarget.latitude)  * kalmanGainTarget,
+                smoothedTarget.longitude + (followTarget.longitude - smoothedTarget.longitude) * kalmanGainTarget,
+            )
+        else smoothedTarget
 
-    // Drive the Kalman state (smoothedTarget / smoothedZoom) toward the ideal auto values.
-    // Use the remembered smoothed values as the Kalman base — not cameraPositionState.position
-    // — so that the zoom correction applied at the end doesn't feed back into the next frame.
-    //
-    // The filter follows the ANCHOR, not the live target. Re-latch the anchor only
-    // once the live target has drifted past what the two receivers' combined error
-    // can account for; inside that distance the anchor does not move, the filter
-    // has nothing to converge toward, and the map is genuinely still.
-    //
-    // Deadbanding the anchor rather than the filter output is what makes it settle.
-    // The obvious alternative — skip the filter step whenever the live target is
-    // within the deadband of the CAMERA — never converges: the camera creeps
-    // toward the target, re-enters the deadband a full deadband short of it, and
-    // stops there, so it permanently trails the rocket by up to that distance and
-    // stutters along the boundary as noise pushes it in and out. Against a latched
-    // anchor the filter always has a fixed point to reach, reaches it, and stops.
-    //
-    // Only the framing that the phone contributes to counts as a midpoint; with no
-    // tracker fix the target is the rocket alone and carries its full error.
-    if (autoTargetMode && autoTarget != null) {
-        val deadbandM = viewportLimitedDeadbandM(
-            recenterDeadbandM(
+        // The closest-zoom limit lives HERE, on the filter, and nowhere else. The map
+        // sets no max-zoom preference, so a pinch can always go closer than this —
+        // only auto-zoom is bound by it, which is the point of the setting.
+        //
+        // Inside the autoZoomMode branch deliberately. Applied unconditionally it
+        // would also claw back a manual zoom while auto-zoom is switched OFF: the
+        // gesture branch above seeds the filter from the native camera, so a pinch
+        // past the limit would be undone the moment the gesture window expired, with
+        // nothing on screen to explain it.
+        //
+        // getCameraForLatLngBounds is free to ask for a zoom well past the limit, and
+        // does exactly that when the two fixes are nearly coincident — walking up to a
+        // landed rocket. That separation is mostly GPS error, so the request swings
+        // hard from fix to fix. Clamping as it is filtered keeps those swings out of
+        // the stored state: unclamped, the filter tracks them above the limit and
+        // looks calm only until a swing drops back below it and the map lurches. It
+        // also avoids the unwind lag, where a filter wound up to an unreachable value
+        // must come back down at 5 % per frame before the map visibly starts zooming
+        // out as you walk away.
+        //
+        // The ceiling carries + zoomCorrection because the correction is subtracted on
+        // the way to the camera: this bounds the zoom actually applied at maxZoom
+        // rather than the pre-correction state, which under tilt would lose up to a
+        // whole level of legitimate range. It matches the formula the gesture branch
+        // uses to read state back from the native camera.
+        //
+        // The zoom follows an ANCHOR for the same reason the target does, and the
+        // limit above is not a substitute for it: the limit binds how far IN the fit
+        // may go, while these swings happen at and below it, where there is nothing
+        // to clamp. Measured on a stationary locator, the fit moved 0.6 levels while
+        // Dist read 6, 7 and 11 m — all of it the two receivers disagreeing.
+        //
+        // Compared in ZOOM space rather than meters of separation. The two are not
+        // interchangeable: zoom is logarithmic in separation, so the same few meters
+        // of error is most of a zoom level when the fixes are close together and
+        // nothing at all when they are far apart. Deadbanding the separation directly
+        // would need a band wider than the separation itself at recovery range, which
+        // is the regime this exists for.
+        //
+        // The anchor is the UNCLAMPED fit, while the filter output is clamped to the
+        // limit. Comparing like with like is the point: clamping the anchor too would
+        // make every fit past the limit compare equal, so a genuine move further in
+        // could never re-latch once one had.
+        if (autoZoomMode && autoZoom != null) {
+            val separationM =
+                if (rocketHasGps && trackerHasGps) metersBetween(
+                    rocketState.latitude, rocketState.longitude,
+                    trackerLocation.latitude, trackerLocation.longitude,
+                ) else 0.0
+            val bandLevels = autoZoomDeadbandLevels(
                 rocketState.hacc,
                 if (trackerHasGps) trackerLocation.accuracy else null,
-            ),
-            mapViewSize.width,
-            // The zoom actually applied to the camera, which is the post-correction
-            // one — that is what determines how much ground is on screen.
-            metersPerDevicePx(
-                smoothedZoom - zoomCorrection,
-                smoothedTarget.latitude,
-                displayDensity,
-            ),
-        )
-        val anchor = anchorTarget
-        if (anchor == null ||
-            metersBetween(
-                anchor.latitude, anchor.longitude,
-                autoTarget.latitude, autoTarget.longitude,
-            ) > deadbandM
-        ) {
-            anchorTarget = autoTarget
+                separationM,
+            )
+            val anchor = anchorZoom
+            if (anchor == null || abs(autoZoom - anchor) > bandLevels) {
+                anchorZoom = autoZoom
+            }
+        }
+        val followZoom = anchorZoom
+        smoothedZoom = if (autoZoomMode && followZoom != null)
+            (smoothedZoom + (followZoom - smoothedZoom) * kalmanGainZoom)
+                .coerceAtMost(maxZoom + zoomCorrection)
+        else smoothedZoom
+
+        val effectiveCompass = hasCompass && compassEnabled
+        if (effectiveCompass) {
+            val delta = ((azimuth - lastAzimuth + 540f) % 360f) - 180f
+            onBearingUpdate((lastAzimuth + delta * kalmanGainBearing + 360f) % 360f)
+        }
+        val bearing = if (effectiveCompass) lastAzimuth else cameraState.position.bearing
+
+        cameraState.position = CamPos(smoothedTarget, smoothedZoom - zoomCorrection, smoothedTilt, bearing)
+    })
+
+    // The frame loop. withFrameNanos suspends until the next display frame, so the
+    // filter ticks at exactly the rate the screen refreshes — which is what it was
+    // getting from recomposition before, minus the recomposition.
+    //
+    // Keyed on Unit: the loop must outlive every input change. Keying it on
+    // anything else would cancel and restart the filter mid-motion.
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { }
+            filter.tick()
         }
     }
-    val followTarget = anchorTarget
-    smoothedTarget = if (autoTargetMode && followTarget != null)
-        LatLng(
-            smoothedTarget.latitude  + (followTarget.latitude  - smoothedTarget.latitude)  * kalmanGainTarget,
-            smoothedTarget.longitude + (followTarget.longitude - smoothedTarget.longitude) * kalmanGainTarget,
-        )
-    else smoothedTarget
-
-    // The closest-zoom limit lives HERE, on the filter, and nowhere else. The map
-    // sets no max-zoom preference, so a pinch can always go closer than this —
-    // only auto-zoom is bound by it, which is the point of the setting.
-    //
-    // Inside the autoZoomMode branch deliberately. Applied unconditionally it
-    // would also claw back a manual zoom while auto-zoom is switched OFF: the
-    // gesture branch above seeds the filter from the native camera, so a pinch
-    // past the limit would be undone the moment the gesture window expired, with
-    // nothing on screen to explain it.
-    //
-    // getCameraForLatLngBounds is free to ask for a zoom well past the limit, and
-    // does exactly that when the two fixes are nearly coincident — walking up to a
-    // landed rocket. That separation is mostly GPS error, so the request swings
-    // hard from fix to fix. Clamping as it is filtered keeps those swings out of
-    // the stored state: unclamped, the filter tracks them above the limit and
-    // looks calm only until a swing drops back below it and the map lurches. It
-    // also avoids the unwind lag, where a filter wound up to an unreachable value
-    // must come back down at 5 % per frame before the map visibly starts zooming
-    // out as you walk away.
-    //
-    // The ceiling carries + zoomCorrection because the correction is subtracted on
-    // the way to the camera: this bounds the zoom actually applied at maxZoom
-    // rather than the pre-correction state, which under tilt would lose up to a
-    // whole level of legitimate range. It matches the formula the gesture branch
-    // uses to read state back from the native camera.
-    //
-    // The zoom follows an ANCHOR for the same reason the target does, and the
-    // limit above is not a substitute for it: the limit binds how far IN the fit
-    // may go, while these swings happen at and below it, where there is nothing
-    // to clamp. Measured on a stationary locator, the fit moved 0.6 levels while
-    // Dist read 6, 7 and 11 m — all of it the two receivers disagreeing.
-    //
-    // Compared in ZOOM space rather than meters of separation. The two are not
-    // interchangeable: zoom is logarithmic in separation, so the same few meters
-    // of error is most of a zoom level when the fixes are close together and
-    // nothing at all when they are far apart. Deadbanding the separation directly
-    // would need a band wider than the separation itself at recovery range, which
-    // is the regime this exists for.
-    //
-    // The anchor is the UNCLAMPED fit, while the filter output is clamped to the
-    // limit. Comparing like with like is the point: clamping the anchor too would
-    // make every fit past the limit compare equal, so a genuine move further in
-    // could never re-latch once one had.
-    if (autoZoomMode && autoZoom != null) {
-        val separationM =
-            if (rocketHasGps && trackerHasGps) metersBetween(
-                rocketState.latitude, rocketState.longitude,
-                trackerLocation.latitude, trackerLocation.longitude,
-            ) else 0.0
-        val bandLevels = autoZoomDeadbandLevels(
-            rocketState.hacc,
-            if (trackerHasGps) trackerLocation.accuracy else null,
-            separationM,
-        )
-        val anchor = anchorZoom
-        if (anchor == null || abs(autoZoom - anchor) > bandLevels) {
-            anchorZoom = autoZoom
-        }
-    }
-    val followZoom = anchorZoom
-    smoothedZoom = if (autoZoomMode && followZoom != null)
-        (smoothedZoom + (followZoom - smoothedZoom) * kalmanGainZoom)
-            .coerceAtMost(maxZoom + zoomCorrection)
-    else smoothedZoom
-
-    val effectiveCompass = hasCompass && compassEnabled
-    if (effectiveCompass) {
-        val delta = ((azimuth - lastAzimuth + 540f) % 360f) - 180f
-        onBearingUpdate((lastAzimuth + delta * kalmanGainBearing + 360f) % 360f)
-    }
-    val bearing = if (effectiveCompass) lastAzimuth else cameraState.position.bearing
-
-    cameraState.position = CamPos(smoothedTarget, smoothedZoom - zoomCorrection, smoothedTilt, bearing)
 }
 
 // ── Generic scale bar ─────────────────────────────────────────────────────────

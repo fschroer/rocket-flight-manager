@@ -160,16 +160,24 @@ fun AppSettingsScreen(
                 modifier = Modifier.padding(end = 40.dp),
             )
             Text(
+                // Deliberately no longer promises anything about steadiness. This
+                // used to say that a lower setting held a steadier frame and that
+                // the closest setting meant jumping zoom levels near the rocket —
+                // which described the limit as the cure for GPS-error pumping. It
+                // never was: the swings happen at and below the limit, where a
+                // limit has nothing to bind. The map now ignores framing changes
+                // small enough to be the two receivers disagreeing, at every
+                // setting, so this control is only about detail versus context.
                 text = "How far in the map follows the rocket on its own. You can always pinch closer. " +
                     when {
                         maxZoom >= MAP_ZOOM_LIMIT_MAX ->
-                            "Closest available. Expect the map to jump zoom levels within a few meters of " +
-                                "the rocket — that is GPS error on both ends, not the rocket moving."
+                            "Closest available — most detail, least ground around the rocket."
                         maxZoom <= MAP_ZOOM_LIMIT_MIN ->
-                            "Steadiest. The map stops well back, so the last stretch is done by eye."
+                            "The map stops well back, keeping more ground in view; the last stretch is " +
+                                "done by eye."
                         else ->
-                            "Lower settings hold a steadier frame as you walk up to the rocket, at the " +
-                                "cost of the closest levels of detail."
+                            "Lower settings keep more ground around the rocket, at the cost of the " +
+                                "closest levels of detail."
                     },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
