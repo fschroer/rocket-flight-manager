@@ -1364,6 +1364,15 @@ private fun MapWithOverlays(
             PulsingText(
                 modifier = modifier
                     .align(Alignment.Center),
+                // Pulse ONLY once the pad alert has escalated this banner. A
+                // disarmed rocket and a missing GPS lock are ordinary pre-flight
+                // states — true, worth showing, and not worth an animation. They
+                // are also the states the app sits in for most of its working
+                // life, and pulsing through all of it both spent the battery and
+                // trained the eye to ignore the very thing the escalation needs it
+                // to notice. The color already carries the distinction; the motion
+                // now agrees with it.
+                pulse = padAlert != PadAlertState.Quiet,
                 text = (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
                         else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed, padAlertSnoozeMinutes)
                         else if (!armedState) "Disarmed" else "") +
@@ -1381,6 +1390,11 @@ private fun MapWithOverlays(
             PulsingText(
                 modifier = modifier
                     .align(Alignment.Center),
+                // Static, by the same rule: pulsing means the pad alert escalated,
+                // and nothing else. A lost link is already unmissable — the whole
+                // stats panel goes with it — so the motion would be competing with
+                // the escalation it is reserved for.
+                pulse = false,
                 text = "No Locator",
                 color = Color.White,
                 textAlign = TextAlign.Center,
@@ -3171,10 +3185,26 @@ fun CameraPreviewScreen(
 
 // ── Text animation composables ────────────────────────────────────────────────
 
+/**
+ * Center-screen banner that pulses only when [pulse] is set.
+ *
+ * [pulse] has NO DEFAULT on purpose. A pulse is a claim on the user's attention
+ * and it is expensive to make: an infinite alpha transition redraws the screen on
+ * every display frame for as long as it is visible, which on this app's main
+ * screen means holding the panel at its maximum refresh rate for the whole
+ * pre-flight wait — measured as 1220 rendered frames per 10 s on the map against
+ * 0 on a screen with no such animation. A default of `true` would let the next
+ * call site buy that silently. Every caller states its intent.
+ *
+ * The transition is not merely left unread when [pulse] is false — it is not
+ * created at all. An animation nobody reads still keeps the frame clock
+ * subscribed, so skipping the read would have saved nothing.
+ */
 @Composable
 fun PulsingText(
     modifier: Modifier = Modifier,
     text: String,
+    pulse: Boolean,
     color: Color = MaterialTheme.colorScheme.primary,
     textAlign: TextAlign = TextAlign.Unspecified,
     style: TextStyle = LocalTextStyle.current,
@@ -3182,18 +3212,21 @@ fun PulsingText(
     maxAlpha: Float = 1f,
     durationMillis: Int = 500,
 ) {
-    val transition = rememberInfiniteTransition(label = "PulseTransition")
-    val alpha by transition.animateFloat(
-        initialValue = minAlpha,
-        targetValue = maxAlpha,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = durationMillis, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "AlphaPulse"
-    )
+    val textModifier = if (pulse) {
+        val transition = rememberInfiniteTransition(label = "PulseTransition")
+        val alpha = transition.animateFloat(
+            initialValue = minAlpha,
+            targetValue = maxAlpha,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = durationMillis, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "AlphaPulse"
+        ).value
+        modifier.alpha(alpha)
+    } else modifier   // no alpha layer either — a constant 1f still costs one
     Text(text = text, color = color, textAlign = textAlign, style = style,
-        modifier = modifier.alpha(alpha))
+        modifier = textModifier)
 }
 
 @Composable
