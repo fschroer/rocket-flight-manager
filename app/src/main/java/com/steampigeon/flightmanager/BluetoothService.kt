@@ -169,7 +169,7 @@ class BluetoothService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy")
+        SpLog.d(TAG, "onDestroy")
         unregisterReceiver()
         btManager.cleanup()
         serviceScope.cancel()

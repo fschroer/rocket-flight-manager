@@ -1,6 +1,7 @@
 package com.steampigeon.flightmanager.data
 
 import android.util.Log
+import com.steampigeon.flightmanager.SpLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -211,7 +212,7 @@ object FlightDataRepository {
         missingLogged.fill(false)
         _samples.value = emptyList()
         _progress.value = FlightTransferProgress()
-        Log.d(TAG, "Transfer reset")
+        SpLog.d(TAG, "Transfer reset")
     }
 
     /**
@@ -224,7 +225,7 @@ object FlightDataRepository {
     fun cancelTransfer() {
         beginTransfer()
         draining = true
-        Log.d(TAG, "Transfer canceled — draining stale packets")
+        SpLog.d(TAG, "Transfer canceled — draining stale packets")
     }
 
     /** Clear metadata (call before requesting new metadata). */
@@ -263,7 +264,7 @@ object FlightDataRepository {
         }
 
         _metadata.value = records
-        Log.d(TAG, "FlightMetadata parsed: ${records.size} records")
+        SpLog.d(TAG, "FlightMetadata parsed: ${records.size} records")
         return true
     }
 
@@ -296,7 +297,7 @@ object FlightDataRepository {
                 transferId = transferId, packetCount = 0, totalSamples = 0L,
                 receivedCount = 0, complete = true, noData = true,
             )
-            Log.d(TAG, "FlightData: empty-record marker for transfer $transferId")
+            SpLog.d(TAG, "FlightData: empty-record marker for transfer $transferId")
             return null
         }
 
@@ -310,7 +311,7 @@ object FlightDataRepository {
 
         if (received[packetIndex]) {
             duplicateCount++
-            Log.d(TAG, "FlightData: duplicate packet $packetIndex — re-ACKing (duplicates=$duplicateCount)")
+            SpLog.d(TAG, "FlightData: duplicate packet $packetIndex — re-ACKing (duplicates=$duplicateCount)")
             return buildAck()
         }
 
@@ -332,7 +333,7 @@ object FlightDataRepository {
 
         samplesByPacket[packetIndex] = decoded
         received[packetIndex] = true
-        Log.d(TAG, "FlightData: received packet $packetIndex / ${packetCount - 1}")
+        SpLog.d(TAG, "FlightData: received packet $packetIndex / ${packetCount - 1}")
 
         tryRecoverMissingPackets()
         logNewGaps()
@@ -365,7 +366,7 @@ object FlightDataRepository {
         }
 
         if (parityReceived[groupIndex]) {
-            Log.d(TAG, "FlightDataParity: duplicate parity for group $groupIndex")
+            SpLog.d(TAG, "FlightDataParity: duplicate parity for group $groupIndex")
             return buildAck()
         }
 
@@ -376,7 +377,7 @@ object FlightDataRepository {
         val parityPayload = frame.copyOfRange(o, frame.size)
         parityPayloads[groupIndex] = parityPayload.copyOf(FLIGHT_DATA_MAX_SIZE)
         parityReceived[groupIndex] = true
-        Log.d(TAG, "FlightDataParity: received parity for group $groupIndex")
+        SpLog.d(TAG, "FlightDataParity: received parity for group $groupIndex")
 
         tryRecoverMissingPackets()
         logNewGaps()
@@ -471,7 +472,7 @@ object FlightDataRepository {
             if (missing.size != 1) continue  // 0 = nothing to do; 2+ = can't recover
 
             val missingIndex = missing[0]
-            Log.d(TAG, "Recovering missing packet $missingIndex via parity for group $g")
+            SpLog.d(TAG, "Recovering missing packet $missingIndex via parity for group $g")
 
             // XOR all received member payloads against the stored parity payload
             // to reconstruct the missing payload.
@@ -493,7 +494,7 @@ object FlightDataRepository {
                 samplesByPacket[missingIndex] = decoded
                 received[missingIndex]      = true
                 parityRecoveredCount++
-                Log.d(TAG, "Recovered packet $missingIndex via parity " +
+                SpLog.d(TAG, "Recovered packet $missingIndex via parity " +
                         "(${decoded.size} samples, parity-recovered=$parityRecoveredCount)")
             } else {
                 Log.w(TAG, "Parity recovery of packet $missingIndex produced undecodable payload")
@@ -541,7 +542,7 @@ object FlightDataRepository {
             receivedCount = receivedCount,
             complete      = complete,
         )
-        if (complete) Log.d(TAG, "Transfer complete: ${allSamples.size} samples, " +
+        if (complete) SpLog.d(TAG, "Transfer complete: ${allSamples.size} samples, " +
                 "$packetCount packets (parity-recovered=$parityRecoveredCount, " +
                 "duplicate/retransmit=$duplicateCount)")
     }

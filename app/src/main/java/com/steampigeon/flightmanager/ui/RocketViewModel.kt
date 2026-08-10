@@ -6,6 +6,7 @@ import android.content.Intent
 import android.hardware.SensorManager
 import android.location.Location
 import android.util.Log
+import com.steampigeon.flightmanager.SpLog
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
@@ -1935,11 +1936,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 flightProfileMetadataMessageState.first { it == LocatorMessageState.AckUpdated }
             } != null
             if (answered) {
-                Log.d(TAG, "Flight metadata received on attempt $attempt")
+                SpLog.d(TAG, "Flight metadata received on attempt $attempt")
                 return
             }
 
-            Log.d(TAG, "Flight metadata attempt $attempt unanswered after ${backoffMs}ms — retrying")
+            SpLog.d(TAG, "Flight metadata attempt $attempt unanswered after ${backoffMs}ms — retrying")
             _flightProfileMetadataMessageState.update { current ->
                 if (current == LocatorMessageState.Sent) LocatorMessageState.NotAcknowledged
                 else current
@@ -1953,7 +1954,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun getFlightProfileData(service: BluetoothService) {
         _flightProfileDataDisplayState.value = true
         _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
-        Log.d(TAG, "Requesting flight data for archive position ${_flightProfileArchivePosition.value}")
+        SpLog.d(TAG, "Requesting flight data for archive position ${_flightProfileArchivePosition.value}")
         if (service.requestFlightProfileData(_flightProfileArchivePosition.value)) {
             updateFlightProfileDataMessageState(LocatorMessageState.Sent)
         } else {

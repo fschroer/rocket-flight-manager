@@ -311,7 +311,7 @@ fun RocketApp(
     // -----------------------------------------------------------------------
 
     LaunchedEffect(bluetoothConnectionState) {
-        Log.d("RocketApp", "BT state → $bluetoothConnectionState")
+        SpLog.d("RocketApp", "BT state → $bluetoothConnectionState")
         if (bluetoothConnectionState == BluetoothConnectionState.Enabling) {
             enableBluetoothLauncher.launch(
                 btManager?.buildEnableBluetoothIntent()

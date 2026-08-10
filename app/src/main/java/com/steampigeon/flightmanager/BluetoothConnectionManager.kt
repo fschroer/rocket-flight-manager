@@ -150,7 +150,7 @@ class BluetoothManager(private val appContext: Context) {
             true  -> { emit(BluetoothConnectionState.Enabled);      true  }
             false -> { emit(BluetoothConnectionState.Enabling);     false }
             null  -> { emit(BluetoothConnectionState.NotSupported); null  }
-        }.also { Log.d(tag, "enableBluetooth → $it") }
+        }.also { SpLog.d(tag, "enableBluetooth → $it") }
     }
 
     fun buildEnableBluetoothIntent(): Intent =
@@ -176,7 +176,7 @@ class BluetoothManager(private val appContext: Context) {
     fun forceReconnect() {
         cancelReconnect()
         val knownDevice = BluetoothManagerRepository.receiverDevice.value
-        Log.d(tag, "forceReconnect() — device: ${knownDevice?.address}")
+        SpLog.d(tag, "forceReconnect() — device: ${knownDevice?.address}")
         if (knownDevice != null) {
             disconnectGatt()
             connectGatt(knownDevice)
@@ -194,7 +194,7 @@ class BluetoothManager(private val appContext: Context) {
         // is already running.  Letting a second bleScanner.startScan() through would
         // cause SCAN_FAILED_ALREADY_STARTED → onScanFailed → spurious PairingFailed.
         if (scanTimeoutJob?.isActive == true) {
-            Log.d(tag, "startScan: scan already in progress — ignoring duplicate call")
+            SpLog.d(tag, "startScan: scan already in progress — ignoring duplicate call")
             return
         }
         if (!preflightScanChecks()) return
@@ -205,7 +205,7 @@ class BluetoothManager(private val appContext: Context) {
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
 
-        Log.d(tag, "Starting unfiltered scan — MAC prefix \"$macPrefix\" for ${SCAN_DURATION_MS}ms")
+        SpLog.d(tag, "Starting unfiltered scan — MAC prefix \"$macPrefix\" for ${SCAN_DURATION_MS}ms")
         bleScanner!!.startScan(emptyList(), settings, scanCallback)
         emit(BluetoothConnectionState.AssociateStart)
 
@@ -214,7 +214,7 @@ class BluetoothManager(private val appContext: Context) {
             delay(SCAN_DURATION_MS)
             stopScan()
             val found = discoveredDevices.values.toList()
-            Log.d(tag, "Scan window closed — ${found.size} device(s) found")
+            SpLog.d(tag, "Scan window closed — ${found.size} device(s) found")
             if (found.isEmpty()) emit(BluetoothConnectionState.NoDevicesAvailable)
             else {
                 BluetoothManagerRepository.updateScannedDevices(found)
@@ -234,7 +234,7 @@ class BluetoothManager(private val appContext: Context) {
             val address = device.address ?: return
             if (!address.startsWith(macPrefix, ignoreCase = true)) return
             if (discoveredDevices.containsKey(address)) return
-            Log.d(tag, "MAC prefix match: $address  name: ${device.name}  RSSI: ${result.rssi}")
+            SpLog.d(tag, "MAC prefix match: $address  name: ${device.name}  RSSI: ${result.rssi}")
             discoveredDevices[address] = device
         }
         override fun onScanFailed(errorCode: Int) {
@@ -253,7 +253,7 @@ class BluetoothManager(private val appContext: Context) {
     // -------------------------------------------------------------------------
 
     fun selectDevice(device: BluetoothDevice) {
-        Log.d(tag, "User selected: ${device.address}  name: ${device.name}")
+        SpLog.d(tag, "User selected: ${device.address}  name: ${device.name}")
         BluetoothManagerRepository.updateReceiverDevice(device)
         connectGatt(device)
     }
@@ -274,7 +274,7 @@ class BluetoothManager(private val appContext: Context) {
     // -------------------------------------------------------------------------
 
     fun connectGatt(device: BluetoothDevice) {
-        Log.d(tag, "connectGatt → ${device.address}  (active handles: ${activeGattHandles.keys})")
+        SpLog.d(tag, "connectGatt → ${device.address}  (active handles: ${activeGattHandles.keys})")
         closeAllExceptTarget(device.address)
         bluetoothGatt = device.connectGatt(appContext, false, gattCallback)
         activeGattHandles[device.address] = bluetoothGatt!!
@@ -289,7 +289,7 @@ class BluetoothManager(private val appContext: Context) {
     private fun closeAllExceptTarget(targetAddress: String) {
         val toClose = activeGattHandles.filter { it.key != targetAddress }
         for ((address, gatt) in toClose) {
-            Log.d(tag, "Closing stale handle for $address")
+            SpLog.d(tag, "Closing stale handle for $address")
             gatt.disconnect()
             gatt.close()
             activeGattHandles.remove(address)
@@ -297,7 +297,7 @@ class BluetoothManager(private val appContext: Context) {
         // Also close the tracked primary handle if it points to a different device.
         bluetoothGatt?.let { current ->
             if (current.device.address != targetAddress) {
-                Log.d(tag, "Closing primary handle for ${current.device.address}")
+                SpLog.d(tag, "Closing primary handle for ${current.device.address}")
                 current.disconnect()
                 current.close()
                 bluetoothGatt = null
@@ -321,7 +321,7 @@ class BluetoothManager(private val appContext: Context) {
                 newState == BluetoothProfile.STATE_CONNECTED
                         && status == BluetoothGatt.GATT_SUCCESS -> {
                     reconnectAttempts = 0
-                    Log.d(tag, "GATT connected to ${gatt.device.address} — requesting MTU $REQUESTED_MTU")
+                    SpLog.d(tag, "GATT connected to ${gatt.device.address} — requesting MTU $REQUESTED_MTU")
                     emit(BluetoothConnectionState.Connected)
                     gatt.requestMtu(REQUESTED_MTU)
                 }
@@ -339,7 +339,7 @@ class BluetoothManager(private val appContext: Context) {
         // Step 2: MTU negotiated — discover services.
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             negotiatedMtu = mtu
-            Log.d(tag, "MTU negotiated: $mtu (payload: ${mtu - 3} bytes)")
+            SpLog.d(tag, "MTU negotiated: $mtu (payload: ${mtu - 3} bytes)")
             if (mtu - 3 < REQUESTED_MTU - 3)
                 Log.w(tag, "MTU below requested — peripheral may not support $REQUESTED_MTU")
             gatt.discoverServices()
@@ -350,22 +350,29 @@ class BluetoothManager(private val appContext: Context) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e(tag, "Service discovery failed: $status"); return
             }
-            Log.d(tag, "=== GATT table for ${gatt.device.address} ===")
-            for (svc in gatt.services) {
-                Log.d(tag, "  SERVICE ${svc.uuid}")
-                for (char in svc.characteristics) {
-                    val props = buildString {
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)       append("NOTIFY ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)     append("INDICATE ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)        append("WRITE ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) append("WRITE_NO_RESP ")
-                        if (char.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)         append("READ ")
-                    }.trim()
-                    Log.d(tag, "    CHAR ${char.uuid}  [$props]")
-                    for (desc in char.descriptors) Log.d(tag, "      DESC ${desc.uuid}")
+            // Gated as a BLOCK, not per-line: this walks every service,
+            // characteristic and descriptor on the peripheral and builds a string
+            // for each one. Left ungated, a release build did all of that work —
+            // and published the peripheral's entire GATT layout to logcat — on
+            // every single connect, including every automatic reconnect.
+            if (SpLog.enabled) {
+                SpLog.d(tag, "=== GATT table for ${gatt.device.address} ===")
+                for (svc in gatt.services) {
+                    SpLog.d(tag, "  SERVICE ${svc.uuid}")
+                    for (char in svc.characteristics) {
+                        val props = buildString {
+                            if (char.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0)       append("NOTIFY ")
+                            if (char.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)     append("INDICATE ")
+                            if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)        append("WRITE ")
+                            if (char.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) append("WRITE_NO_RESP ")
+                            if (char.properties and BluetoothGattCharacteristic.PROPERTY_READ != 0)         append("READ ")
+                        }.trim()
+                        SpLog.d(tag, "    CHAR ${char.uuid}  [$props]")
+                        for (desc in char.descriptors) SpLog.d(tag, "      DESC ${desc.uuid}")
+                    }
                 }
+                SpLog.d(tag, "=== end GATT table ===")
             }
-            Log.d(tag, "=== end GATT table ===")
 
             val service = gatt.getService(serviceUuid) ?: run {
                 Log.e(tag, "Service $serviceUuid not found — see GATT table above"); return
@@ -385,7 +392,7 @@ class BluetoothManager(private val appContext: Context) {
         ) {
             if (descriptor.uuid == cccdUuid) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.d(tag, "TX notifications enabled — GATT ready")
+                    SpLog.d(tag, "TX notifications enabled — GATT ready")
                     emit(BluetoothConnectionState.Ready)
                     startHealthWatchdog()
                 } else {
@@ -454,7 +461,7 @@ class BluetoothManager(private val appContext: Context) {
             @Suppress("DEPRECATION")
             gatt.writeDescriptor(cccd)
         }
-        Log.d(tag, "Writing CCCD ${cccd.uuid} on TX char")
+        SpLog.d(tag, "Writing CCCD ${cccd.uuid} on TX char")
     }
 
     // -------------------------------------------------------------------------
@@ -534,7 +541,7 @@ class BluetoothManager(private val appContext: Context) {
         val selectedDevice = BluetoothManagerRepository.receiverDevice.value
         if (device != null && selectedDevice != null &&
             device.address != selectedDevice.address) {
-            Log.d(tag, "Disconnect of superseded device ${device.address} — suppressing state change")
+            SpLog.d(tag, "Disconnect of superseded device ${device.address} — suppressing state change")
             return
         }
 
@@ -547,7 +554,7 @@ class BluetoothManager(private val appContext: Context) {
         }
         // If receiverDevice was explicitly cleared, a fresh scan is already in progress.
         if (selectedDevice == null) {
-            Log.d(tag, "receiverDevice is null — skipping reconnect, scan in progress")
+            SpLog.d(tag, "receiverDevice is null — skipping reconnect, scan in progress")
             return
         }
         scheduleReconnect(target)
@@ -562,7 +569,7 @@ class BluetoothManager(private val appContext: Context) {
         }
         val delayMs = BASE_RECONNECT_DELAY_MS * (1L shl reconnectAttempts)
         reconnectAttempts++
-        Log.d(tag, "Reconnect attempt $reconnectAttempts in ${delayMs}ms → ${device.address}")
+        SpLog.d(tag, "Reconnect attempt $reconnectAttempts in ${delayMs}ms → ${device.address}")
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(delayMs)
@@ -600,8 +607,13 @@ class BluetoothManager(private val appContext: Context) {
                 delay(DATA_TIMEOUT_MS)
                 if (lastDataTime >= lastCheck) {
                     // Locator relay data or a probe response arrived — link is live.
+                    //
+                    // Deliberately silent. This used to log every tick, which is
+                    // one line every DATA_TIMEOUT_MS forever while connected,
+                    // carrying no information beyond "nothing is wrong" — enough
+                    // to bury the lines that do mean something. The watchdog
+                    // speaks only when it misses.
                     missedProbes = 0
-                    Log.d(tag, "Health watchdog: data received — connection is live")
                 } else {
                     missedProbes++
                     if (missedProbes >= MAX_MISSED_HEALTH_PROBES) {
@@ -610,7 +622,7 @@ class BluetoothManager(private val appContext: Context) {
                         onAclDisconnected(bluetoothGatt?.device, source = "health watchdog")
                         return@launch
                     }
-                    Log.d(tag, "Health watchdog: silent for ${DATA_TIMEOUT_MS}ms — " +
+                    SpLog.d(tag, "Health watchdog: silent for ${DATA_TIMEOUT_MS}ms — " +
                             "probing receiver (miss $missedProbes/$MAX_MISSED_HEALTH_PROBES)")
                     onHealthProbe?.invoke()
                 }
@@ -647,7 +659,7 @@ class BluetoothManager(private val appContext: Context) {
         BluetoothManagerRepository.receiverDevice.value?.let { device ->
             try {
                 device.javaClass.getMethod("removeBond").invoke(device)
-                Log.d(tag, "Bond removed for ${device.address}")
+                SpLog.d(tag, "Bond removed for ${device.address}")
             } catch (e: Exception) {
                 Log.e(tag, "removeBond failed", e)
             }
