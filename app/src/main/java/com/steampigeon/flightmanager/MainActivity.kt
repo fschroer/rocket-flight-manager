@@ -90,13 +90,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+        when (event.sensor.type) {
             // Forward fused orientation data to ViewModel
-            viewModel.updateOrientation(event.values)
+            Sensor.TYPE_ROTATION_VECTOR -> viewModel.updateOrientation(event.values)
+            // Not the heading — that comes from the fused sensor above. These
+            // readings are here for their magnitude alone, which is the only
+            // interference test that survives a device pinning its accuracy flags
+            // (the Moto G 5S pins both). Arriving at the 1 s registration rate.
+            Sensor.TYPE_MAGNETIC_FIELD  -> viewModel.updateFieldMagnitude(event.values)
         }
-        // TYPE_MAGNETIC_FIELD deliberately falls through: it is registered for its
-        // accuracy callback and its readings are of no use here — the heading comes
-        // from the fused rotation vector.
     }
 
     // The only signal Android gives that the compass is lying. Hard and soft iron

@@ -99,6 +99,7 @@ private const val declinationRefreshM = 10_000f
  */
 private const val compassAccuracyHoldMs = 3_000L
 
+
 sealed class ParsedMessage {
     data class Prelaunch(val msg: PrelaunchParsed)           : ParsedMessage()
     data class Telemetry(val msg: TelemetryParsed)           : ParsedMessage()
@@ -300,19 +301,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * How much to trust [handheldDeviceAzimuth], as one of the
      * `SensorManager.SENSOR_STATUS_*` constants.
      *
-     * Fed by **both** the raw magnetometer and the fused rotation vector, because
-     * which of them is alive turns out to be a property of the device and there is
-     * no way to know in advance:
+     * Fed by **three** sources, because no one of them is reliably available:
      *
-     *  - Pixel 9 Pro XL: the magnetometer reports and responds to a magnet within
-     *    milliseconds; the rotation vector never fires `onAccuracyChanged` at all.
-     *  - Moto G 5S: exactly the reverse — the rotation vector reports, and the
-     *    magnetometer never fires once.
+     *  - Pixel 9 Pro XL: the magnetometer accuracy flag reports and responds to a
+     *    magnet within milliseconds; the rotation vector never fires at all.
+     *  - Moto G 5S: the rotation vector fires once at `HIGH` and is pinned there
+     *    under a magnet held against the case; the magnetometer never fires once.
+     *    **Neither flag is usable on this device.**
      *
-     * Committing to either one alone produces a warning that is silently unreachable
-     * on half the hardware, and unreachable code that looks like a working feature is
-     * the failure this whole path already hit once. So both are consumed and the
-     * worst of whichever have actually spoken is published — see
+     * Two devices, two opposite failures, and on the second one no vendor flag works
+     * at all — a field pinned at `HIGH` being indistinguishable from a healthy
+     * compass. So the third source is [updateFieldMagnitude], which asks the physics
+     * instead of the vendor: a total field outside what the Earth can produce means
+     * interference, whatever the flags claim.
+     *
+     * The worst of whichever sources have actually spoken is published — see
      * [recomputeCompassAccuracy].
      *
      * Starts at [SensorManager.SENSOR_STATUS_ACCURACY_HIGH] rather than at
@@ -328,6 +331,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // mask a source that does.
     private var magnetometerAccuracy: Int? = null
     private var fusedAccuracy: Int? = null
+    private var fieldMagnitudeAccuracy: Int? = null
     // Worst of the reported sources, before the hold below is applied.
     private var rawCompassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
     private var compassAccuracyReleaseJob: Job? = null
@@ -346,6 +350,41 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         if (fusedAccuracy != accuracy) {
             fusedAccuracy = accuracy
             SpLog.d("Compass", "rotation-vector accuracy → ${accuracyName(accuracy)}")
+            recomputeCompassAccuracy()
+        }
+    }
+
+    /**
+     * Total field strength, classified against what the Earth can account for.
+     *
+     * The third source, and the only one that does not depend on the OEM telling
+     * the truth. Both accuracy flags can be — and on a Moto G 5S both are —
+     * permanently silent or pinned at `HIGH`, which is indistinguishable from a
+     * healthy compass and leaves the warning unreachable. The field magnitude is
+     * arithmetic on readings the app already receives and was previously throwing
+     * away, and a magnet cannot hide from it.
+     *
+     * **What this does and does not detect.** It detects *interference* — a magnet,
+     * a truck bed, a laptop — by the field being too strong or too weak to be the
+     * Earth's. It does **not** detect *miscalibration*: a stale hard-iron offset can
+     * rotate the heading badly while the magnitude stays perfectly plausible. So it
+     * is a third opinion feeding the same worst-of verdict, never a replacement for
+     * the accuracy flags on devices where those work.
+     *
+     * Classification changes are rare by nature, so [recomputeCompassAccuracy] runs
+     * on a threshold crossing rather than on every sample — which also keeps a
+     * steady out-of-range reading from restarting the hold once a second.
+     */
+    fun updateFieldMagnitude(values: FloatArray) {
+        if (values.size < 3) return
+        val magnitudeUt = fieldMagnitudeUt(values)
+        val classified = classifyFieldMagnitude(magnitudeUt)
+        if (fieldMagnitudeAccuracy != classified) {
+            fieldMagnitudeAccuracy = classified
+            SpLog.d(
+                "Compass",
+                "field magnitude %.1f µT → %s".format(magnitudeUt, accuracyName(classified))
+            )
             recomputeCompassAccuracy()
         }
     }
@@ -377,8 +416,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // listOfNotNull, not a default: a source that has never reported contributes
         // nothing rather than contributing HIGH, which would let a silent sensor
         // outvote a live one saying UNRELIABLE.
-        val worst = listOfNotNull(magnetometerAccuracy, fusedAccuracy).minOrNull()
-            ?: SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+        val worst = listOfNotNull(magnetometerAccuracy, fusedAccuracy, fieldMagnitudeAccuracy)
+            .minOrNull() ?: SensorManager.SENSOR_STATUS_ACCURACY_HIGH
         rawCompassAccuracy = worst
 
         if (worst <= _compassAccuracy.value) {
@@ -2617,6 +2656,51 @@ private const val positionNoiseMarginM = 100
  */
 internal fun phaseTravelM(state: FlightStates, elapsedMs: Long): Double =
     maxGroundSpeedMs(state) * elapsedMs.coerceAtLeast(0) / 1000.0
+
+/**
+ * Bounds on the total magnetic field strength, in µT, that the Earth alone can
+ * account for.
+ *
+ * The geomagnetic field runs about 22 µT (the South Atlantic minimum) to 67 µT
+ * (near the poles) anywhere on the surface, so a reading outside a slightly
+ * widened envelope is not the Earth: something local is adding to it, or
+ * something is shielding it.
+ *
+ * The gross pair is where the reading stops being arguable. A fridge magnet at a
+ * few centimetres reads in the hundreds or thousands of µT, so that band is not a
+ * close call in practice.
+ */
+internal const val earthFieldMinUt = 20f
+internal const val earthFieldMaxUt = 70f
+internal const val grossFieldMinUt = 10f
+internal const val grossFieldMaxUt = 100f
+
+/** Total field strength from a `TYPE_MAGNETIC_FIELD` sample, in µT. */
+internal fun fieldMagnitudeUt(values: FloatArray): Float =
+    sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2])
+
+/**
+ * Judge a field magnitude as one of the `SensorManager.SENSOR_STATUS_*` levels.
+ *
+ * The one interference test that needs no cooperation from the OEM, which is what
+ * makes it worth having: a device can pin its accuracy flags at `HIGH` forever —
+ * a Moto G 5S pins both — but it cannot make a magnet disappear from the
+ * arithmetic. Feeds the same worst-of verdict as the two vendor flags.
+ *
+ * Detects **interference**, not **miscalibration**: a stale hard-iron offset can
+ * rotate the heading badly while the magnitude stays perfectly plausible. Do not
+ * read a `HIGH` here as "the compass is trustworthy" — only as "nothing local is
+ * obviously swamping it".
+ */
+internal fun classifyFieldMagnitude(magnitudeUt: Float): Int = when {
+    magnitudeUt in earthFieldMinUt..earthFieldMaxUt ->
+        SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    magnitudeUt < grossFieldMinUt || magnitudeUt > grossFieldMaxUt ->
+        SensorManager.SENSOR_STATUS_UNRELIABLE
+    // Outside the Earth's envelope but not by much: enough to raise the prompt,
+    // not enough to take the AR overlay away.
+    else -> SensorManager.SENSOR_STATUS_ACCURACY_LOW
+}
 
 /**
  * At least four satellites, which is what a 3D fix takes.  Fewer cannot have
