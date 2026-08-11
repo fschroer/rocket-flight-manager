@@ -62,18 +62,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         )
 
         // Registered for its accuracy callback ONLY — the values are discarded in
-        // onSensorChanged. TYPE_ROTATION_VECTOR is a fused virtual sensor and many
-        // implementations never update its accuracy field, so hanging the
-        // calibration warning off it produced a warning that no amount of magnetic
-        // interference could trigger. Calibration state belongs to the magnetometer,
-        // so that is what gets asked.
+        // onSensorChanged. Which sensor actually reports calibration state is a
+        // property of the device: the magnetometer is the live one on a Pixel 9 Pro
+        // XL and silent on a Moto G 5S, where the rotation vector reports instead.
+        // Both are consumed (see RocketViewModel.recomputeCompassAccuracy) because
+        // betting on either alone leaves the warning unreachable on the other half
+        // of the hardware.
         //
         // One second between samples, not SENSOR_DELAY_NORMAL (~200 ms): accuracy
         // callbacks are event-driven and arrive regardless of the sampling period,
         // so the value stream is pure overhead here and is set as slow as the API
         // allows to ask for.
-        sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let { magnetometer ->
+        val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        if (magnetometer != null) {
             sensorManager.registerListener(this, magnetometer, MAGNETOMETER_SAMPLE_PERIOD_US)
+        } else {
+            // Said out loud rather than swallowed by a null-safe call. "No such
+            // sensor" and "sensor present but never speaks" produce identical
+            // silence in the log, and only one of them is a bug worth chasing.
+            SpLog.d("Compass", "no TYPE_MAGNETIC_FIELD on this device — accuracy from the fused sensor only")
         }
     }
 
@@ -98,14 +105,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     // Discarding this callback (as this method used to) left the AR overlay
     // pointing confidently at open sky with no way for the app to know.
     //
-    // The magnetometer is the authority: it owns the calibration state, and the
-    // fused rotation vector's accuracy proved inert under a magnet held against the
-    // phone. The rotation-vector value is still forwarded for diagnosis, so a device
-    // where the fused sensor IS live can be told apart from one where it is not.
+    // Neither sensor is the authority, because neither is reliably alive: the
+    // magnetometer reports on a Pixel 9 Pro XL and never fires on a Moto G 5S,
+    // where the rotation vector reports instead. Both are forwarded and the
+    // ViewModel publishes the worst of whichever have spoken.
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         when (sensor?.type) {
             Sensor.TYPE_MAGNETIC_FIELD  -> viewModel.updateCompassAccuracy(accuracy)
-            Sensor.TYPE_ROTATION_VECTOR -> viewModel.logFusedAccuracy(accuracy)
+            Sensor.TYPE_ROTATION_VECTOR -> viewModel.updateFusedAccuracy(accuracy)
         }
     }
 

@@ -300,12 +300,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * How much to trust [handheldDeviceAzimuth], as one of the
      * `SensorManager.SENSOR_STATUS_*` constants.
      *
-     * Sourced from the raw magnetometer, not from the fused rotation vector that
-     * supplies the heading itself. On a Pixel 9 Pro XL the fused sensor never fires
-     * `onAccuracyChanged` at all — not on registration, and not with a magnet swept
-     * around the case, which is as uncalibrated as a magnetometer gets. A warning
-     * hung off it is unreachable code that looks like a working feature. The raw
-     * sensor on the same device reports correctly and responds within milliseconds.
+     * Fed by **both** the raw magnetometer and the fused rotation vector, because
+     * which of them is alive turns out to be a property of the device and there is
+     * no way to know in advance:
+     *
+     *  - Pixel 9 Pro XL: the magnetometer reports and responds to a magnet within
+     *    milliseconds; the rotation vector never fires `onAccuracyChanged` at all.
+     *  - Moto G 5S: exactly the reverse — the rotation vector reports, and the
+     *    magnetometer never fires once.
+     *
+     * Committing to either one alone produces a warning that is silently unreachable
+     * on half the hardware, and unreachable code that looks like a working feature is
+     * the failure this whole path already hit once. So both are consumed and the
+     * worst of whichever have actually spoken is published — see
+     * [recomputeCompassAccuracy].
      *
      * Starts at [SensorManager.SENSOR_STATUS_ACCURACY_HIGH] rather than at
      * `UNRELIABLE`: a device whose compass is fine may never deliver an accuracy
@@ -314,45 +322,72 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val _compassAccuracy = MutableStateFlow(SensorManager.SENSOR_STATUS_ACCURACY_HIGH)
     val compassAccuracy: StateFlow<Int> = _compassAccuracy.asStateFlow()
-    // Distinguishes "the sensor reports HIGH" from "the sensor has never spoken",
-    // which the flow alone cannot do because HIGH is also its opening value. Logging
-    // only on change is what made the inert fused sensor look identical to a
-    // perfectly calibrated one.
-    private var compassAccuracyEverReported = false
-    // Latest reading as delivered, before the hold below is applied.
+    // Null means "this source has never spoken", which is distinct from HIGH and
+    // cannot be represented by the reading alone. Telling those apart is the whole
+    // diagnosis: a source that never speaks must not hold the verdict at HIGH and
+    // mask a source that does.
+    private var magnetometerAccuracy: Int? = null
+    private var fusedAccuracy: Int? = null
+    // Worst of the reported sources, before the hold below is applied.
     private var rawCompassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
     private var compassAccuracyReleaseJob: Job? = null
 
-    /**
-     * Publish a magnetometer accuracy reading, worst-case over a trailing window.
-     *
-     * Under real interference this sensor does not degrade and stay degraded — it
-     * chatters. Measured on a Pixel 9 Pro XL with a magnet swept around the case:
-     * UNRELIABLE↔LOW and UNRELIABLE↔MEDIUM transitions with dwell times as short as
-     * 30 ms, sustained for seconds. Fed straight to the UI that is a warning that
-     * strobes and an AR marker that blinks — unreadable, and it under-reports the
-     * problem by spending half its time looking fine.
-     *
-     * So a degraded reading takes effect at once and is then held for
-     * [compassAccuracyHoldMs] past the last bad reading. Recovery is what waits;
-     * the warning never does. The same phone at rest produced zero transitions in
-     * 25 s, so the hold is not covering for a noisy signal in ordinary use — it
-     * only engages when something is genuinely disturbing the field.
-     */
+    /** Raw `TYPE_MAGNETIC_FIELD` accuracy. Live on the Pixel, silent on the Moto G. */
     fun updateCompassAccuracy(accuracy: Int) {
-        if (!compassAccuracyEverReported || rawCompassAccuracy != accuracy) {
-            compassAccuracyEverReported = true
+        if (magnetometerAccuracy != accuracy) {
+            magnetometerAccuracy = accuracy
             SpLog.d("Compass", "magnetometer accuracy → ${accuracyName(accuracy)}")
+            recomputeCompassAccuracy()
         }
-        rawCompassAccuracy = accuracy
+    }
 
-        if (accuracy <= _compassAccuracy.value) {
+    /** Fused `TYPE_ROTATION_VECTOR` accuracy. Live on the Moto G, silent on the Pixel. */
+    fun updateFusedAccuracy(accuracy: Int) {
+        if (fusedAccuracy != accuracy) {
+            fusedAccuracy = accuracy
+            SpLog.d("Compass", "rotation-vector accuracy → ${accuracyName(accuracy)}")
+            recomputeCompassAccuracy()
+        }
+    }
+
+    /**
+     * Publish the worst accuracy any live source reports, held over a trailing window.
+     *
+     * **Worst-of, not average or preferred.** Both fields are attempts to say the same
+     * thing, and on every device measured so far only one of them says anything at all,
+     * so in practice this reduces to "whichever works". Where both report, the
+     * pessimistic reading wins: a missed warning costs someone walking a wrong bearing
+     * through brush, a spurious one costs an unnecessary figure-eight. That trade is
+     * not symmetric. It is also the case not yet observed on real hardware — a device
+     * whose two sources disagree persistently would show the prompt for as long as the
+     * gloomier one is unhappy.
+     *
+     * **The hold.** Under real interference the signal does not degrade and stay
+     * degraded, it chatters: measured on a Pixel 9 Pro XL with a magnet swept around
+     * the case, UNRELIABLE↔LOW and UNRELIABLE↔MEDIUM transitions with dwell times as
+     * short as 30 ms, sustained for seconds. Fed straight to the UI that is a warning
+     * that strobes and an AR marker that blinks — unreadable, and it under-reports the
+     * problem by spending half its time looking fine. So a degraded reading takes
+     * effect at once and is then held for [compassAccuracyHoldMs] past the last bad
+     * reading. Recovery is what waits; the warning never does. The same phone at rest
+     * produced zero transitions in 25 s, so the hold only engages when something is
+     * genuinely disturbing the field.
+     */
+    private fun recomputeCompassAccuracy() {
+        // listOfNotNull, not a default: a source that has never reported contributes
+        // nothing rather than contributing HIGH, which would let a silent sensor
+        // outvote a live one saying UNRELIABLE.
+        val worst = listOfNotNull(magnetometerAccuracy, fusedAccuracy).minOrNull()
+            ?: SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+        rawCompassAccuracy = worst
+
+        if (worst <= _compassAccuracy.value) {
             // Worse than what is published (or equal, which re-arms the hold).
-            _compassAccuracy.value = accuracy
+            _compassAccuracy.value = worst
             compassAccuracyReleaseJob?.cancel()
             compassAccuracyReleaseJob = viewModelScope.launch {
                 delay(compassAccuracyHoldMs)
-                // Whatever the sensor settled on, not the reading that opened the
+                // Whatever the sensors settled on, not the reading that opened the
                 // window — a burst that ends better than it started recovers to
                 // where it actually ended.
                 _compassAccuracy.value = rawCompassAccuracy
@@ -360,21 +395,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         } else if (compassAccuracyReleaseJob?.isActive != true) {
             // An improvement outside any hold window applies immediately; inside
             // one it is ignored, which is what stops the chatter from surfacing.
-            _compassAccuracy.value = accuracy
-        }
-    }
-
-    private var lastFusedAccuracy: Int? = null
-
-    /**
-     * Diagnosis only — the fused rotation vector's own accuracy claim, which nothing
-     * consumes. Recorded so a device whose fused sensor really does track
-     * calibration can be told apart from one whose accuracy field never moves.
-     */
-    fun logFusedAccuracy(accuracy: Int) {
-        if (lastFusedAccuracy != accuracy) {
-            lastFusedAccuracy = accuracy
-            SpLog.d("Compass", "rotation-vector accuracy → ${accuracyName(accuracy)} (not consumed)")
+            _compassAccuracy.value = worst
         }
     }
 
