@@ -99,6 +99,11 @@ private const val declinationRefreshM = 10_000f
  */
 private const val compassAccuracyHoldMs = 3_000L
 
+/**
+ * Spacing between field-magnitude heartbeat lines — see `logRestingMagnitude`.
+ * Slow enough to sit under a logcat session for minutes without burying anything.
+ */
+private const val magnitudeLogIntervalMs = 5_000L
 
 sealed class ParsedMessage {
     data class Prelaunch(val msg: PrelaunchParsed)           : ParsedMessage()
@@ -387,6 +392,36 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             )
             recomputeCompassAccuracy()
         }
+        logRestingMagnitude(magnitudeUt)
+    }
+
+    private var lastMagnitudeLogMs = 0L
+
+    /**
+     * Debug-only heartbeat for the field magnitude, so a value that is not changing
+     * band is still observable.
+     *
+     * Logging only on a threshold crossing makes a steady reading invisible, which
+     * is exactly what is needed to judge whether the thresholds are right for a
+     * device: "inside 20-70 µT" does not say whether a phone rests at 48 or at 68,
+     * and only one of those has any margin before it starts crying wolf. The same
+     * blind spot — a signal that says nothing when nothing changes — has now hidden
+     * two separate problems in this feature.
+     *
+     * Guarded as a block, not per line: this runs on every magnetometer sample, and
+     * despite the 1 s registration those arrive every 85-100 ms, so the format call
+     * would otherwise build ~11 strings a second in release. That is the case
+     * [SpLog] calls out.
+     */
+    private fun logRestingMagnitude(magnitudeUt: Float) {
+        if (!SpLog.enabled) return
+        val now = System.currentTimeMillis()
+        if (now - lastMagnitudeLogMs < magnitudeLogIntervalMs) return
+        lastMagnitudeLogMs = now
+        // "heartbeat", not "resting": this fires on a timer regardless of what the
+        // phone is near, and labelling a reading taken next to a magnet as resting
+        // is how a baseline gets misread.
+        SpLog.d("Compass", "field magnitude %.1f µT (heartbeat)".format(magnitudeUt))
     }
 
     /**

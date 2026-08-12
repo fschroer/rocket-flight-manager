@@ -69,10 +69,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // betting on either alone leaves the warning unreachable on the other half
         // of the hardware.
         //
-        // One second between samples, not SENSOR_DELAY_NORMAL (~200 ms): accuracy
-        // callbacks are event-driven and arrive regardless of the sampling period,
-        // so the value stream is pure overhead here and is set as slow as the API
-        // allows to ask for.
+        // One second is REQUESTED, and is not what arrives. samplingPeriodUs is a
+        // hint, and the rotation vector above is registered at SENSOR_DELAY_UI —
+        // on a fused implementation that sensor is built on this one, so the
+        // magnetometer runs at the rate the fastest client needs and every client
+        // sees it. Measured on a Moto G 5S: samples 85-100 ms apart against this
+        // 1 s request. The request is kept because it costs nothing and is honored
+        // where the magnetometer is not already being driven, but nothing here may
+        // assume a 1 s cadence.
         val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
         if (magnetometer != null) {
             sensorManager.registerListener(this, magnetometer, MAGNETOMETER_SAMPLE_PERIOD_US)
@@ -96,7 +100,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             // Not the heading — that comes from the fused sensor above. These
             // readings are here for their magnitude alone, which is the only
             // interference test that survives a device pinning its accuracy flags
-            // (the Moto G 5S pins both). Arriving at the 1 s registration rate.
+            // (the Moto G 5S pins both). Arrives far faster than the 1 s requested
+            // above — measured at 85-100 ms — so treat this as a hot path.
             Sensor.TYPE_MAGNETIC_FIELD  -> viewModel.updateFieldMagnitude(event.values)
         }
     }
