@@ -116,9 +116,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -705,8 +708,10 @@ fun HomeScreen(
     // rests at MEDIUM and never reaches HIGH, so gating on HIGH would have taken
     // the overlay away permanently. See compassNeedsCalibration in MapWithOverlays
     // for the warning threshold, and ADR-0023 for both.
+    // `>` rather than `!=`: SENSOR_STATUS_NO_CONTACT sorts BELOW UNRELIABLE, so an
+    // equality test would have read the worst state the API can report as usable.
     val compassUsable = hasCompass &&
-        viewModel.compassAccuracy.collectAsState().value != SensorManager.SENSOR_STATUS_UNRELIABLE
+        viewModel.compassAccuracy.collectAsState().value > SensorManager.SENSOR_STATUS_UNRELIABLE
     val lastMessageAge = System.currentTimeMillis() - rocketState.lastMessageTime
     // Distinct from the above, which ages ANY message. Battery levels ride only on
     // the pre-launch message, so once the locator switches to telemetry they stop
@@ -1225,9 +1230,14 @@ private fun MapWithOverlays(
         // merely suspect rather than only once it has been given up on. Gated on
         // hasCompass so a device without a magnetometer, which cannot report
         // anything better, is not nagged to calibrate hardware it does not have.
+        val compassAccuracy = viewModel.compassAccuracy.collectAsState().value
         val compassNeedsCalibration = hasCompass &&
-            viewModel.compassAccuracy.collectAsState().value <=
-                SensorManager.SENSOR_STATUS_ACCURACY_LOW
+            compassAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW
+        // Red once the heading is bad enough that the AR overlay is withheld, so the
+        // color change and the marker vanishing are the same event rather than two
+        // unexplained ones. `<=` rather than `==` because NO_CONTACT sorts below
+        // UNRELIABLE and is worse, not better.
+        val compassSevere = compassAccuracy <= SensorManager.SENSOR_STATUS_UNRELIABLE
         var autoTargetMode by remember { mutableStateOf(true) }
         var autoZoomMode by remember { mutableStateOf(true) }
         var compassEnabled by remember { mutableStateOf(true) }
@@ -1359,20 +1369,36 @@ private fun MapWithOverlays(
             )
         }
         // The heading cannot be repaired from here — the fusion owns the
-        // magnetometer and there is no path into its calibration — so the prompt
-        // asks for the one thing that does fix it: the figure-eight, which feeds
-        // the estimator the varied orientations it needs to re-solve for the local
-        // hard-iron offset. Sited against the compass rose rather than centre
-        // screen because it qualifies that rose, and because the centre is
-        // reserved for the pad alert.
+        // magnetometer and there is no path into its calibration — so the indicator
+        // names the one thing that does fix it: the figure-eight, drawn as the
+        // gesture itself rather than described in words.
+        //
+        // It replaced the text "Compass off / figure-8 to fix", which read as though
+        // the compass had been SWITCHED off — a plausible misreading, and one that
+        // sends the user hunting for a setting to turn back on. The symbol cannot be
+        // misread that way because it does not assert anything; it is a picture of
+        // the motion to make. What it gives up is self-evidence, so it carries a
+        // contentDescription and §9.3 of the manual carries the meaning.
+        //
+        // Sited against the compass rose rather than centre screen because it
+        // qualifies that rose, and because the centre is reserved for the pad alert.
         if (compassNeedsCalibration) {
             Text(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .offset(x = 72.dp, y = (-108).dp),
-                text = "Compass off\nfigure-8 to fix",
-                color = Color.Yellow,
-                style = typography.labelSmall,
+                    .offset(x = 74.dp, y = (-112).dp)
+                    // The glyph alone reads as "infinity" to a screen reader, which
+                    // is not what it means here.
+                    .semantics {
+                        contentDescription = if (compassSevere)
+                            "Compass unreliable — sweep the phone in a figure-eight to recalibrate"
+                        else
+                            "Compass disturbed — sweep the phone in a figure-eight to recalibrate"
+                    },
+                text = "∞",
+                color = if (compassSevere) Color.Red else Color.Yellow,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
             )
         }
         val density = LocalDensity.current
