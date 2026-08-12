@@ -7,6 +7,9 @@
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+# Stores which device the run-configuration dropdown last pointed at, by serial.
+# Per-developer, per-machine state that changes every time a device is switched.
+/.idea/deploymentTargetSelector.xml
 .DS_Store
 /build
 /captures
