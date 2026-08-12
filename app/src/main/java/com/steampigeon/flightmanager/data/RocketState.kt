@@ -36,7 +36,12 @@ object Protocol {
     const val SURVEY_CHANNEL_COUNT = 64
     const val SURVEY_CONFIRM_COUNT = 5
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
-    const val RECEIVER_INFO_PAYLOAD_SIZE = 21 // channel (1) + name (20)
+    // channel (1) + name (20) + noise_floor (2) + bad_frames (1).  The trailing
+    // channel status is what lets the app measure the channel while the locator is
+    // silent — every other carrier of a noise floor is a locator broadcast, so
+    // without it a dropout is unmeasurable and the classifier was left
+    // extrapolating from the last sample before the locator went quiet.
+    const val RECEIVER_INFO_PAYLOAD_SIZE = 24
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
     // FlightEvents payload: record (1) + reserved (1) + present_mask (2) +
@@ -559,7 +564,11 @@ data class DeploymentTestParsed(
 
 data class ReceiverInfoParsed(
     val channel: Int,     // uint8_t
-    val deviceName: String // char[device_name_length]
+    val deviceName: String, // char[device_name_length]
+    // Channel status measured with no locator involved (ADR-0019).  Same fields and
+    // same drain-on-read meaning as the receiver-appended trailer on the broadcasts.
+    val noiseFloor: Int,  // int16_t, or LinkQuality.NOISE_FLOOR_UNKNOWN
+    val badFrames: Int,   // uint8_t
 )
 
 data class VersionInfoParsed(

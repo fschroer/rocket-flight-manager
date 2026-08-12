@@ -1462,21 +1462,12 @@ private fun MapWithOverlays(
                 textAlign = TextAlign.Center,
                 style = typography.displayLarge,
             )
-        } else if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
-            PulsingText(
-                modifier = modifier
-                    .align(Alignment.Center),
-                // Static, by the same rule: pulsing means the pad alert escalated,
-                // and nothing else. A lost link is already unmissable — the whole
-                // stats panel goes with it — so the motion would be competing with
-                // the escalation it is reserved for.
-                pulse = false,
-                text = "No Locator",
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                style = typography.displayLarge,
-            )
         }
+        // A missing locator is reported on the status panel's own locator row
+        // rather than across the middle of the map. The center banner is reserved
+        // for states of a rocket the app is actually hearing from; "No Locator" is
+        // a statement about the link, and it belongs beside the rocket icon whose
+        // name, satellite count and battery have all gone blank with it.
 
         // Top Row: menu button | status (centered) | view controls — 8 dp border everywhere
         Row(
@@ -2305,7 +2296,17 @@ private fun MapControlsColumn(
                     }
                 }
                 Text(
-                    text = if (lastMessageAge < messageTimeout) locatorConfig.deviceName else "",
+                    // Where the locator's name goes once one is heard from, and
+                    // what its absence is reported in until then (relocated here
+                    // from the center of the map). Gated on Ready so it can't
+                    // second-guess row 1: with no receiver there is nothing to
+                    // hear a locator THROUGH, and saying so twice reads as two
+                    // faults instead of one.
+                    text = when {
+                        lastMessageAge < messageTimeout -> locatorConfig.deviceName
+                        bluetoothConnectionState == BluetoothConnectionState.Ready -> "No Locator"
+                        else -> ""
+                    },
                     modifier = Modifier.width(nameWidth),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2375,18 +2376,37 @@ private fun MapControlsColumn(
             // Width is pinned to the panel's own width — the widest row above — so
             // the note can never be what decides how wide the panel is.
             val noteWidth = iconBoxWidth + nameWidth + batteryBoxWidth
-            when (rocketState.linkQuality) {
-                LinkQuality.Verdict.Interference -> LinkQualityNote(
-                    text = stringResource(R.string.link_interference),
-                    color = MaterialTheme.colorScheme.error,
-                    width = noteWidth,
-                )
-                LinkQuality.Verdict.Congested -> LinkQualityNote(
-                    text = stringResource(R.string.link_congested),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    width = noteWidth,
-                )
-                LinkQuality.Verdict.Normal -> Unit
+            // Still outside the LOCATOR freshness gate, for the reason above — but
+            // not outside the RECEIVER one. Every channel measurement the verdict
+            // rests on is made by the receiver, so with no receiver connected the
+            // app is not holding a stale reading, it is holding none at all. It
+            // used to keep showing the last verdict indefinitely after the receiver
+            // was switched off, which put an RF diagnosis on screen with no radio
+            // behind it.
+            if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
+                when (rocketState.linkQuality) {
+                    LinkQuality.Verdict.Interference -> LinkQualityNote(
+                        text = stringResource(R.string.link_interference),
+                        color = MaterialTheme.colorScheme.error,
+                        width = noteWidth,
+                    )
+                    // "your link is clean" is a claim about a link, so it is only
+                    // made while there is one. The receiver now reports the channel
+                    // during locator silence, which means this verdict can be
+                    // reached with nothing being heard at all — and telling someone
+                    // staring at "No Locator" that their link is clean is the same
+                    // species of wrong as the interference note this replaced.
+                    // Interference stays unconditional: it is the case where a busy
+                    // channel is the likely reason nothing is arriving.
+                    LinkQuality.Verdict.Congested -> if (lastMessageAge < messageTimeout) {
+                        LinkQualityNote(
+                            text = stringResource(R.string.link_congested),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            width = noteWidth,
+                        )
+                    }
+                    LinkQuality.Verdict.Normal -> Unit
+                }
             }
 
             // ── Descending action buttons ─────────────────────────────────────

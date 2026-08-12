@@ -55,6 +55,22 @@ class WireLayoutTest {
     @Test fun noiseFloorUnknownMatchesInt16Min() =
         assertEquals(Short.MIN_VALUE.toInt(), LinkQuality.NOISE_FLOOR_UNKNOWN)
 
+    // ReceiverInfo: channel 1 + name 20 + noise_floor 2 + bad_frames 1 = 24
+    // (C++ sizeof(ReceiverInfoMessage) 30, asserted in the receiver's
+    // MessageProtocol.hpp).  The trailing channel status is the only noise-floor
+    // reading that reaches the app without a locator broadcast to ride on.
+    //
+    // The app frames this message by exact length BEFORE checking its CRC, so a
+    // drift desynchronises the framer instead of failing a check: it waits for
+    // bytes that never come, the health probe goes unanswered, and the watchdog
+    // declares a phantom connection and reconnects in a loop.
+    @Test fun receiverInfoPayloadSize() = assertEquals(24, Protocol.RECEIVER_INFO_PAYLOAD_SIZE)
+    @Test fun receiverInfoPayloadIsItsParts() =
+        assertEquals(
+            Protocol.RECEIVER_INFO_PAYLOAD_SIZE,
+            1 + Protocol.DEVICE_NAME_LENGTH + 2 + 1,
+        )
+
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)
 

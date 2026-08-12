@@ -186,6 +186,33 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // it. Fast enough that the note and the red marker change together.
         const val LINK_LIVENESS_TICK_MS = 500L
 
+        // How often to ask the receiver for a channel reading, once polling starts.
+        // Comfortably inside LinkQuality.STALE_MEASUREMENT_MS so the floor it
+        // returns is still live when the next one replaces it — a poll slower than
+        // the freshness window leaves gaps the note visibly flickers through.
+        const val CHANNEL_WATCH_TICK_MS = 2_000L
+
+        // How long the locator must be unheard before polling starts at all.
+        //
+        // Deliberately LONGER than LOSSY_GAP_MS, and deliberately not the same
+        // constant.  A distant rocket routinely drops one or two 1 Hz broadcasts,
+        // which is a 2-3 s gap — long enough to count as loss and redden the
+        // marker, but not a reason to start polling, because the locator is still
+        // transmitting and every packet that survives carries the floor anyway.
+        //
+        // Polling through those routine gaps was not merely redundant, it was
+        // corrosive.  The receiver's noise floor is a PEAK-since-last-report that
+        // every reader drains, so an extra reader shortens the window each report
+        // covers, and a peak over a shorter window is never higher than one over a
+        // longer window.  Those systematically lower readings then feed
+        // updateQuietestFloor, which keeps the MINIMUM — so polling during flight
+        // would have walked the session baseline down and made the 12 dB "risen"
+        // test creep toward firing on its own.
+        //
+        // 5 s sits above normal in-flight loss and far below any real locator-off
+        // or receiver-off case, which are indefinite.
+        const val CHANNEL_WATCH_SILENCE_MS = 5_000L
+
         // FlightMetadataRequest retry backoff.  The first wait must comfortably
         // exceed a normal round trip — the locator holds the response ~50 ms and
         // the receiver may sit on the forward until its next safe window — so a
@@ -635,6 +662,22 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // either mask a busy channel or slander a quiet one.
     @Volatile private var quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
 
+    // The same baseline for floors polled while the locator is silent, kept apart
+    // from the one above because they are not the same measurement.  The receiver
+    // samples inside the post-broadcast safe window while the locator is up and
+    // continuously once it goes overdue, so the silent regime reports the peak of
+    // several times as many samples and reads systematically higher.
+    //
+    // Sharing one baseline latched the alert on permanently: a minimum-keeping
+    // baseline built in the quieter regime can never rise to meet the busier one,
+    // so every polled reading looked "risen" and stayed that way for the session.
+    @Volatile private var quietestPolledFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+
+    // Whether the floor currently in rocketState came from a poll rather than from
+    // a broadcast.  Selects which baseline it is judged against, and whether the
+    // absolute BUSY_FLOOR_DBM test applies at all.
+    @Volatile private var floorFromPoll = false
+
     // Wall clock of the last missed broadcast.  Loss has to be remembered rather
     // than judged per packet: the classifier only runs when a packet ARRIVES, and
     // an arriving packet has just ended the gap, so an instantaneous test reported
@@ -647,6 +690,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // and dismissing a banner must not hide the interference from the classifier.
     @Volatile private var lastForeignBroadcastMs = 0L
 
+    // When rssi/snr were last measured, and when the noise floor was last measured.
+    //
+    // Separate clocks because the two no longer share a source.  rssi/snr can only
+    // come from a packet that arrived; the floor also arrives on ReceiverInfo,
+    // which the receiver answers with no locator involved.  During a dropout that
+    // makes the floor live and the packet pair stale, and collapsing them into one
+    // timestamp would throw away the only measurement still being taken.
+    //
+    // Both exist because the classifier runs on a timer as well as on receipt, and
+    // a timer tick has no measurement of its own — see LinkQuality.STALE_MEASUREMENT_MS
+    // for what re-deriving a verdict from frozen samples did.
+    @Volatile private var lastPacketMeasurementMs = 0L
+    @Volatile private var lastFloorMeasurementMs = 0L
+
     /**
      * Classify the link for a just-accepted broadcast.  Call this *before* the
      * rocketState update, not inside it: it mutates [quietestNoiseFloor], and an
@@ -655,6 +712,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun classifyLink(rssi: Int, snr: Int, noiseFloor: Int, badFrames: Int, currentTime: Long): LinkQuality.Verdict {
         quietestNoiseFloor = LinkQuality.updateQuietestFloor(quietestNoiseFloor, noiseFloor)
+        // A broadcast carries both kinds of measurement, so it refreshes both clocks.
+        lastPacketMeasurementMs = currentTime
+        if (noiseFloor != LinkQuality.NOISE_FLOOR_UNKNOWN) {
+            lastFloorMeasurementMs = currentTime
+            // Sampled in the safe window, so the absolute threshold applies again.
+            floorFromPoll = false
+        }
         val previous = _rocketState.value.lastMessageTime
         // No previous broadcast (fresh session) is not a gap.
         val gapMs = if (previous == 0L) 0L else currentTime - previous
@@ -668,6 +732,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // Another locator decoded on our channel. Reuses the loss window since
             // it describes the same thing — how recently the channel was contested.
             foreignLocator = LinkQuality.isLossy(lastForeignBroadcastMs, currentTime),
+            // Both measurements were taken by the packet being classified, so this
+            // path is fresh by construction. The timer path is where it matters.
+            packetFresh = true,
+            floorFresh = noiseFloor != LinkQuality.NOISE_FLOOR_UNKNOWN,
         )
     }
 
@@ -935,8 +1003,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _connectedLocatorId.value = null
         lastConnectedFrameMs = 0L
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+        quietestPolledFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         lastLossMs = 0L
         lastForeignBroadcastMs = 0L
+        // Measurements of the OLD channel say nothing about the new one, so they
+        // must not be allowed to age out gracefully — they are wrong immediately.
+        lastPacketMeasurementMs = 0L
+        lastFloorMeasurementMs = 0L
+        floorFromPoll = false
         lastConflictFrameMs = 0L
         _conflictLocatorId.value = null
         _challenge.value = null
@@ -1399,19 +1473,79 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             while (true) {
                 delay(LINK_LIVENESS_TICK_MS)
                 val st = _rocketState.value
-                if (st.lastMessageTime == 0L) continue
                 val now = System.currentTimeMillis()
-                val gap = now - st.lastMessageTime
-                if (gap < LinkQuality.LOSSY_GAP_MS) continue
+                val heardLocator = st.lastMessageTime != 0L
+                // Never having heard the locator used to end the tick here, because
+                // nothing was known about the channel until a broadcast described
+                // it. ReceiverInfo now describes it without one, so the app can say
+                // "your channel is occupied" to someone who has switched on and is
+                // hearing nothing — which is the most useful moment to say it.
+                if (heardLocator) {
+                    if (now - st.lastMessageTime < LinkQuality.LOSSY_GAP_MS) continue
+                } else {
+                    if (!LinkQuality.isMeasurementFresh(lastFloorMeasurementMs, now)) continue
+                }
                 // We are in a dropout right now, not remembering an old one.
-                lastLossMs = LinkQuality.updateLastLoss(lastLossMs, now, gap)
+                //
+                // Only counted as loss when there was a cadence to miss. With no
+                // broadcast ever received there is no expected arrival, so calling
+                // the silence "loss" would invent the very evidence the conjunction
+                // in classify() exists to demand — bad frames from ReceiverInfo are
+                // then the only thing that can establish it, and they are real.
+                if (heardLocator)
+                    lastLossMs = LinkQuality.updateLastLoss(lastLossMs, now, now - st.lastMessageTime)
+                // The measurements below are whatever the last message left behind,
+                // and this tick took none of its own. Two corrections apply, and
+                // both were needed before a switched-off locator stopped being
+                // reported as a jammed channel:
+                //
+                // Age them, so that once they lapse the only things that can still
+                // assert Interference are live — a decoded foreign broadcast, or a
+                // floor the receiver has just re-read for us on ReceiverInfo.
+                //
+                // And judge a polled floor against a baseline from its OWN sampling
+                // regime, with the absolute test dropped: that test is calibrated
+                // for the safe-window statistic, and a continuously-sampled peak
+                // clears it on a channel with nothing on it whatsoever.
+                val fromPoll = floorFromPoll
                 val verdict = LinkQuality.classify(
-                    st.rssi, st.snr, st.noiseFloor, quietestNoiseFloor,
+                    st.rssi, st.snr, st.noiseFloor,
+                    if (fromPoll) quietestPolledFloor else quietestNoiseFloor,
                     lossy = LinkQuality.isLossy(lastLossMs, now),
                     foreignLocator = LinkQuality.isLossy(lastForeignBroadcastMs, now),
+                    packetFresh = LinkQuality.isMeasurementFresh(lastPacketMeasurementMs, now),
+                    floorFresh = LinkQuality.isMeasurementFresh(lastFloorMeasurementMs, now),
+                    absoluteFloorTrusted = !fromPoll,
                 )
                 if (verdict != st.linkQuality)
                     _rocketState.update { it.copy(linkQuality = verdict) }
+            }
+        }
+        // Keeps a live channel measurement coming while the locator is silent.
+        //
+        // The health watchdog already asks for ReceiverInfo during silence, but on
+        // its own 10 s cadence — four times longer than a measurement stays fresh,
+        // so a floor sourced from it would be expired for most of its life and the
+        // note would blink on and off between probes. This polls at a rate the
+        // freshness window can actually keep up with.
+        //
+        // Deliberately narrow, and NOT started at the first missed broadcast — see
+        // CHANNEL_WATCH_SILENCE_MS. While the locator is alive at all, the packets
+        // that do arrive carry the floor themselves, so polling on top of them adds
+        // no information and costs a measurement window.
+        //
+        // It cannot mask a dead link: the health watchdog measures answers, not
+        // requests, so an unanswered poll leaves lastDataTime stale exactly as
+        // before and the phantom-connection check still fires.
+        val channelWatchJob = viewModelScope.launch {
+            while (true) {
+                delay(CHANNEL_WATCH_TICK_MS)
+                if (BluetoothManagerRepository.bluetoothConnectionState.value
+                    != BluetoothConnectionState.Ready) continue
+                val st = _rocketState.value
+                val silent = st.lastMessageTime == 0L ||
+                        System.currentTimeMillis() - st.lastMessageTime >= CHANNEL_WATCH_SILENCE_MS
+                if (silent) service.requestReceiverInfo()
             }
         }
         val packetJob = viewModelScope.launch {
@@ -1668,6 +1802,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                         currentState.deviceName,
                                 )
                             }
+                            // The only channel measurement that does not need a
+                            // locator. This is what separates "the locator is off"
+                            // from "something is sitting on our channel" — during a
+                            // dropout it is the sole live evidence, and without it
+                            // the classifier can only extrapolate from whatever the
+                            // last surviving broadcast happened to report.
+                            //
+                            // Bad frames counted here are loss we can SEE with no
+                            // locator transmitting at all: something else is on the
+                            // channel and being destroyed, which is the case the
+                            // gap-based test cannot distinguish from silence.
+                            if (parsed.msg.badFrames > 0) lastLossMs = currentTime
+                            if (parsed.msg.noiseFloor != LinkQuality.NOISE_FLOOR_UNKNOWN) {
+                                // Its OWN baseline, never the broadcast one. These
+                                // readings come from the continuous-sampling regime
+                                // and read higher; feeding them to a shared
+                                // minimum-keeping baseline made every one of them
+                                // look elevated, permanently.
+                                quietestPolledFloor = LinkQuality.updateQuietestFloor(
+                                    quietestPolledFloor, parsed.msg.noiseFloor)
+                                lastFloorMeasurementMs = currentTime
+                                floorFromPoll = true
+                                // Published so the liveness tick reclassifies against
+                                // this reading rather than the pre-dropout one. rssi
+                                // and snr are deliberately left alone: no packet
+                                // arrived, so there is nothing new to say about them,
+                                // and they age out on their own clock.
+                                _rocketState.update { it.copy(noiseFloor = parsed.msg.noiseFloor) }
+                                SpLog.d("LinkQuality",
+                                    "Channel poll: floor=${parsed.msg.noiseFloor} dBm " +
+                                            "quietestPolled=$quietestPolledFloor " +
+                                            "badFrames=${parsed.msg.badFrames}")
+                            }
                         }
                         is ParsedMessage.VersionInfo -> {
                             _locatorVersion.value = parsed.msg.locatorVersion
@@ -1685,6 +1852,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // baseline built from before it describes a stale picture of a
                             // band we now know more about. Start it over.
                             quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+                            quietestPolledFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
+                            // Same for the last floor reading: it was taken before the
+                            // radio wandered off, and the receiver suppresses sampling
+                            // during a survey, so nothing measured the home channel
+                            // meanwhile. Expire it rather than let it stand in.
+                            lastFloorMeasurementMs = 0L
                         }
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
@@ -1793,10 +1966,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // All four are canceled together on the next call.  The version loop
-        // matters as much as the packet collector: it transmits, so a leaked copy
-        // is a redundant VersionRequest on the air every few seconds, forever.
-        inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob, linkLivenessJob)
+        // All six are canceled together on the next call.  The two that transmit
+        // matter as much as the packet collector: a leaked version loop is a
+        // redundant VersionRequest every few seconds forever, and a leaked channel
+        // watch is a redundant ReceiverInfoRequest every 2 s on top of it.
+        inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob, linkLivenessJob,
+            channelWatchJob)
     }
 
 /*
@@ -2409,8 +2584,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val deviceName = nameBytes.takeWhile { it != 0.toByte() }
             .toByteArray()
             .toString(Charsets.UTF_8)
+        o += Protocol.DEVICE_NAME_LENGTH
 
-        return ReceiverInfoParsed(channel, deviceName)
+        val noiseFloor = Bytes.i16(frame, o); o += 2
+        val badFrames = Bytes.u8(frame[o])
+
+        return ReceiverInfoParsed(channel, deviceName, noiseFloor, badFrames)
     }
 
     private fun parseVersionInfo(frame: ByteArray): VersionInfoParsed {

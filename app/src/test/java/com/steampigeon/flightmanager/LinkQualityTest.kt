@@ -2,6 +2,7 @@ package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LinkQuality.Verdict
+import com.steampigeon.flightmanager.ui.RocketViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -284,6 +285,180 @@ class LinkQualityTest {
     fun `poor-snr boundary is exclusive`() {
         assertEquals(Verdict.Normal, LinkQuality.classify(-60, LinkQuality.POOR_SNR_DB, quiet, quiet))
         assertEquals(Verdict.Interference, LinkQuality.classify(-60, LinkQuality.POOR_SNR_DB - 1, quiet, quiet))
+    }
+
+    // ── Stale measurements (found on the bench: locator off, receiver off) ──────
+    //
+    // The classifier runs on a timer as well as on receipt, so during a dropout it
+    // kept re-deriving a verdict from the last packet's RSSI/SNR/floor. `lossy` is
+    // permanently true once the gap stops closing, so a last floor that happened to
+    // read above BUSY_FLOOR_DBM pinned "Interference detected" on screen forever —
+    // over a switched-off locator, and over a switched-off receiver that could
+    // never send anything to correct it.
+
+    @Test
+    fun `a switched-off locator on a quiet-once-measured channel reports nothing`() {
+        val busyLooking = LinkQuality.BUSY_FLOOR_DBM
+        // Live, this is a busy channel costing us packets — report it.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, busyLooking, quiet, lossy = true),
+        )
+        // The same numbers once nothing is measuring them any more describe a
+        // channel nobody is listening to. Silence is not interference.
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(-60, 9, busyLooking, quiet, lossy = true, floorFresh = false),
+        )
+    }
+
+    @Test
+    fun `a stale degraded packet stops being re-asserted`() {
+        // Loud but dirty is a property of a packet that ARRIVED; with none arriving
+        // there is nothing for it to describe.
+        assertEquals(Verdict.Interference, LinkQuality.classify(-60, 0, quiet, quiet))
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(-60, 0, quiet, quiet, packetFresh = false),
+        )
+    }
+
+    @Test
+    fun `a decoded foreign locator still convicts when every measurement is stale`() {
+        // This is the discriminator that survives silence: the interferer is being
+        // received and identified while our locator is not heard at all, so no
+        // inference from power levels is involved.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(
+                -60, 9, quiet, quiet,
+                lossy = true, foreignLocator = true,
+                packetFresh = false, floorFresh = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `a freshly polled floor convicts even with no packet in living memory`() {
+        // ReceiverInfo carries a floor with no locator involved, so the floor can be
+        // live while rssi/snr are long stale. That pairing is the whole point of
+        // ageing the two separately.
+        val elevated = quiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(
+                -60, 9, elevated, quiet,
+                lossy = true, packetFresh = false, floorFresh = true,
+            ),
+        )
+        // ...and reports the channel as merely occupied when nothing is being lost.
+        assertEquals(
+            Verdict.Congested,
+            LinkQuality.classify(
+                -60, 9, elevated, quiet,
+                lossy = false, packetFresh = false, floorFresh = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `measurement freshness is bounded by the stale window`() {
+        val now = 1_000_000L
+        assertTrue(LinkQuality.isMeasurementFresh(now, now))
+        assertTrue(LinkQuality.isMeasurementFresh(now - LinkQuality.STALE_MEASUREMENT_MS, now))
+        assertFalse(LinkQuality.isMeasurementFresh(now - LinkQuality.STALE_MEASUREMENT_MS - 1, now))
+        // Never measured is never fresh — the zero must not read as "just now".
+        assertFalse(LinkQuality.isMeasurementFresh(0L, now))
+    }
+
+    @Test
+    fun `stale window is shorter than the channel poll it has to keep up with`() {
+        // A poll slower than the freshness window leaves the floor expired between
+        // readings, which the note flickers through.
+        assertTrue(RocketViewModel.CHANNEL_WATCH_TICK_MS < LinkQuality.STALE_MEASUREMENT_MS)
+    }
+
+    // ── Cross-regime floor comparison (found on the bench: locator switched off) ──
+    //
+    // The receiver samples the idle floor inside the post-broadcast safe window
+    // while the locator is up, and CONTINUOUSLY once it goes overdue. Same units,
+    // same "peak since last report" meaning, several times as many samples — so the
+    // silent regime reads systematically higher with nothing on the channel.
+    //
+    // Judged against the broadcast-era baseline, that difference was permanent: the
+    // baseline keeps the MINIMUM and so could never rise to meet it, and the
+    // absolute test has no baseline to correct it at all. The note went off at the
+    // freshness expiry and came back for good the moment polling started.
+
+    @Test
+    fun `a polled floor is not judged against the broadcast baseline`() {
+        // Quiet channel, but the continuous-sampling peak reads well above the
+        // baseline gathered while the locator was transmitting.
+        val broadcastEraBaseline = -120
+        val polledOnSameQuietChannel = -95
+        // Its own baseline settles on the first reading, so nothing looks risen.
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(
+                -60, 9, polledOnSameQuietChannel, polledOnSameQuietChannel,
+                lossy = true, packetFresh = false, absoluteFloorTrusted = false,
+            ),
+        )
+        // The old behaviour, for contrast: same reading, wrong baseline, latched on.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(
+                -60, 9, polledOnSameQuietChannel, broadcastEraBaseline,
+                lossy = true, packetFresh = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `the absolute busy-floor test does not apply to polled readings`() {
+        // BUSY_FLOOR_DBM is calibrated for the safe-window statistic. A peak taken
+        // over several times as many samples clears it on an empty channel, and
+        // being absolute there is nothing that can ever bring it back down.
+        val atThreshold = LinkQuality.BUSY_FLOOR_DBM
+        assertEquals(
+            Verdict.Normal,
+            LinkQuality.classify(
+                -60, 9, atThreshold, atThreshold,
+                lossy = true, packetFresh = false, absoluteFloorTrusted = false,
+            ),
+        )
+        // Still trusted for a floor that arrived on a broadcast.
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(-60, 9, atThreshold, atThreshold, lossy = true),
+        )
+    }
+
+    @Test
+    fun `a polled floor still convicts when it rises above its own baseline`() {
+        // The point of keeping a polled baseline rather than ignoring polled floors
+        // outright: an interferer that starts DURING the silence still shows up.
+        val polledQuiet = -95
+        val polledWithInterferer = polledQuiet + LinkQuality.ELEVATED_FLOOR_MARGIN_DB
+        assertEquals(
+            Verdict.Interference,
+            LinkQuality.classify(
+                -60, 9, polledWithInterferer, polledQuiet,
+                lossy = true, packetFresh = false, absoluteFloorTrusted = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `channel polling does not start on routine in-flight packet loss`() {
+        // A distant rocket drops one or two 1 Hz broadcasts as a matter of course.
+        // That is loss — it reddens the marker — but it must not start the poll:
+        // the locator is still transmitting, its surviving packets already carry
+        // the floor, and an extra reader of a drain-on-read peak biases every
+        // subsequent reading downward (see CHANNEL_WATCH_SILENCE_MS).
+        val twoMissedBroadcasts = 3_000L
+        assertTrue(twoMissedBroadcasts >= LinkQuality.LOSSY_GAP_MS)
+        assertTrue(twoMissedBroadcasts < RocketViewModel.CHANNEL_WATCH_SILENCE_MS)
     }
 
     @Test

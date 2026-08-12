@@ -139,6 +139,35 @@ object LinkQuality {
     const val LOSS_MEMORY_MS = 10_000L
 
     /**
+     * How long a channel measurement may stand in for a live one.
+     *
+     * **Every RSSI-derived signal here describes the instant a measurement was
+     * taken, and nothing else.** The classifier runs during dropouts as well as on
+     * packet receipt, and during a dropout there is by definition no new
+     * measurement — so without a bound it keeps re-deriving a verdict from a
+     * sample that may be minutes old. That produced the reported bug: switch the
+     * locator off on a channel whose last floor read above [BUSY_FLOOR_DBM] and
+     * `elevated && lossy` stays true forever, because the gap only grows and the
+     * floor never gets a chance to fall. "Interference detected" then described a
+     * channel nobody was measuring, over a link nobody was using.
+     *
+     * The conjunction in [classify] was supposed to prevent exactly this — "a
+     * locator that went away does not raise the noise floor" — but that only holds
+     * if the floor is RE-READ after it goes. A stale sample cannot fall, so it
+     * cannot clear the alert it is raising.
+     *
+     * Short on purpose. A genuine interferer keeps producing evidence while it
+     * interferes: foreign broadcasts get decoded, bad frames get counted, and any
+     * surviving packet carries a fresh floor. Only silence goes unmeasured, and
+     * silence is precisely the state that must not be called interference.
+     */
+    const val STALE_MEASUREMENT_MS = 3_000L
+
+    /** Whether a measurement taken at [measuredAtMs] is still live. */
+    fun isMeasurementFresh(measuredAtMs: Long, nowMs: Long): Boolean =
+        measuredAtMs != 0L && nowMs - measuredAtMs <= STALE_MEASUREMENT_MS
+
+    /**
      * Wall clock of the most recent observed loss, or [current] if nothing was lost.
      *
      * Two independent kinds of evidence, and [badFrames] is the better one. A gap
@@ -172,6 +201,35 @@ object LinkQuality {
      * @param foreignLocator whether another locator's broadcast has been received
      *                    on this channel recently — see the note below, this is
      *                    the strongest evidence available and needs no inference
+     * @param packetFresh whether [rssi] and [snr] still describe the channel — see
+     *                    [STALE_MEASUREMENT_MS]. False during a dropout, where they
+     *                    are frozen at whatever the last surviving packet reported
+     * @param floorFresh  whether [noiseFloor] still describes the channel. Aged
+     *                    SEPARATELY from the packet pair because the two no longer
+     *                    share a source: a floor also arrives on ReceiverInfo, which
+     *                    the receiver answers while the locator is silent, and that
+     *                    is the only channel measurement available in a dropout
+     * @param absoluteFloorTrusted whether [noiseFloor] is comparable to
+     *                    [BUSY_FLOOR_DBM]. **False for a floor polled during locator
+     *                    silence**, and [quietestFloor] must then be a baseline built
+     *                    from polled samples too — see the note below on why the two
+     *                    sources are not interchangeable
+     *
+     * **The two floor sources are different statistics and must not be compared to
+     * each other.** Both are "peak idle RSSI since the last report", but the
+     * receiver samples on very different duty cycles depending on what it is doing.
+     * While the locator is transmitting it samples only inside the post-broadcast
+     * safe window — a few tens of samples a second. Once the locator goes quiet the
+     * overdue branch opens and it samples continuously, several times more often,
+     * and the peak of more samples is higher. Nothing about the channel changed;
+     * only the size of the maximum being taken over it.
+     *
+     * Mixing them latched this alert permanently on a silent, clean channel. The
+     * session baseline keeps the MINIMUM, so readings from the busier sampling
+     * regime could never pull it up, and [ELEVATED_FLOOR_MARGIN_DB] stayed cleared
+     * forever; [BUSY_FLOOR_DBM] was crossed for the same reason and, being
+     * absolute, had nothing that could ever bring it back down. The caller
+     * therefore keeps one baseline per regime and compares like with like.
      */
     fun classify(
         rssi: Int,
@@ -180,15 +238,24 @@ object LinkQuality {
         quietestFloor: Int,
         lossy: Boolean = false,
         foreignLocator: Boolean = false,
+        packetFresh: Boolean = true,
+        floorFresh: Boolean = true,
+        absoluteFloorTrusted: Boolean = true,
     ): Verdict {
-        val degraded = rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
-        val haveFloor = noiseFloor != NOISE_FLOOR_UNKNOWN
+        // "Loud but dirty" is a property of a packet that ARRIVED. Once it has aged
+        // out there is no packet to describe, and re-asserting the last one's
+        // verdict indefinitely is how a link that simply stopped got reported as a
+        // link being jammed.
+        val degraded = packetFresh && rssi > STRONG_RSSI_DBM && snr < POOR_SNR_DB
+        val haveFloor = floorFresh && noiseFloor != NOISE_FLOOR_UNKNOWN
         val haveBaseline = quietestFloor != NOISE_FLOOR_UNKNOWN
         // Two independent ways to be occupied: risen materially above this session's
         // quietest reading, or loud enough that no baseline is needed to say so.
         val risen = haveFloor && haveBaseline &&
                 noiseFloor - quietestFloor >= ELEVATED_FLOOR_MARGIN_DB
-        val loud = haveFloor && noiseFloor >= BUSY_FLOOR_DBM
+        // Absolute, and therefore only meaningful for the statistic it was
+        // calibrated against — see [absoluteFloorTrusted].
+        val loud = haveFloor && absoluteFloorTrusted && noiseFloor >= BUSY_FLOOR_DBM
         // A foreign locator on our channel is not evidence OF occupancy, it IS
         // occupancy — decoded, identified, unambiguous. See the class note on why
         // this outranks every RSSI-derived signal here.
