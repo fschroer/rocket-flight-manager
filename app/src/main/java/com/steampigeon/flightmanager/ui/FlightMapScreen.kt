@@ -1367,39 +1367,51 @@ private fun MapWithOverlays(
                     .size(48.dp)
                     .rotate(-azimuth),
             )
-        }
-        // The heading cannot be repaired from here — the fusion owns the
-        // magnetometer and there is no path into its calibration — so the indicator
-        // names the one thing that does fix it: the figure-eight, drawn as the
-        // gesture itself rather than described in words.
-        //
-        // It replaced the text "Compass off / figure-8 to fix", which read as though
-        // the compass had been SWITCHED off — a plausible misreading, and one that
-        // sends the user hunting for a setting to turn back on. The symbol cannot be
-        // misread that way because it does not assert anything; it is a picture of
-        // the motion to make. What it gives up is self-evidence, so it carries a
-        // contentDescription and §9.3 of the manual carries the meaning.
-        //
-        // Sited against the compass rose rather than centre screen because it
-        // qualifies that rose, and because the centre is reserved for the pad alert.
-        if (compassNeedsCalibration) {
-            Text(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = 74.dp, y = (-112).dp)
-                    // The glyph alone reads as "infinity" to a screen reader, which
-                    // is not what it means here.
-                    .semantics {
-                        contentDescription = if (compassSevere)
-                            "Compass unreliable — sweep the phone in a figure-eight to recalibrate"
-                        else
-                            "Compass disturbed — sweep the phone in a figure-eight to recalibrate"
-                    },
-                text = "∞",
-                color = if (compassSevere) Color.Red else Color.Yellow,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            // The heading cannot be repaired from here — the fusion owns the
+            // magnetometer and there is no path into its calibration — so the
+            // indicator names the one thing that does fix it: the figure-eight,
+            // drawn as the gesture itself rather than described in words.
+            //
+            // It replaced the text "Compass off / figure-8 to fix", which read as
+            // though the compass had been SWITCHED off — a plausible misreading,
+            // and one that sends the user hunting for a setting to turn back on.
+            // The symbol cannot be misread that way because it does not assert
+            // anything; it is a picture of the motion to make. What it gives up is
+            // self-evidence, so it carries a contentDescription and §9.3 of the
+            // manual carries the meaning.
+            //
+            // A CHILD of the rose, not a sibling positioned next to it: it
+            // qualifies that rose and nothing else, so it should move with it and
+            // survive any future change to where the rose sits. The two magic
+            // offsets this replaces had to be re-derived by hand from the rose's
+            // geometry every time either moved.
+            if (compassNeedsCalibration) {
+                Text(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        // Bottom-aligning the text box is not the same as
+                        // bottom-aligning the glyph: the line box still reserves
+                        // descender space that "∞" does not use, which left it
+                        // floating ~15dp clear of the rim and colliding with the
+                        // south needle. Measured off a screenshot, not derived.
+                        .offset(y = 9.dp)
+                        // The glyph alone reads as "infinity" to a screen reader,
+                        // which is not what it means here.
+                        .semantics {
+                            contentDescription = if (compassSevere)
+                                "Compass unreliable — sweep the phone in a figure-eight to recalibrate"
+                            else
+                                "Compass disturbed — sweep the phone in a figure-eight to recalibrate"
+                        },
+                    text = "∞",
+                    color = if (compassSevere) Color.Red else Color.Yellow,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    // Collapses the line box to the font size so the offset above
+                    // has a predictable amount of slack to correct for.
+                    lineHeight = 20.sp,
+                )
+            }
         }
         val density = LocalDensity.current
         val scaleBarMaxWidth = with(density) {
