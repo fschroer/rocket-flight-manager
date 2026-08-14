@@ -106,8 +106,9 @@ class WireLayoutTest {
     // FlightDataRequest and DeploymentTestRequest: header + target + one byte == 11.
     @Test fun onePayloadByteCommandSize() = assertEquals(11, Protocol.HEADER_SIZE + targetIdSize + 1)
 
-    // FlightMetadata: 10 records × 10 bytes = 100 payload
-    @Test fun flightMetadataPayloadSize() = assertEquals(100, FLIGHT_METADATA_PAYLOAD_SIZE)
+    // FlightMetadata: 9 records × 10 bytes = 90 payload (C++ sizeof 96).
+    // 9, was 10, since locator ARCHIVE_VERSION 6 (#38) — see METADATA_RECORD_COUNT.
+    @Test fun flightMetadataPayloadSize() = assertEquals(90, FLIGHT_METADATA_PAYLOAD_SIZE)
 
     // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + reserved 1 +
     // present_mask 2 + flight_timestamp_s 4 + event_timestamp_ms[11] 44 +

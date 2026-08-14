@@ -37,10 +37,20 @@ private const val COMPRESSED_HEADER_SIZE = 4 + 4 + 12 + 12 + 8 + 8   // = 48
 private const val COMPRESSED_DELTA_SIZE  = 2 + 2 + 6 + 6 + 4 + 4    // = 24
 
 // FlightMetadata layout (after PacketHeader):
-//   record[10] of FlightMetadataRecord { timestamp(u32,4) + apogee(f32,4) + flight_time(u16,2) }
-private const val METADATA_RECORD_COUNT = 10
+//   record[9] of FlightMetadataRecord { timestamp(u32,4) + apogee(f32,4) + flight_time(u16,2) }
+//
+// 9, was 10: the locator's FlightSample grew 80 -> 88 B for ARCHIVE_VERSION 6
+// (locator #38) and ten records no longer fit its flash archive region, so
+// `record_count` in Rocket/Archive/Inc/Archive.hpp dropped to 9.  FlightMetadata
+// carries one FlightMetadataRecord per archive slot, so the message shrank with
+// it: 106 -> 96 B on the wire, 100 -> 90 B of payload.
+//
+// This constant IS the parser's loop bound, so it must equal the locator's
+// record_count exactly.  Too high and a short frame is rejected outright; too low
+// and the trailing slots silently vanish from the flight list.
+private const val METADATA_RECORD_COUNT = 9
 private const val METADATA_RECORD_SIZE  = 4 + 4 + 2     // = 10 bytes
-const val FLIGHT_METADATA_PAYLOAD_SIZE  = METADATA_RECORD_COUNT * METADATA_RECORD_SIZE  // = 100
+const val FLIGHT_METADATA_PAYLOAD_SIZE  = METADATA_RECORD_COUNT * METADATA_RECORD_SIZE  // = 90
 
 // FlightDataAck wire layout:
 //   PacketHeader(6) + transfer_id(2) + packet_count(2) + bitmap[32](256/8)
