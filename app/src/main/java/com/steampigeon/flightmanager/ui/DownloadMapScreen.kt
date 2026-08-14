@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -50,9 +52,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -106,8 +112,40 @@ fun DownloadMapScreen(
     val presets = remember { LaunchSiteRepository.load(context) }
     var presetsExpanded by remember { mutableStateOf(false) }
     var moveRequest by remember { mutableStateOf<MoveRequest?>(null) }
+    // The Lat, Lon box is two things in one: a readout of where the map is pointed, and
+    // an entry box for pointing it somewhere. mapCenter is the readout, tracked live
+    // through the gesture; latLonText is the edit buffer, which only takes over while the
+    // field has focus. Seeding the buffer from the center on focus means the user edits
+    // the number they were just looking at instead of a stale one.
+    var mapCenter by remember { mutableStateOf<LatLng?>(null) }
     var latLonText by remember { mutableStateOf("") }
+    var latLonEditing by remember { mutableStateOf(false) }
     var latLonError by remember { mutableStateOf(false) }
+    val latLonDisplay = if (latLonEditing) latLonText else mapCenter?.let(::formatLatLon).orEmpty()
+
+    val focusManager = LocalFocusManager.current
+
+    // Shared by the Go button and by Enter in the field, so the keyboard shortcut is that
+    // button rather than a second, subtly different path.
+    val goToLatLon = {
+        val p = parseLatLon(latLonDisplay)
+        when {
+            // Moving the camera makes the readout catch up on its own, so hand the screen
+            // back: focus (and the keyboard over the map) is no longer needed.
+            p != null -> {
+                moveRequest = MoveRequest(
+                    boundsAround(p.latitude, p.longitude, MANUAL_EXTENT_KM, MANUAL_EXTENT_KM),
+                    System.nanoTime(),
+                )
+                focusManager.clearFocus()
+            }
+            // Unparseable: keep focus so the fix is a straight retype. Dropping focus here
+            // would revert the box to the map center and leave the error explaining text
+            // that is no longer on screen.
+            latLonDisplay.isNotBlank() -> latLonError = true
+            else -> focusManager.clearFocus()
+        }
+    }
 
     fun refreshRegions() = manager.listRegions { regions = it }
     DisposableEffect(Unit) { refreshRegions(); onDispose { } }
@@ -142,6 +180,7 @@ fun DownloadMapScreen(
                     styleJson = styleJson,
                     moveRequest = moveRequest,
                     onBoundsChanged = { bounds = it },
+                    onCenterChanged = { mapCenter = it },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -202,25 +241,43 @@ fun DownloadMapScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 OutlinedTextField(
-                    value = latLonText,
-                    onValueChange = { latLonText = it; latLonError = false },
+                    value = latLonDisplay,
+                    // Keep only what parseLatLon reads: digits, sign, decimal point, and the
+                    // comma/space separating the pair. This filter is the actual constraint —
+                    // the Ascii keyboard below is a full one-tap layout, letters included, so
+                    // nothing but this rejects them (and it also covers paste).
+                    onValueChange = { new ->
+                        latLonText = new.filter { it.isDigit() || it in ".,- " }
+                        latLonError = false
+                    },
                     label = { Text("Lat, Lon") },
-                    placeholder = { Text("47.6205, -122.5490") },
+                    // Only on screen until the map's first camera event fills the box with
+                    // the center. Grayed because at the default placeholder color the sample
+                    // read as a coordinate already entered rather than as the format to use.
+                    placeholder = {
+                        Text("47.6205, -122.5490", color = MaterialTheme.colorScheme.outline)
+                    },
                     singleLine = true,
                     isError = latLonError,
                     enabled = !downloading,
-                    modifier = Modifier.weight(1f),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { goToLatLon() }),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { state ->
+                            // Seed the edit buffer from what is on screen — the map center —
+                            // so tapping in edits that number rather than whatever was typed
+                            // the last time the field was focused.
+                            if (state.isFocused && !latLonEditing) latLonText = latLonDisplay
+                            latLonEditing = state.isFocused
+                            // Leaving the field puts the map center back in the box, so a
+                            // complaint about what was typed no longer has anything to point at.
+                            if (!state.isFocused) latLonError = false
+                        },
                 )
                 Button(
-                    onClick = {
-                        val p = parseLatLon(latLonText)
-                        if (p == null) latLonError = true
-                        else moveRequest = MoveRequest(
-                            boundsAround(p.latitude, p.longitude, MANUAL_EXTENT_KM, MANUAL_EXTENT_KM),
-                            System.nanoTime(),
-                        )
-                    },
-                    enabled = !downloading && latLonText.isNotBlank(),
+                    onClick = goToLatLon,
+                    enabled = !downloading && latLonDisplay.isNotBlank(),
                 ) { Text("Go") }
             }
             if (latLonError) {
@@ -310,6 +367,8 @@ fun DownloadMapScreen(
                 label = { Text("Site name") },
                 singleLine = true,
                 enabled = !downloading,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -545,14 +604,17 @@ private fun DetailPreviewMap(
 
 /**
  * Lightweight MapLibre map for framing a download region. Reports the visible bounds
- * on every camera idle. (Separate from FlightScreen's MapLibreMapView, which carries
- * rocket-specific layers.)
+ * on every camera idle, and the center continuously through the gesture — the bounds
+ * drive the tile/size estimate, which is too costly to recompute per frame, while the
+ * center is a cheap read that feeds a live coordinate readout. (Separate from
+ * FlightScreen's MapLibreMapView, which carries rocket-specific layers.)
  */
 @Composable
 private fun RegionPickerMap(
     styleJson: String,
     moveRequest: MoveRequest?,
     onBoundsChanged: (LatLngBounds) -> Unit,
+    onCenterChanged: (LatLng) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -571,8 +633,12 @@ private fun RegionPickerMap(
                         map.addOnCameraIdleListener {
                             onBoundsChanged(map.projection.visibleRegion.latLngBounds)
                         }
-                        // Emit initial bounds.
+                        map.addOnCameraMoveListener {
+                            map.cameraPosition.target?.let(onCenterChanged)
+                        }
+                        // Emit initial bounds and center.
                         onBoundsChanged(map.projection.visibleRegion.latLngBounds)
+                        map.cameraPosition.target?.let(onCenterChanged)
                         mapRef = map
                     }
                 }

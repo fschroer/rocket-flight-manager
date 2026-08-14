@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -45,8 +46,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -522,6 +525,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
     var lastKeyPressed by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
     // Follow externally-driven changes to the value. `remember` seeds once, so a
     // value set anywhere other than this text field — the channel survey picking a
     // channel, or fresh config arriving from the device — updated the staged config
@@ -558,7 +562,12 @@ fun ConfigurationItemNumeric(configItemName: String,
                 },
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            // Single line with a Done key, so Enter dismisses the keypad instead of
+            // inserting a newline. Clearing focus rather than only hiding the keyboard
+            // also runs the onFocusChanged handler above, which coerces and commits.
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
         )
         //Spacer(modifier = Modifier.width(8.dp))
         Column(
@@ -589,6 +598,7 @@ fun ConfigurationItemNumeric(configItemName: String,
                              onConfigUpdate: (Double) -> Unit) {
     var configValue by remember { mutableDoubleStateOf(initialConfigValue)}
     var configText by remember { mutableStateOf(initialConfigValue.toString()) }
+    val focusManager = LocalFocusManager.current
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -611,7 +621,10 @@ fun ConfigurationItemNumeric(configItemName: String,
                 .weight(configItemWidth),
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            // See the Int overload: Enter closes the keypad and commits through onFocusChanged.
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
         )
         //Spacer(modifier = Modifier.width(8.dp))
         Column(
@@ -640,6 +653,7 @@ fun ConfigurationItemText(configItemName: String,
                           configMessageState: LocatorMessageState = LocatorMessageState.Idle,
                           modifier: Modifier = Modifier,
                           onConfigUpdate: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -654,7 +668,9 @@ fun ConfigurationItemText(configItemName: String,
             modifier = modifier.weight(configItemWidth),
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
             //modifier = Modifier.weight(1f)
         )
         Column(

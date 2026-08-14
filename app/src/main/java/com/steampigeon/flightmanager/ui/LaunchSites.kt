@@ -13,6 +13,7 @@ import android.content.Context
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import java.io.File
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -141,3 +142,11 @@ fun parseLatLon(text: String): LatLng? {
     if (abs(lat) > 90 || abs(lon) > 180) return null
     return LatLng(lat, lon)
 }
+
+/**
+ * Renders "lat, lon" in the form [parseLatLon] reads back. Four decimals is ~11 m — far
+ * finer than any region the download screen frames, and short enough to read at a glance.
+ * Locale-fixed on purpose: a locale whose decimal mark is a comma would collide with
+ * the comma separating the pair, and [parseLatLon] expects a dot regardless.
+ */
+fun formatLatLon(p: LatLng): String = String.format(Locale.US, "%.4f, %.4f", p.latitude, p.longitude)
