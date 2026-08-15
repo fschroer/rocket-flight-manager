@@ -39,6 +39,8 @@
     <string name="deployment_channel_3">Deployment Channel 3</string>
     <string name="deployment_channel_4">Deployment Channel 4</string>
     <string name="deployment_test">Deployment Test</string>
+    <string name="stop_deployment_test">STOP TEST</string>
+    <string name="stopping_deployment_test">STOPPING…</string>
     <string name="device_name">Locator Name</string>
     <string name="drogue_backup_deploy_delay">Drogue Backup Deploy Delay (s)</string>
     <string name="drogue_primary_deploy_delay">Drogue Primary Deploy Delay (s)</string>

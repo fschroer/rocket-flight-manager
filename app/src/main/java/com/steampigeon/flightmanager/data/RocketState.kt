@@ -354,6 +354,9 @@ enum class DeployMode (val deployMode: UByte) {
 }
 
 enum class DeploymentTestOption (val deploymentTestOption: UByte) {
+    // None is not only "nothing selected".  Sent as the channel of a
+    // DeploymentTestRequest, 0 is the wire value that CANCELS a running test —
+    // see the locator's MessageProtocol.hpp and its DeploymentTestRequest handler.
     None(0u),
     Channel1(1u),
     Channel2(2u),

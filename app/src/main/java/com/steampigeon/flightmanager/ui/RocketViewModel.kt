@@ -221,6 +221,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // recovers is picked back up instead of having dropped to Disarmed.
         const val METADATA_RETRY_INITIAL_MS = 3_000L
         const val METADATA_RETRY_MAX_MS     = 12_000L
+
+        // How long the locator's deployment-test countdown must go quiet before
+        // the app concludes that no test is running.
+        //
+        // The countdown arrives at 1 Hz while a test is live and simply stops
+        // when it ends — fired or canceled — so silence is the only completion
+        // signal the protocol offers.  3 s absorbs two consecutive lost frames
+        // without declaring a live charge safe, which is the direction this has
+        // to fail in: a countdown shown a second too long costs nothing, while
+        // one cleared a second too early tells the operator a charge is dead
+        // while it is still counting down to firing.
+        const val DEPLOYMENT_TEST_SILENCE_MS = 3_000L
         const val RAD2DEG = 57.295779513082320876
     }
 
@@ -1381,18 +1393,71 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ── Deployment test ──────────────────────────────────────────────────────
+    // The rule here is that the DISPLAY follows the locator, never the app's own
+    // hope.  Pressing cancel used to clear deploymentTestActive immediately,
+    // which gated the countdown handler below and made the app deaf to the very
+    // countdown that was still running: the button went back to reading "start"
+    // while the locator counted down and fired.  Nothing on screen disagreed.
+    //
+    // A cancel is one unacknowledged LoRa frame.  It is a request, and the only
+    // evidence it was honored is the countdown going quiet.
     private val _deploymentTestActive = MutableStateFlow<Boolean>(false)
     val deploymentTestActive: StateFlow<Boolean> = _deploymentTestActive.asStateFlow()
 
     fun updateDeploymentTestActive(newDeploymentTestActive: Boolean) {
         _deploymentTestActive.value = newDeploymentTestActive
+        if (newDeploymentTestActive) {
+            // A start frame can be lost too; without this the screen would sit
+            // "active" forever waiting for a countdown that is never coming.
+            armDeploymentTestSilenceWatchdog()
+        } else {
+            deploymentTestSilenceJob?.cancel()
+            deploymentTestSilenceJob = null
+            _deploymentTestCancelPending.value = false
+            _deploymentTestCountdown.value = 0
+        }
     }
 
+    // No public setter: the countdown is written only by the locator's messages
+    // and by the silence watchdog.  The screen used to zero it on cancel, which
+    // is the bug above — letting a caller assert a countdown that the locator has
+    // not agreed to is the whole failure mode, so the way to do it is gone.
     private val _deploymentTestCountdown = MutableStateFlow<Int>(0)
     val deploymentTestCountdown: StateFlow<Int> = _deploymentTestCountdown.asStateFlow()
 
-    fun updateDeploymentTestCountdown(newDeploymentTestCountdown: Int) {
-        _deploymentTestCountdown.value = newDeploymentTestCountdown
+    // True from the moment a cancel frame is sent until the countdown stops.
+    // Drives the "STOPPING" label: it says the request is out and unanswered,
+    // which is exactly the state the operator needs to see rather than a button
+    // that has already returned to normal.
+    private val _deploymentTestCancelPending = MutableStateFlow(false)
+    val deploymentTestCancelPending: StateFlow<Boolean> = _deploymentTestCancelPending.asStateFlow()
+
+    private var deploymentTestSilenceJob: Job? = null
+
+    /**
+     * Record that a cancel frame has just been handed to the radio.  Deliberately
+     * changes nothing about the countdown: the locator decides when the test is
+     * over, and this app finds out by the countdown stopping.
+     */
+    fun noteDeploymentTestCancelSent() {
+        if (!_deploymentTestActive.value) return
+        _deploymentTestCancelPending.value = true
+        armDeploymentTestSilenceWatchdog()
+    }
+
+    // Restarted by every countdown message, so it only fires once the locator has
+    // genuinely gone quiet.  One rule covers all three endings — canceled, fired,
+    // link lost — because from here they are indistinguishable, and all three mean
+    // the same thing for the screen.
+    private fun armDeploymentTestSilenceWatchdog() {
+        deploymentTestSilenceJob?.cancel()
+        deploymentTestSilenceJob = viewModelScope.launch {
+            delay(DEPLOYMENT_TEST_SILENCE_MS)
+            _deploymentTestCancelPending.value = false
+            _deploymentTestCountdown.value = 0
+            _deploymentTestActive.value = false
+        }
     }
 
     private val _locatorVersion = MutableStateFlow("")
@@ -1789,8 +1854,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
                         is ParsedMessage.DeploymentTest -> {
                             val deploymentTestCountdown = parsed.msg.count
-                            if (_deploymentTestActive.value)
+                            if (_deploymentTestActive.value) {
                                 _deploymentTestCountdown.value = deploymentTestCountdown
+                                // The locator is still counting, so whatever the
+                                // app believes, the charge is live.  Note this
+                                // is armed even while a cancel is pending: a
+                                // frame that crosses the cancel in flight must
+                                // not be mistaken for the cancel being refused,
+                                // and the countdown stopping is what settles it.
+                                armDeploymentTestSilenceWatchdog()
+                            }
                         }
                         is ParsedMessage.ReceiverInfo -> {
                             _remoteReceiverConfig.update { currentState ->
