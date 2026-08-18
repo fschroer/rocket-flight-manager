@@ -29,7 +29,7 @@ class LocatorAuthTest {
     @Test
     fun authTagRoundTrip() {
         val size = Protocol.PRELAUNCH_BASE_STRUCT_SIZE
-        // Frame = base struct (115) + a few receiver-appended bytes that must be ignored.
+        // Frame = base struct (118) + a few receiver-appended bytes that must be ignored.
         val frame = ByteArray(size + 25) { (it * 7 + 3).toByte() }
         // Simulate the receiver rewriting packet_header.crc — it must not affect auth.
         frame[4] = 0x12; frame[5] = 0x34
