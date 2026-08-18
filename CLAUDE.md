@@ -2,7 +2,7 @@
 
 Part of the **Steam Pigeon** system (Locator + Receiver firmware + this app). The Locator
 and Receiver run STM32 firmware; this app is Android / Kotlin / Jetpack Compose. A native
-iOS app is planned as a second codebase.
+iOS app is under way as a second codebase (`steam-pigeon-ios`).
 
 ## System docs live in the Locator repo — read them first
 
@@ -23,7 +23,7 @@ Locator repo to read its `docs/`.)
 ## App-specific load-bearing points
 
 - **Wire format is hand-synced across three places** — this app's `app/src/test/.../WireLayoutTest.kt`
-  must match the firmware `MessageProtocol.hpp` `static_assert`s (and the planned iOS copy).
+  must match the firmware `MessageProtocol.hpp` `static_assert`s (and the iOS copy, `WireLayoutTests.swift`).
   Touch a byte offset in `RocketState.kt` / `FlightDataRepository.kt` → update all copies in
   the same session.
 - **Map is MapLibre**, not Google Maps (offline satellite for no-signal recovery). Offline
