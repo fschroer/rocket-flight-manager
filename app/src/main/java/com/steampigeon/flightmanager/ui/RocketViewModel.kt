@@ -22,6 +22,7 @@ import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.LocatorConnection
+import com.steampigeon.flightmanager.data.LocatorNames
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
@@ -942,6 +943,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         if (challengeable && _challenge.value?.locatorId == locatorId) challengeFrame = frame
 
         if (authorized) {
+            // Remember what this locator calls itself, so the status panel can name
+            // it later when it is armed and sending no name at all.  Stored for
+            // every authorized locator, not just password-protected ones: an open
+            // locator is authorized without ever being challenged, so rememberLocator
+            // never runs for it — and open is the default state, which made a blank
+            // locator row the common case rather than the edge one.
+            noteLocatorName(locatorId, deviceName)
+
             val mayConnect = LocatorConnection.mayConnect(
                 connected = _connectedLocatorId.value,
                 sender = locatorId,
@@ -1127,6 +1136,50 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      *  is shown again — re-entering the screen is the user asking to see it. */
     fun resetConflictDismissals() {
         dismissedConflictIds.clear()
+    }
+
+    // Names already persisted this session.  PreLaunchData arrives at 1 Hz and the
+    // stored map is refreshed through a DataStore round-trip, so without this the
+    // "only when it changes" test below would still be reading the pre-write value
+    // for the first few broadcasts and re-persist the same name several times.
+    private val notedLocatorNames = mutableMapOf<Long, String>()
+
+    /**
+     * Record [deviceName] as the name of [locatorId], for display when the locator
+     * is armed and no longer sending one.
+     *
+     * An empty name never overwrites a stored one, which is what the armed case
+     * depends on: the TelemetryData branch of [evaluateRecognition] passes an empty
+     * deviceName because that message has no name field.  The stored name is only
+     * ever *read* when the live one is empty, so the first PreLaunchData after a
+     * disarm still wins.
+     */
+    private fun noteLocatorName(locatorId: Long, deviceName: String) {
+        // Before the stored map has loaded, "not in the map" is indistinguishable
+        // from "nothing stored", so a write here would be churn at best.
+        if (!knownLocatorsLoaded) return
+        val known = notedLocatorNames[locatorId] ?: _knownLocators.value[locatorId]?.label
+        if (!LocatorNames.isNewName(known, deviceName)) return
+        notedLocatorNames[locatorId] = deviceName
+        viewModelScope.launch { rememberLocatorName(locatorId, deviceName) }
+    }
+
+    /** Persist [label] for [locatorId], keeping any password key already held.
+     *  An id may carry a name with no key — the two are independent. */
+    private suspend fun rememberLocatorName(locatorId: Long, label: String) {
+        currentContext.userPreferencesDataStore.updateData { prefs ->
+            val existingKey = prefs.knownLocatorsMap[locatorId.toInt()]?.passwordKey ?: 0
+            prefs.toBuilder()
+                .putKnownLocators(
+                    locatorId.toInt(),
+                    KnownLocator.newBuilder()
+                        .setId(locatorId.toInt())
+                        .setPasswordKey(existingKey)
+                        .setLabel(label)
+                        .build()
+                )
+                .build()
+        }
     }
 
     private suspend fun rememberLocator(locatorId: Long, passwordKey: Long, label: String) {
