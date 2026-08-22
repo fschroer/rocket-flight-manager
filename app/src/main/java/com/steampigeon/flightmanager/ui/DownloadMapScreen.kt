@@ -9,6 +9,8 @@ package com.steampigeon.flightmanager.ui
 // state lives in OfflineDownloadRepository, not here.
 // ---------------------------------------------------------------------------
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,8 +63,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleEventObserver
 import org.maplibre.android.camera.CameraPosition
+import com.google.android.gms.location.LocationServices
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
@@ -82,6 +86,16 @@ private val mapHintScrim = Color(0xC05D6F96)
 
 /** A request to re-frame the picker camera. [id] makes repeat selections re-fire. */
 private data class MoveRequest(val bounds: LatLngBounds, val id: Long)
+
+/**
+ * Zoom the picker opens at once the phone's position is known.
+ *
+ * MapLibre's world is 512·2^z points wide, so on a phone-sized square z5 shows
+ * roughly 700–950 km across: wide enough that a launch site a state or two away
+ * is a pan rather than a search, close enough to place yourself. Without this the
+ * picker opened wherever MapLibre defaults to, which is the whole world.
+ */
+private const val OPENING_ZOOM = 5.0
 
 @Composable
 fun DownloadMapScreen(
@@ -112,6 +126,38 @@ fun DownloadMapScreen(
     val presets = remember { LaunchSiteRepository.load(context) }
     var presetsExpanded by remember { mutableStateOf(false) }
     var moveRequest by remember { mutableStateOf<MoveRequest?>(null) }
+
+    // Open on the phone, once.  A cached last-known fix is enough to point a
+    // download picker, so this does not start location updates the way the flight
+    // map does — that screen is the one that needs to track, and this one only
+    // needs to know roughly where "here" is.
+    //
+    // Deliberately NOT re-applied: the picker reports its centre continuously
+    // through a gesture, so re-centring on every update would drag the map back
+    // out from under the user's finger.  Choosing a preset or typing a coordinate
+    // cancels it outright, so a fix landing a moment later cannot pull the camera
+    // off the site the user just picked.
+    //
+    // No fix, no move — the map simply stays where MapLibre opens it.  No invented
+    // default location: an app that opens on somebody else's launch site is worse
+    // than one that opens on the world.
+    var openingCenter by remember { mutableStateOf<LatLng?>(null) }
+    var openingCenterSpent by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        // Permission is the flight map's to ask for. Not granted here just means no
+        // fix, which is a case this already handles.
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return@LaunchedEffect
+        runCatching {
+            LocationServices.getFusedLocationProviderClient(context).lastLocation
+                .addOnSuccessListener { fix ->
+                    if (fix != null && !openingCenterSpent)
+                        openingCenter = LatLng(fix.latitude, fix.longitude)
+                }
+        }
+    }
     // The Lat, Lon box is two things in one: a readout of where the map is pointed, and
     // an entry box for pointing it somewhere. mapCenter is the readout, tracked live
     // through the gesture; latLonText is the edit buffer, which only takes over while the
@@ -137,6 +183,7 @@ fun DownloadMapScreen(
                     boundsAround(p.latitude, p.longitude, MANUAL_EXTENT_KM, MANUAL_EXTENT_KM),
                     System.nanoTime(),
                 )
+                openingCenterSpent = true   // the user has chosen; do not re-centre
                 focusManager.clearFocus()
             }
             // Unparseable: keep focus so the fix is a straight retype. Dropping focus here
@@ -179,6 +226,8 @@ fun DownloadMapScreen(
                 RegionPickerMap(
                     styleJson = styleJson,
                     moveRequest = moveRequest,
+                    openingCenter = openingCenter.takeUnless { openingCenterSpent },
+                    onOpeningCenterApplied = { openingCenterSpent = true },
                     onBoundsChanged = { bounds = it },
                     onCenterChanged = { mapCenter = it },
                     modifier = Modifier.fillMaxSize(),
@@ -226,6 +275,7 @@ fun DownloadMapScreen(
                             text = { Text("${site.name}  (${site.widthKm.toInt()}x${site.heightKm.toInt()} km)") },
                             onClick = {
                                 moveRequest = MoveRequest(site.bounds(), System.nanoTime())
+                                openingCenterSpent = true   // the user has chosen
                                 if (siteName.isBlank()) siteName = site.name
                                 presetsExpanded = false
                             },
@@ -613,6 +663,8 @@ private fun DetailPreviewMap(
 private fun RegionPickerMap(
     styleJson: String,
     moveRequest: MoveRequest?,
+    openingCenter: LatLng?,
+    onOpeningCenterApplied: () -> Unit,
     onBoundsChanged: (LatLngBounds) -> Unit,
     onCenterChanged: (LatLng) -> Unit,
     modifier: Modifier = Modifier,
@@ -645,6 +697,16 @@ private fun RegionPickerMap(
             }
         },
     )
+
+    // Open on the phone's position, at most once. Keyed on the fix as well as the map
+    // because either can arrive second: the fix may land while the screen is already up,
+    // and the map is not ready to take a camera until its style has loaded.
+    LaunchedEffect(openingCenter, mapRef) {
+        val map = mapRef ?: return@LaunchedEffect
+        val center = openingCenter ?: return@LaunchedEffect
+        map.moveCamera(CameraUpdateFactory.newLatLngZoom(center, OPENING_ZOOM))
+        onOpeningCenterApplied()
+    }
 
     // Jump the camera when a preset/coordinate is chosen. Keyed on the request (whose id
     // changes per selection) so re-picking the same site re-frames it after panning away.
