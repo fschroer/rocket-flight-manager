@@ -100,10 +100,22 @@ fun flightDataPacketLength(buffer: ByteArray): Int? {
             ((buffer[o + 7].toLong() and 0xFF) shl 8) or
             ((buffer[o + 8].toLong() and 0xFF) shl 16) or
             ((buffer[o + 9].toLong() and 0xFF) shl 24)
-    val globalStart = packetIndex.toLong() * SAMPLES_PER_PACKET
-    val count = (totalSamples - globalStart).coerceIn(1L, SAMPLES_PER_PACKET.toLong()).toInt()
-    return FLIGHT_DATA_HEADER_SIZE + COMPRESSED_HEADER_SIZE + (count - 1) * COMPRESSED_DELTA_SIZE
+    return FLIGHT_DATA_HEADER_SIZE + compressedPayloadBytes(packetIndex, totalSamples)
 }
+
+/**
+ * Samples packet [packetIndex] carries, given the transfer's [totalSamples].
+ * Every packet is full except the last, which holds the remainder.
+ */
+fun samplesInPacket(packetIndex: Int, totalSamples: Long): Int {
+    val globalStart = packetIndex.toLong() * SAMPLES_PER_PACKET
+    return (totalSamples - globalStart).coerceIn(1L, SAMPLES_PER_PACKET.toLong()).toInt()
+}
+
+/** On-wire length of packet [packetIndex]'s compressed payload: header + deltas. */
+fun compressedPayloadBytes(packetIndex: Int, totalSamples: Long): Int =
+    COMPRESSED_HEADER_SIZE +
+            (samplesInPacket(packetIndex, totalSamples) - 1) * COMPRESSED_DELTA_SIZE
 
 // ============================================================================
 //  Data classes
@@ -187,11 +199,21 @@ object FlightDataRepository {
     // payloads[i] is non-null once packet i is received; null until then.
     private val payloads = arrayOfNulls<ByteArray>(MAX_PACKETS)
 
-    // One XOR parity accumulator per group of kParityGroupSize (4) packets.
-    // parityPayloads[g] accumulates XOR of payloads for group g.
+    // The sender's XOR parity frame for each group of kParityGroupSize (4)
+    // packets, stored exactly as received and NEVER written into.  Recovery
+    // XORs the received members out of a copy (see tryRecoverMissingPackets),
+    // so it does not depend on the order the members and the parity arrived in.
+    //
+    // This used to double as an accumulator XORed on every received packet, and
+    // that is a silent data-corruption bug: a member retransmitted AFTER the
+    // parity frame landed was XORed into the stored parity and then XORed out
+    // again during recovery, so it never cancelled.  The recovered packet was
+    // garbage, decodePayload accepts any 48+ bytes, and the ACK bitmap then told
+    // the locator the packet had arrived — so it was never retransmitted and the
+    // corruption was permanent.  Reachable whenever a group of four loses two
+    // packets, which is the case parity FEC exists for.
     private val parityGroupSize = 4
-    private val parityPayloads  = Array(MAX_PACKETS / 4) { ByteArray(FLIGHT_DATA_MAX_SIZE) }
-    private val parityReceived  = BooleanArray(MAX_PACKETS / 4)
+    private val parityPayloads  = arrayOfNulls<ByteArray>(MAX_PACKETS / 4)
 
     // Reassembled samples indexed by packet: samplesByPacket[i] holds the
     // decoded samples from packet i, or null if not yet received.
@@ -214,8 +236,7 @@ object FlightDataRepository {
         totalSamples = 0L
         received.fill(false)
         payloads.fill(null)
-        parityPayloads.forEach { it.fill(0) }
-        parityReceived.fill(false)
+        parityPayloads.fill(null)
         samplesByPacket.fill(null)
         parityRecoveredCount = 0
         duplicateCount       = 0
@@ -328,13 +349,6 @@ object FlightDataRepository {
         val payloadBytes = frame.copyOfRange(o, frame.size)
         payloads[packetIndex] = payloadBytes
 
-        // XOR into parity accumulator for this packet's group
-        val group = packetIndex / parityGroupSize
-        val acc = parityPayloads[group]
-        for (b in payloadBytes.indices) {
-            if (b < acc.size) acc[b] = (acc[b].toInt() xor payloadBytes[b].toInt()).toByte()
-        }
-
         val decoded = decodePayload(payloadBytes)
         if (decoded == null) {
             Log.w(TAG, "FlightData: decode failed for packet $packetIndex")
@@ -375,18 +389,15 @@ object FlightDataRepository {
             return null
         }
 
-        if (parityReceived[groupIndex]) {
+        if (parityPayloads[groupIndex] != null) {
             SpLog.d(TAG, "FlightDataParity: duplicate parity for group $groupIndex")
             return buildAck()
         }
 
-        // Store the sender's XOR parity payload for this group.
-        // The sender XORs all member packet payloads into the parity payload.
-        // We store it separately so we can XOR our received-member accumulator
-        // against it to recover a missing packet.
-        val parityPayload = frame.copyOfRange(o, frame.size)
-        parityPayloads[groupIndex] = parityPayload.copyOf(FLIGHT_DATA_MAX_SIZE)
-        parityReceived[groupIndex] = true
+        // Store the sender's XOR of every member payload, exactly as received.
+        // Not padded out to FLIGHT_DATA_MAX_SIZE: the pad would be decoded as
+        // further CompressedDelta entries by the recovery path below.
+        parityPayloads[groupIndex] = frame.copyOfRange(o, frame.size)
         SpLog.d(TAG, "FlightDataParity: received parity for group $groupIndex")
 
         tryRecoverMissingPackets()
@@ -473,7 +484,7 @@ object FlightDataRepository {
      */
     private fun tryRecoverMissingPackets() {
         for (g in 0 until (packetCount + parityGroupSize - 1) / parityGroupSize) {
-            if (!parityReceived[g]) continue
+            val parity = parityPayloads[g] ?: continue
 
             val firstPacket = g * parityGroupSize
             val lastPacket  = minOf(firstPacket + parityGroupSize, packetCount)
@@ -484,11 +495,19 @@ object FlightDataRepository {
             val missingIndex = missing[0]
             SpLog.d(TAG, "Recovering missing packet $missingIndex via parity for group $g")
 
-            // XOR all received member payloads against the stored parity payload
-            // to reconstruct the missing payload.
-            // parityPayloads[g] already holds the sender's XOR of all members.
-            // We XOR out each received member to leave only the missing one.
-            val recovered = parityPayloads[g].copyOf()
+            // XOR all received member payloads out of a COPY of the sender's
+            // parity payload, leaving only the missing one.  The stored frame is
+            // never modified, so a member that arrives after it recovers exactly
+            // as one that arrived before it.
+            //
+            // Trimmed to the missing packet's real length first.  The parity frame
+            // always carries the full payload capacity (239 B) while a full data
+            // packet is 216 B and the last one is shorter still, so an untrimmed
+            // copy leaves the parity's own padding where decodePayload reads
+            // CompressedDelta entries — zero deltas, which decode as duplicates of
+            // the last real sample.  Every recovered packet gained a phantom
+            // sample that way, not just the short tail one.
+            val recovered = parity.copyOf(compressedPayloadBytes(missingIndex, totalSamples))
             for (p in firstPacket until lastPacket) {
                 if (p == missingIndex) continue
                 val memberPayload = payloads[p] ?: continue

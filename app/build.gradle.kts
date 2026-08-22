@@ -66,6 +66,15 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        unitTests {
+            // FlightDataRepository logs on every received packet, and SpLog is live
+            // on debug builds — which is what a unit test compiles against. Without
+            // this, the first android.util.Log call throws "not mocked" and the
+            // whole flight-data transfer layer is untestable.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 secrets {
