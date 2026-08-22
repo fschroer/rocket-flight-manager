@@ -1,6 +1,7 @@
 package com.steampigeon.flightmanager
 
 import androidx.compose.ui.geometry.Offset
+import com.steampigeon.flightmanager.ui.CHART_MARGIN_X
 import com.steampigeon.flightmanager.ui.ChartViewport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -63,7 +64,7 @@ class ChartViewportTest {
         // Invert the projection at the centroid, before and after the pinch.
         fun msUnder(v: ChartViewport): Float {
             val r = v.visibleMsRange(PLOT_W, TOTAL_MS)
-            val frac = (centroid.x - 64f /* CHART_MARGIN_X */) / PLOT_W
+            val frac = (centroid.x - CHART_MARGIN_X) / PLOT_W
             return r.start + frac * (r.endInclusive - r.start)
         }
         fun altUnder(v: ChartViewport): Float {
@@ -165,8 +166,12 @@ class ChartViewportTest {
 
         // The visible range endpoints must project back to the plot edges.
         val ms = v.visibleMsRange(PLOT_W, TOTAL_MS)
-        assertEquals(64f, v.screenXOfMs(ms.start, PLOT_W, TOTAL_MS), EPS)
-        assertEquals(64f + PLOT_W, v.screenXOfMs(ms.endInclusive, PLOT_W, TOTAL_MS), EPS)
+        assertEquals(CHART_MARGIN_X, v.screenXOfMs(ms.start, PLOT_W, TOTAL_MS), EPS)
+        assertEquals(
+            CHART_MARGIN_X + PLOT_W,
+            v.screenXOfMs(ms.endInclusive, PLOT_W, TOTAL_MS),
+            EPS,
+        )
 
         val alt = v.visibleValueRange(PLOT_H, 0f, MAX_ALT)
         assertEquals(PLOT_H, v.screenYOfValue(alt.start, PLOT_H, 0f, MAX_ALT), EPS)

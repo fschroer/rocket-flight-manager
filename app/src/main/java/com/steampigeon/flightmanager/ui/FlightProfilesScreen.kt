@@ -91,7 +91,24 @@ private const val MIN_SAMPLES_TO_CHART   = 2         // need at least two points
 //  the same plot-area arithmetic to clamp panning.
 // ============================================================================
 
-private const val CHART_MARGIN_X      = 64f   // left gutter for altitude labels
+// Left gutter for altitude labels, in PIXELS (this chart is drawn in DrawScope
+// units, not dp — see the note on CHART_AXIS_TEXT_SIZE).
+//
+// Was 64f, which clipped the first character off any label wider than 56 px: a
+// label is right-aligned to the gutter at `chartMarginX - measureText - 8`, and
+// "900m" measures about 79 px at the 32 px axis size, putting it at -23. The
+// altitude axis of an altitude chart was losing its leading digit.
+//
+// 112 covers the widest realistic integer label. Roboto digits advance ~0.556 em
+// and 'm' ~0.86 em, so a four-digit "1234m" is about 4x17.8 + 27.5 = 99 px, plus
+// the 8 px gap = 107. Four digits is the practical ceiling: 9999 m is 32,800 ft.
+// Deep zoom can still produce a decimal label ("900.5m", ~124 px) that does not
+// fit, so the draw also clamps tx at 0 — such a label butts against the plot
+// instead of losing a character, which is the failure worth having.
+// internal, not private: ChartViewport projects through it and ChartViewportTest
+// asserts against it. The test used to repeat the literal, which silently went
+// stale the moment this number moved.
+internal const val CHART_MARGIN_X     = 112f
 private const val CHART_MARGIN_Y      = 32f   // bottom gutter for time labels
 private const val CHART_AXIS_TEXT_SIZE = 32f
 private const val CHART_BODY_TEXT_SIZE = 24f
@@ -693,7 +710,10 @@ fun FlightProfilesScreen(
                                 val label = if (yGridInterval < 1f)
                                     "${gridAlt.toBigDecimal().setScale(1, RoundingMode.HALF_UP)}m"
                                 else "${gridAlt.roundToInt()}m"
-                                val tx = chartMarginX - paint.measureText(label) - 8f
+                                // Clamped so a label too wide for the gutter is
+                                // pushed right rather than cut off at x = 0.
+                                val tx = (chartMarginX - paint.measureText(label) - 8f)
+                                    .coerceAtLeast(0f)
                                 val ty = gy + chartAxisTextSize / 2f
                                 canvas.nativeCanvas.drawText(label, tx, ty, paint)
                             }
