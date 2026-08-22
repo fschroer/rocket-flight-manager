@@ -27,6 +27,7 @@ import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
 import com.steampigeon.flightmanager.data.flightDataPacketLength
 import com.steampigeon.flightmanager.data.FlightDataRepository
 import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.LocatorConfigWire
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.MsgType
 import com.steampigeon.flightmanager.data.PacketHeader
@@ -296,32 +297,8 @@ class BluetoothService : Service() {
             BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.SendFailure)
     }
 
-    fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean {
-        val configMessage = concatBytes(
-            byteArrayOf(
-                (locatorConfig.deploymentChannel1Mode ?: DeployMode.DroguePrimary).deployMode.toByte(),
-                (locatorConfig.deploymentChannel2Mode ?: DeployMode.DrogueBackup).deployMode.toByte(),
-                (locatorConfig.deploymentChannel3Mode ?: DeployMode.MainPrimary).deployMode.toByte(),
-                (locatorConfig.deploymentChannel4Mode ?: DeployMode.MainBackup).deployMode.toByte(),
-                locatorConfig.launchDetectAltitude.toByte(),
-                (locatorConfig.launchDetectAltitude / 256).toByte(),
-                locatorConfig.droguePrimaryDeployDelay.toByte(),
-                locatorConfig.drogueBackupDeployDelay.toByte(),
-                locatorConfig.mainPrimaryDeployAltitude.toByte(),
-                (locatorConfig.mainPrimaryDeployAltitude / 256).toByte(),
-                locatorConfig.mainBackupDeployAltitude.toByte(),
-                (locatorConfig.mainBackupDeployAltitude / 256).toByte(),
-                locatorConfig.deploySignalDuration.toByte(),
-                locatorConfig.loraChannel.toByte(),
-            ),
-            fillFixed(Protocol.DEVICE_NAME_LENGTH, locatorConfig.deviceName),
-            // noseAxis is last, after deviceName — same order as the firmware
-            // struct, which appends it so every existing field keeps its offset
-            // (the receiver reads loraChannel by offset to follow a channel
-            // change, ADR-0011).
-            byteArrayOf(locatorConfig.noseAxis.value.toByte()))
-        return sendMessage(MsgType.LocatorCfgChgRequest, configMessage)
-    }
+    fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean =
+        sendMessage(MsgType.LocatorCfgChgRequest, LocatorConfigWire.payload(locatorConfig))
 
     fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean =
         sendMessage(

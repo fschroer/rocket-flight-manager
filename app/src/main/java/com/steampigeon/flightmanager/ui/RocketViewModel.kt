@@ -1750,12 +1750,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     deploymentChannel2Mode = parsed.msg.deployCh2Mode,
                                     deploymentChannel3Mode = parsed.msg.deployCh3Mode,
                                     deploymentChannel4Mode = parsed.msg.deployCh4Mode,
-                                    launchDetectAltitude = 30, // To do: remove from UI
                                     droguePrimaryDeployDelay = parsed.msg.droguePrimaryDelay,
                                     drogueBackupDeployDelay = parsed.msg.drogueBackupDelay,
                                     mainPrimaryDeployAltitude = parsed.msg.mainPrimaryAltitude,
                                     mainBackupDeployAltitude = parsed.msg.mainBackupAltitude,
-                                    deploySignalDuration = 10, // To do: remove from UI
+                                    // launch_detect_altitude and deploy_signal_duration used to be
+                                    // rebuilt here with hardcoded firmware defaults, because neither
+                                    // rides in PreLaunchData.  They are gone from LocatorConfig
+                                    // entirely now: the app no longer sets either, so it no longer
+                                    // has to pretend to know them for the confirmation comparison.
                                     // A received PreLaunchData proves the locator and
                                     // receiver share a channel, and the receiver appends
                                     // that channel as receiverChannel.  Use it as the

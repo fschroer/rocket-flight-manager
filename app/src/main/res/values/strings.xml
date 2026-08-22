@@ -32,7 +32,6 @@
     <string name="channel_name">LocatorCommService</string>
     <string name="channel_description">Rocket locator communicator</string>
     <string name="decrement">Decrement</string>
-    <string name="deploy_signal_duration">Deploy Signal Duration (s)</string>
     <string name="nose_axis">Sensor Axis Along Rocket</string>
     <string name="deployment_channel_1">Deployment Channel 1</string>
     <string name="deployment_channel_2">Deployment Channel 2</string>
@@ -49,7 +48,6 @@
     <string name="download_map">Download maps</string>
     <string name="flight_profiles">Flight Profiles</string>
     <string name="increment">Increment</string>
-    <string name="launch_detect_altitude">Launch Detect Altitude (m)</string>
     <string name="locator_channel">Locator Channel to Receive</string>
     <string name="locator_satellites">Locator Satellites</string>
     <string name="locator_settings">Locator Settings</string>

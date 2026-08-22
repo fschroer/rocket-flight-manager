@@ -122,12 +122,18 @@ data class LocatorConfig(
     val deploymentChannel2Mode: DeployMode? = null,
     val deploymentChannel3Mode: DeployMode? = null,
     val deploymentChannel4Mode: DeployMode? = null,
-    val launchDetectAltitude: Int = 0,
+    // launch_detect_altitude sits here on the wire and is NOT a field of this
+    // class — see LOCATOR_CFG_RESERVED_* in the payload builder.  Neither it nor
+    // deploy_signal_duration rides in PreLaunchData, so the app can never learn
+    // what the locator holds for either, and confirmation is whole-object
+    // equality against a config rebuilt from that broadcast.  Carrying them here
+    // meant every change reported "not acknowledged" while the locator had
+    // accepted it.  The locator now keeps its own values for both.
     val droguePrimaryDeployDelay: Int = 0,
     val drogueBackupDeployDelay: Int = 0,
     val mainPrimaryDeployAltitude: Int = 0,
     val mainBackupDeployAltitude: Int = 0,
-    val deploySignalDuration: Int = 0,
+    // deploy_signal_duration sits here on the wire; see above.
     val loraChannel: Int = 0,
     val deviceName: String = "",
     // Which raw sensor axis points at the rocket's nose (ADR-0021 Decision 6, #36).

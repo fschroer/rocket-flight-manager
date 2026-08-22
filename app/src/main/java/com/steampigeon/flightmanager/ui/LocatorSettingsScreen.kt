@@ -393,18 +393,20 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(loraChannel = newConfigValue)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            ConfigurationItemNumeric(
-                configItemName = stringResource(R.string.launch_detect_altitude),
-                initialConfigValue = stagedLocatorConfig.launchDetectAltitude,
-                minValue = 10,
-                maxValue = 100,
-                configMessageState = locatorConfigMessageState,
-                modifier = modifier
-            ) { newConfigValue ->
-                stagedLocatorConfig =
-                    stagedLocatorConfig.copy(launchDetectAltitude = newConfigValue)
-                viewModel.updateLocatorConfigChanged(true)
-            }
+            // Launch-detect altitude and deploy-signal duration are deliberately NOT
+            // offered here, and that is the only thing missing from this screen.
+            // ADR-0028 is the decision; the short version is that neither field rides
+            // in PreLaunchData, so the app cannot read back what the locator holds for
+            // either, and it confirms a change by whole-object equality against a
+            // config rebuilt from the next broadcast.  Editing one therefore reported
+            // "Update not acknowledged" while the locator had accepted and saved it.
+            //
+            // Omitting the controls is what makes every OTHER field here confirmable:
+            // LocatorConfig no longer carries either field, so nothing in the
+            // comparison is a value the app had to invent.  Both slots stay on the
+            // wire as reserved bytes (LocatorConfigWire) and the locator restores its
+            // own values, so a change from this screen no longer overwrites them.
+
             // How the locator is mounted in the airframe (ADR-0021 Decision 6, #36).
             // Static per installation, but the locator cannot infer it: mounting
             // calibration finds the axis gravity lies along and calls it "up", which
@@ -419,18 +421,6 @@ fun LocatorSettingsScreen(
             )
             { newConfigValue ->
                 stagedLocatorConfig = stagedLocatorConfig.copy(noseAxis = newConfigValue as NoseAxis)
-                viewModel.updateLocatorConfigChanged(true)
-            }
-            ConfigurationItemNumeric(
-                configItemName = stringResource(R.string.deploy_signal_duration),
-                initialConfigValue = stagedLocatorConfig.deploySignalDuration.toDouble() / 10,
-                minValue = 0.5,
-                maxValue = 10.0,
-                configMessageState = locatorConfigMessageState,
-                modifier = modifier
-            ) { newConfigValue ->
-                stagedLocatorConfig =
-                    stagedLocatorConfig.copy(deploySignalDuration = (newConfigValue * 10).toInt())
                 viewModel.updateLocatorConfigChanged(true)
             }
         }
