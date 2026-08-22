@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Wherezit?</string>
+    <string name="app_name">SteamPigeon</string>
     <string name="action_arm">Arm</string>
     <string name="action_disarm">Disarm</string>
     <string name="action_rescan">Rescan</string>
