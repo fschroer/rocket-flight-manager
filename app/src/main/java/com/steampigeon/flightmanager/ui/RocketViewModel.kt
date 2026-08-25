@@ -19,6 +19,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
+import com.steampigeon.flightmanager.data.LocatorSearch as LocatorSearchData
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.LocatorConnection
@@ -117,6 +118,7 @@ sealed class ParsedMessage {
     data class VersionInfo(val msg: VersionInfoParsed)       : ParsedMessage()
     data class FlightEvents(val msg: FlightEventsData)       : ParsedMessage()
     data class ChannelSurvey(val msg: ChannelSurveyParsed)   : ParsedMessage()
+    data class LocatorSearch(val msg: LocatorSearchParsed)   : ParsedMessage()
 }
 
 /** Decoded ChannelSurveyResponse (ADR-0019 tier 3). Levels are index-by-channel. */
@@ -129,6 +131,22 @@ data class ChannelSurveyParsed(
     val confirmed: List<Int>,
     /** Locator frames decoded on each confirmed channel, index-aligned to [confirmed]. */
     val confirmedFrames: List<Int>,
+    /** Who sent the first of them, index-aligned to [confirmed]; 0 = nobody, or a
+     *  frame type carrying no id. Claimed identity, never authenticated. */
+    val confirmedLocatorIds: List<Long>,
+)
+
+/** One streamed LocatorSearchResult: a channel's outcome, or a terminator. */
+data class LocatorSearchParsed(
+    val status: LocatorSearchData.Status,
+    val channel: Int,
+    val searched: Int,
+    val total: Int,
+    val found: Boolean,
+    val armed: Boolean,
+    val rssi: Int,
+    val locatorId: Long,
+    val deviceName: String,
 )
 
 data class Vector(val distance: Int, val azimuth: Float, val ordinal: String, val elevation: Float)
@@ -182,6 +200,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // will never answer (firmware predating the survey) reports back promptly
         // instead of hanging. Must be raised with kSurveyConfirmDwellMs.
         const val SURVEY_TIMEOUT_MS = 15_000L
+
+        // A search streams, so this is not "how long the whole run takes" — it is
+        // how long a *gap* in the stream may last before the run is presumed dead.
+        // One dwell is 1.2 s, so this is several missed results, and it restarts on
+        // every message. A whole-band run is ~77 s and never trips it while it is
+        // making progress.
+        const val SEARCH_SILENCE_TIMEOUT_MS = 8_000L
 
         // How often the link verdict re-evaluates itself with no packet to trigger
         // it. Fast enough that the note and the red marker change together.
@@ -659,6 +684,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // frame may never reassign the connection on its own.
     // -------------------------------------------------------------------------
     private val _knownLocators = MutableStateFlow<Map<Long, KnownLocator>>(emptyMap())
+    /** Read-only view, so a scan result can put a name against an id and the search
+     *  can offer "which of my locators am I looking for". */
+    val knownLocators: StateFlow<Map<Long, KnownLocator>> = _knownLocators.asStateFlow()
 
     // The locator_id the app is currently connected to (null = none → sending gated off).
     private val _connectedLocatorId = MutableStateFlow<Long?>(null)
@@ -846,6 +874,131 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         ChannelSurveyData.Status.Unknown, emptyList(), _remoteReceiverConfig.value.channel,
     )
 
+    // ── Locator search (#33 follow-up) ────────────────────────────────────────
+    // null = never run this session.
+    private val _locatorSearch = MutableStateFlow<LocatorSearchData.Run?>(null)
+    val locatorSearch: StateFlow<LocatorSearchData.Run?> = _locatorSearch.asStateFlow()
+
+    private var searchTimeoutJob: Job? = null
+
+    /**
+     * Channels worth trying for [targetLocatorId], or for anything at all when it
+     * is null.
+     *
+     * Exposed so the UI can say what it is about to do before it does it — a
+     * search is seconds of deafness per channel, and "I am going to try 4, 12 and
+     * 0" is a very different proposition from an unexplained progress bar.
+     */
+    fun searchCandidates(targetLocatorId: Long? = null): List<Int> {
+        val known = _knownLocators.value
+        return LocatorSearchData.candidates(
+            currentChannel = _remoteReceiverConfig.value.channel,
+            targetChannel = targetLocatorId?.let { known[it]?.lastChannelOrNull() },
+            // Every other locator this receiver has been tuned to. A receiver shared
+            // across several rockets has been on each of their channels at some
+            // point, and that history is the whole reason the short list usually wins.
+            knownChannels = known
+                .filterKeys { it != targetLocatorId }
+                .values.mapNotNull { it.lastChannelOrNull() },
+            attemptedChannel = _pendingChannelMove.value ?: channelChangePreviousChannel
+                .takeIf { awaitingChannelRecognition },
+        )
+    }
+
+    /** A stored channel, or null when this locator has never been heard — which is
+     *  not the same as channel 0, the factory default (ADR-0025). */
+    private fun KnownLocator.lastChannelOrNull(): Int? =
+        if (hasLastChannel()) lastChannel else null
+
+    /**
+     * Start a search over [channels], or over the whole band when it is empty.
+     *
+     * [targetLocatorId] stops the run on the first frame from that locator; 0 makes
+     * it a census of everything on the listed channels. The receiver enforces its
+     * own refusals (armed, in flight, radio busy) — this only avoids sending a
+     * request we already know will be rejected.
+     */
+    fun startLocatorSearch(
+        service: BluetoothService?,
+        channels: List<Int>,
+        targetLocatorId: Long = 0L,
+    ) {
+        if (_locatorSearch.value?.running == true) return
+        val wholeBand = channels.isEmpty()
+        if (service?.requestLocatorSearch(channels, targetLocatorId) != true) {
+            _locatorSearch.value = LocatorSearchData.Run(
+                running = false, status = LocatorSearchData.Status.Unknown, wholeBand = wholeBand,
+            )
+            return
+        }
+        _locatorSearch.value = LocatorSearchData.Run(
+            running = true,
+            total = if (wholeBand) Protocol.SURVEY_CHANNEL_COUNT else channels.size,
+            wholeBand = wholeBand,
+        )
+        armSearchTimeout()
+    }
+
+    /** Ask the receiver to stop. It answers with a Cancelled terminator, so the UI
+     *  settles through the same path as a normal ending rather than a local guess. */
+    fun cancelLocatorSearch(service: BluetoothService?) {
+        if (_locatorSearch.value?.running != true) return
+        if (service?.cancelLocatorSearch() != true) {
+            // The request did not even go out, so no terminator is coming.
+            searchTimeoutJob?.cancel()
+            _locatorSearch.update {
+                it?.copy(running = false, status = LocatorSearchData.Status.Cancelled)
+            }
+        }
+    }
+
+    fun clearLocatorSearch() {
+        searchTimeoutJob?.cancel()
+        _locatorSearch.value = null
+    }
+
+    /**
+     * Restart the timeout on every streamed message rather than running one for the
+     * whole sweep. A whole-band run is ~77 s — far longer than any fixed timeout
+     * that would still catch a receiver going quiet — but it reports every 1.2 s,
+     * so silence is the thing actually worth watching.
+     */
+    private fun armSearchTimeout() {
+        searchTimeoutJob?.cancel()
+        searchTimeoutJob = viewModelScope.launch {
+            delay(SEARCH_SILENCE_TIMEOUT_MS)
+            _locatorSearch.update { run ->
+                if (run?.running != true) run
+                else run.copy(running = false, status = LocatorSearchData.Status.Unknown)
+            }
+        }
+    }
+
+    private fun onLocatorSearchResult(msg: LocatorSearchParsed) {
+        val run = _locatorSearch.value ?: return
+        if (msg.status == LocatorSearchData.Status.Progress) {
+            armSearchTimeout()
+            _locatorSearch.value = run.copy(
+                searched = msg.searched,
+                // Trust the receiver's denominator over the app's: the firmware
+                // dedupes and range-checks the list, so it may search fewer channels
+                // than were asked for.
+                total = if (msg.total > 0) msg.total else run.total,
+                hits = if (!msg.found) run.hits else run.hits + LocatorSearchData.Hit(
+                    channel = msg.channel,
+                    locatorId = msg.locatorId,
+                    deviceName = msg.deviceName,
+                    rssi = msg.rssi,
+                    armed = msg.armed,
+                ),
+            )
+            return
+        }
+        // Terminator: the run is over however it ended.
+        searchTimeoutJob?.cancel()
+        _locatorSearch.value = run.copy(running = false, status = msg.status)
+    }
+
     fun clearChannelSurvey() {
         _channelSurvey.value = null
     }
@@ -921,6 +1074,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         deviceName: String,
         baseSize: Int = Protocol.PRELAUNCH_BASE_STRUCT_SIZE,
         challengeable: Boolean = true,
+        // The channel THIS frame arrived on, straight out of the receiver's own
+        // trailer. Passed in rather than read from _remoteReceiverConfig because
+        // that flow is updated from the same frame further down, so reading it here
+        // yields the previous broadcast's channel. Usually identical and harmless —
+        // except immediately after a channel change, which is exactly when the
+        // locator may broadcast once and go quiet, leaving the search pointed at
+        // the channel it just left. Null where the message carries no channel
+        // (TelemetryData has no room for one), which falls back to the flow.
+        receiverChannel: Int? = null,
     ) {
         if (challengeable) {
             lastPrelaunchFrame = frame
@@ -950,6 +1112,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // never runs for it — and open is the default state, which made a blank
             // locator row the common case rather than the edge one.
             noteLocatorName(locatorId, deviceName)
+            // And where it was heard. This is the memory the locator search runs
+            // on: with several rockets and one receiver, "which channel was that
+            // one on again" is the question, and the app has already answered it
+            // every time it heard from each of them.
+            noteLocatorChannel(locatorId, receiverChannel)
 
             val mayConnect = LocatorConnection.mayConnect(
                 connected = _connectedLocatorId.value,
@@ -1164,35 +1331,58 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { rememberLocatorName(locatorId, deviceName) }
     }
 
-    /** Persist [label] for [locatorId], keeping any password key already held.
-     *  An id may carry a name with no key — the two are independent. */
-    private suspend fun rememberLocatorName(locatorId: Long, label: String) {
-        currentContext.userPreferencesDataStore.updateData { prefs ->
-            val existingKey = prefs.knownLocatorsMap[locatorId.toInt()]?.passwordKey ?: 0
-            prefs.toBuilder()
-                .putKnownLocators(
-                    locatorId.toInt(),
-                    KnownLocator.newBuilder()
-                        .setId(locatorId.toInt())
-                        .setPasswordKey(existingKey)
-                        .setLabel(label)
-                        .build()
-                )
-                .build()
-        }
+    /** Channels already written this session, so a 1 Hz broadcast does not mean a
+     *  DataStore write every second. */
+    private val notedLocatorChannels = mutableMapOf<Long, Int>()
+
+    /**
+     * Record the receiver's current channel as where [locatorId] was last heard.
+     *
+     * The receiver's channel, not the locator's configured one: they are the same
+     * thing whenever a broadcast actually arrives, and this one is a fact about the
+     * frame in hand rather than a setting that might not have taken effect.
+     *
+     * Written only for authorized locators, from the same branch as the name. An
+     * unauthorized broadcast is somebody else's rocket, and seeding your search
+     * with their channel would spend a dwell looking in a place you have no reason
+     * to look.
+     */
+    private fun noteLocatorChannel(locatorId: Long, receiverChannel: Int? = null) {
+        if (!knownLocatorsLoaded) return
+        val channel = receiverChannel ?: _remoteReceiverConfig.value.channel
+        if (notedLocatorChannels[locatorId] == channel) return
+        notedLocatorChannels[locatorId] = channel
+        viewModelScope.launch { updateKnownLocator(locatorId) { it.setLastChannel(channel) } }
     }
 
-    private suspend fun rememberLocator(locatorId: Long, passwordKey: Long, label: String) {
+    /** Persist [label] for [locatorId], keeping any password key already held.
+     *  An id may carry a name with no key — the two are independent. */
+    private suspend fun rememberLocatorName(locatorId: Long, label: String) =
+        updateKnownLocator(locatorId) { it.setLabel(label) }
+
+    private suspend fun rememberLocator(locatorId: Long, passwordKey: Long, label: String) =
+        updateKnownLocator(locatorId) { it.setPasswordKey(passwordKey.toInt()).setLabel(label) }
+
+    /**
+     * Merge [change] into the stored entry for [locatorId], creating it if absent.
+     *
+     * Every writer goes through here so none of them can drop a field it does not
+     * care about. Each used to rebuild the message from scratch and hand-copy the
+     * one other field that existed, which worked only while there were two: adding
+     * a third (last_channel) would have made every name update silently erase the
+     * locator's remembered channel, and the failure would have shown up as a
+     * search that had forgotten where to look.
+     */
+    private suspend fun updateKnownLocator(
+        locatorId: Long,
+        change: (KnownLocator.Builder) -> KnownLocator.Builder,
+    ) {
         currentContext.userPreferencesDataStore.updateData { prefs ->
+            val existing = prefs.knownLocatorsMap[locatorId.toInt()]
+            val builder = existing?.toBuilder()
+                ?: KnownLocator.newBuilder().setId(locatorId.toInt())
             prefs.toBuilder()
-                .putKnownLocators(
-                    locatorId.toInt(),
-                    KnownLocator.newBuilder()
-                        .setId(locatorId.toInt())
-                        .setPasswordKey(passwordKey.toInt())
-                        .setLabel(label)
-                        .build()
-                )
+                .putKnownLocators(locatorId.toInt(), change(builder).build())
                 .build()
         }
     }
@@ -1684,7 +1874,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // connected one. Dismissing the password prompt leaves the sender
                             // unauthorized, so its data is never shown (no bypass); an
                             // authorized-but-not-connected sender is likewise not shown.
-                            evaluateRecognition(locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName)
+                            evaluateRecognition(
+                                locatorMessage, parsed.msg.locatorId, parsed.msg.deviceName,
+                                receiverChannel = parsed.msg.receiverChannel,
+                            )
                             if (_connectedLocatorId.value == parsed.msg.locatorId) {
                             // Arm state is READ from the locator's stated flag, never
                             // inferred from which message arrived (ADR-0021 Decision 3,
@@ -1976,6 +2169,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             _channelSurvey.value = ChannelSurveyData.analyze(
                                 parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
                                 parsed.msg.confirmed, parsed.msg.confirmedFrames,
+                                parsed.msg.confirmedLocatorIds,
                             )
                             // The sweep left the home channel for ~1 s, so the noise-floor
                             // baseline built from before it describes a stale picture of a
@@ -1988,6 +2182,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // meanwhile. Expire it rather than let it stand in.
                             lastFloorMeasurementMs = 0L
                         }
+                        is ParsedMessage.LocatorSearch -> onLocatorSearchResult(parsed.msg)
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
                             if (ok) {
@@ -2537,6 +2732,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             MsgType.FlightData       -> ParsedMessage.FlightData(frame)
             MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
             MsgType.ChannelSurvey    -> ParsedMessage.ChannelSurvey(parseChannelSurvey(frame))
+            MsgType.LocatorSearchResult -> ParsedMessage.LocatorSearch(parseLocatorSearch(frame))
             else                     -> null
         }
     }
@@ -2684,6 +2880,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // Confirmed list, bounded against the frame like the levels above.
         var confirmed = emptyList<Int>()
         var confirmedFrames = emptyList<Int>()
+        var confirmedLocatorIds = emptyList<Long>()
         if (o < frame.size) {
             val confirmedCount = Bytes.u8(frame[o]); o += 1
             val room = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CONFIRM_COUNT)
@@ -2692,8 +2889,33 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             o += Protocol.SURVEY_CONFIRM_COUNT
             val frameRoom = ((frame.size - o).coerceAtLeast(0)).coerceAtMost(Protocol.SURVEY_CONFIRM_COUNT)
             confirmedFrames = (0 until n.coerceAtMost(frameRoom)).map { Bytes.u8(frame[o + it]) }
+            o += Protocol.SURVEY_CONFIRM_COUNT
+            // Identity per confirmed channel. Bounded like everything above it: a
+            // receiver running firmware from before this field simply ends the frame
+            // here, and the ids come back empty rather than throwing.
+            val idRoom = ((frame.size - o).coerceAtLeast(0)) / 4
+            confirmedLocatorIds = (0 until n.coerceAtMost(idRoom)).map { Bytes.u32(frame, o + it * 4) }
         }
-        return ChannelSurveyParsed(status, home, levels, confirmed, confirmedFrames)
+        return ChannelSurveyParsed(status, home, levels, confirmed, confirmedFrames, confirmedLocatorIds)
+    }
+
+    fun parseLocatorSearch(frame: ByteArray): LocatorSearchParsed {
+        var o = 6
+        val status = LocatorSearchData.Status.fromByte(Bytes.u8(frame[o])); o += 1
+        val channel = Bytes.u8(frame[o]); o += 1
+        val searched = Bytes.u8(frame[o]); o += 1
+        val total = Bytes.u8(frame[o]); o += 1
+        val found = Bytes.u8(frame[o]) != 0; o += 1
+        val armed = Bytes.u8(frame[o]) != 0; o += 1
+        val rssi = Bytes.i16(frame, o); o += 2
+        val locatorId = Bytes.u32(frame, o); o += 4
+        val nameBytes = frame.copyOfRange(o, o + Protocol.DEVICE_NAME_LENGTH)
+        val deviceName = nameBytes.takeWhile { it != 0.toByte() }
+            .toByteArray()
+            .toString(Charsets.UTF_8)
+        return LocatorSearchParsed(
+            status, channel, searched, total, found, armed, rssi, locatorId, deviceName,
+        )
     }
 
     fun parseDeploymentTest (frame: ByteArray): DeploymentTestParsed {

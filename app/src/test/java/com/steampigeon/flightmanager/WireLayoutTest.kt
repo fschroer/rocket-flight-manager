@@ -78,16 +78,42 @@ class WireLayoutTest {
     // VersionInfo: locator 64 + receiver 64 = 128
     @Test fun versionInfoPayloadSize() = assertEquals(128, Protocol.VERSION_INFO_PAYLOAD_SIZE)
 
-    // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
+    // ChannelSurveyResponse: C++ sizeof 104 → payload 98 (status 1 + channel_count 1
     // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
-    // + confirmed_frames[5]).
-    @Test fun channelSurveyPayloadSize() = assertEquals(78, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
+    // + confirmed_frames[5] + confirmed_locator_id[5] × 4).
+    @Test fun channelSurveyPayloadSize() = assertEquals(98, Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE)
     @Test fun surveyChannelCount() = assertEquals(64, Protocol.SURVEY_CHANNEL_COUNT)
     @Test fun surveyConfirmCount() = assertEquals(5, Protocol.SURVEY_CONFIRM_COUNT)
     @Test fun channelSurveyPayloadIsItsParts() =
         assertEquals(
             Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE,
-            3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + 2 * Protocol.SURVEY_CONFIRM_COUNT,
+            3 + Protocol.SURVEY_CHANNEL_COUNT + 1 + 2 * Protocol.SURVEY_CONFIRM_COUNT +
+                    4 * Protocol.SURVEY_CONFIRM_COUNT,
+        )
+
+    // Locator search (#33 follow-up). Receiver-only, like the survey — but unlike it
+    // the response STREAMS, one per channel, so a mismatch here desynchronises a
+    // message that arrives 64 times rather than once.
+    // LocatorSearchRequest: C++ sizeof 28 → payload 22 (flags 1 + channel_count 1
+    // + target_locator_id 4 + channel[16]).
+    @Test fun locatorSearchRequestPayloadSize() =
+        assertEquals(22, Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE)
+    @Test fun locatorSearchMaxChannels() =
+        assertEquals(16, Protocol.LOCATOR_SEARCH_MAX_CHANNELS)
+    @Test fun locatorSearchRequestPayloadIsItsParts() =
+        assertEquals(
+            Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE,
+            1 + 1 + 4 + Protocol.LOCATOR_SEARCH_MAX_CHANNELS,
+        )
+    // LocatorSearchResult: C++ sizeof 38 → payload 32 (status 1 + channel 1
+    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + locator_id 4
+    // + device_name[20]).
+    @Test fun locatorSearchResultPayloadSize() =
+        assertEquals(32, Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE)
+    @Test fun locatorSearchResultPayloadIsItsParts() =
+        assertEquals(
+            Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE,
+            1 + 1 + 1 + 1 + 1 + 1 + 2 + 4 + Protocol.DEVICE_NAME_LENGTH,
         )
 
     // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────

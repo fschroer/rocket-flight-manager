@@ -1,0 +1,131 @@
+package com.steampigeon.flightmanager.data
+
+/**
+ * The receiver-driven hunt for a locator whose channel you have lost, and the
+ * pure part of deciding where to look first (#33 follow-up to ADR-0019).
+ *
+ * This is the survey's opposite question and cannot share its sweep. The survey
+ * shortlists the **quietest** channels and dwells there, because it is answering
+ * "where should I move to". A locator you are looking for is by definition making
+ * noise on the channel you want, so it is shortlisted by that rule only by
+ * accident.
+ *
+ * The cost of a dwell is what shapes everything else. A locator is on air ~138 ms
+ * once per second, so a dwell shorter than a full broadcast period reads an
+ * occupied channel as empty most of the time — the coarse pass's known failure,
+ * and the reason the survey has a confirm phase at all. At ~1.2 s per channel the
+ * whole band is ~77 s, which is a long time to be deaf. Hence candidates first:
+ * a handful of channels the locator is actually likely to be on answers the usual
+ * case in seconds, and the full band stays available for when it does not.
+ */
+object LocatorSearch {
+
+    /** Mirrors the firmware's `LocatorSearchStatus`. */
+    enum class Status { Progress, Done, RefusedArmed, RefusedBusy, Cancelled, Unknown;
+        companion object {
+            fun fromByte(v: Int) = when (v) {
+                0 -> Progress
+                1 -> Done
+                2 -> RefusedArmed
+                3 -> RefusedBusy
+                4 -> Cancelled
+                else -> Unknown
+            }
+        }
+    }
+
+    /** The channel every locator ships on, so it is where a factory-reset or
+     *  freshly-flashed one will be (ADR-0025 fixes the default at 0). Always worth
+     *  a dwell: it costs one slot and covers the case where the locator's settings
+     *  did not survive. */
+    const val DEFAULT_CHANNEL = 0
+
+    /**
+     * One locator heard on one channel.
+     *
+     * [locatorId] and [deviceName] are cleartext, straight off the air, and
+     * **unauthenticated** — the receiver holds no password and never inspects the
+     * auth tag. They are here to make a hit readable ("your Redline is on 12"),
+     * not to prove anything. Recognition happens the normal way once the receiver
+     * is pointed at the channel and real broadcasts start arriving.
+     */
+    data class Hit(
+        val channel: Int,
+        val locatorId: Long,
+        val deviceName: String,
+        // Carried, not currently displayed. It is real evidence — a strong hit is a
+        // rocket nearby, a weak one is across the field — but ADR-0019 is emphatic
+        // that uncalibrated dBm must not be presented as truth, and turning it into
+        // "strong/weak" needs thresholds nobody has established. Kept on the wire and
+        // in the model so a future UI does not have to reopen the parser for it.
+        val rssi: Int,
+        val armed: Boolean,
+    )
+
+    /**
+     * A run in progress or just finished.
+     *
+     * [searched] / [total] come from the firmware rather than being counted here,
+     * so the progress shown is the receiver's real position in the sweep and not
+     * the app's guess from elapsed time.
+     */
+    data class Run(
+        val running: Boolean,
+        val searched: Int = 0,
+        val total: Int = 0,
+        val hits: List<Hit> = emptyList(),
+        /** Null while running; the terminator's status once it ends. */
+        val status: Status? = null,
+        /** True for a whole-band run, so the UI can say how long this will take. */
+        val wholeBand: Boolean = false,
+    ) {
+        val fraction: Float get() = if (total <= 0) 0f else (searched.toFloat() / total)
+
+        /** A finished run that searched everywhere it was asked to and found nothing.
+         *  The only state from which widening to the whole band makes sense. */
+        val missed: Boolean
+            get() = !running && status == Status.Done && hits.isEmpty() && !wholeBand
+    }
+
+    /**
+     * Where to look, in the order the receiver should look.
+     *
+     * Order is load-bearing only for a targeted run, and there it is worth a lot:
+     * the firmware stops on the first frame from [targetChannel]'s owner, so
+     * putting that channel first usually ends the whole thing after one dwell.
+     * Everything after it is a fallback and the ordering between those is
+     * arbitrary — the run is short enough that it does not matter.
+     *
+     * @param targetChannel  the wanted locator's last known channel, if it has one
+     * @param knownChannels  last known channels of every other locator the app has
+     *                       heard — a receiver used with several rockets has been
+     *                       tuned to each of them at some point, which is exactly
+     *                       the memory this search exists to exploit
+     * @param attemptedChannel a channel a move was staged to but never confirmed;
+     *                       the locator may have taken it while the receiver did not
+     * @param currentChannel where the receiver is sitting now. Last, not first: we
+     *                       are already here and hearing nothing. It is included at
+     *                       all because "already here" is not proof — a locator
+     *                       powered on ten seconds ago has not been waited out yet.
+     */
+    fun candidates(
+        currentChannel: Int,
+        targetChannel: Int? = null,
+        knownChannels: List<Int> = emptyList(),
+        attemptedChannel: Int? = null,
+        max: Int = Protocol.LOCATOR_SEARCH_MAX_CHANNELS,
+    ): List<Int> =
+        buildList {
+            targetChannel?.let { add(it) }
+            addAll(knownChannels)
+            attemptedChannel?.let { add(it) }
+            add(DEFAULT_CHANNEL)
+            add(currentChannel)
+        }
+            .filter { it in 0 until Protocol.SURVEY_CHANNEL_COUNT }
+            // The firmware dedupes too, because it must — it cannot trust a caller
+            // it does not control. Doing it here as well keeps the list the user is
+            // shown identical to the list that gets searched.
+            .distinct()
+            .take(max)
+}

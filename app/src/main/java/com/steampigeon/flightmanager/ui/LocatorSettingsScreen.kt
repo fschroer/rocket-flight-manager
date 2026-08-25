@@ -382,17 +382,15 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deviceName = newConfigValue.take(Protocol.DEVICE_NAME_LENGTH))
                 viewModel.updateLocatorConfigChanged(true)
             }
-            ConfigurationItemNumeric(
-                configItemName = stringResource(R.string.locator_channel),
-                initialConfigValue = stagedLocatorConfig.loraChannel,
-                minValue = 0,
-                maxValue = 63,
-                configMessageState = locatorConfigMessageState,
-                modifier = modifier
-            ) { newConfigValue ->
-                stagedLocatorConfig = stagedLocatorConfig.copy(loraChannel = newConfigValue)
-                viewModel.updateLocatorConfigChanged(true)
-            }
+            // The LoRa channel moved to the Channels screen, next to the two scans
+            // that choose one and the receiver channel that has to follow it.  This
+            // screen is flight configuration; which frequency you are talking on is a
+            // different job, and doing it here meant deciding a channel on one screen
+            // and verifying it on another.
+            //
+            // The field is gone, not the value: loraChannel still rides in this
+            // screen's config struct, read back from the broadcast, so an edit to any
+            // other setting sends the locator's current channel unchanged.
             // Launch-detect altitude and deploy-signal duration are deliberately NOT
             // offered here, and that is the only thing missing from this screen.
             // ADR-0028 is the decision; the short version is that neither field rides

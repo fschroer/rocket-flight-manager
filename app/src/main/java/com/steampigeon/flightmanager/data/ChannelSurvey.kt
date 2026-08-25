@@ -59,8 +59,20 @@ object ChannelSurvey {
     const val SUGGESTION_COUNT = 5
 
     /** [frames] is locator broadcasts DECODED on this channel during its confirm
-     *  dwell, or 0 for channels that were never confirmed. */
-    data class Ranked(val channel: Int, val level: Int, val frames: Int = 0) {
+     *  dwell, or 0 for channels that were never confirmed.
+     *
+     *  [locatorId] is who sent the first of them, as the frame CLAIMED — the
+     *  cleartext MPU UID, which the receiver forwards without checking the
+     *  password tag it has no key for. 0 means nothing decoded, or a frame type
+     *  that carries no id. Good enough to put a name against a busy channel, and
+     *  never used for anything that matters: spoofing it is trivial, and a scan
+     *  result is advice, not authorization. */
+    data class Ranked(
+        val channel: Int,
+        val level: Int,
+        val frames: Int = 0,
+        val locatorId: Long = 0L,
+    ) {
         /**
          * A decoded frame had to be transmitted on this exact channel — off-channel
          * bleed does not survive the demodulator. So this is occupancy as fact
@@ -162,6 +174,7 @@ object ChannelSurvey {
         homeChannel: Int,
         confirmedChannels: List<Int> = emptyList(),
         confirmedFrames: List<Int> = emptyList(),
+        confirmedLocatorIds: List<Long> = emptyList(),
     ): Result {
         if (status != Status.Ok || levels.isEmpty()) {
             return Result(status, emptyList(), allChannelsHot = false, uniformFloor = false,
@@ -175,7 +188,13 @@ object ChannelSurvey {
         val confirmed = confirmedChannels
             .withIndex()
             .filter { (_, ch) -> ch in levels.indices }
-            .map { (i, ch) -> Ranked(ch, levels[ch], confirmedFrames.getOrElse(i) { 0 }) }
+            .map { (i, ch) ->
+                Ranked(
+                    ch, levels[ch],
+                    confirmedFrames.getOrElse(i) { 0 },
+                    confirmedLocatorIds.getOrElse(i) { 0L },
+                )
+            }
             .sortedWith(compareBy({ it.level }, { it.channel }))
         // Judged on the confirmed set, since those are the only readings that mean
         // anything. If every channel we actually verified is loud, the receiver is

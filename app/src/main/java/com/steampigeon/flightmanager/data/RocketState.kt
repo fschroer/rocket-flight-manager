@@ -28,13 +28,27 @@ object Protocol {
     // The auth_tag is computed over exactly these bytes (with crc and auth_tag
     // zeroed); the receiver-appended RSSI/SNR/noise floor sit after and are excluded.
     const val TELEMETRY_BASE_STRUCT_SIZE = 77
-    // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
+    // ChannelSurveyResponse: C++ sizeof 104 → payload 98 (status 1 + channel_count 1
     // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
-    // + confirmed_frames[5]).
+    // + confirmed_frames[5] + confirmed_locator_id[5] x 4).
     // Receiver-only message; the locator reserves the MsgType values but never sends it.
-    const val CHANNEL_SURVEY_PAYLOAD_SIZE = 78
+    const val CHANNEL_SURVEY_PAYLOAD_SIZE = 98
     const val SURVEY_CHANNEL_COUNT = 64
     const val SURVEY_CONFIRM_COUNT = 5
+    // Locator search (#33 follow-up).  Receiver-only, like the survey.
+    // LocatorSearchRequest: C++ sizeof 28 → payload 22 (flags 1 + channel_count 1
+    // + target_locator_id 4 + channel[16]).
+    const val LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE = 22
+    // LocatorSearchResult: C++ sizeof 38 → payload 32 (status 1 + channel 1
+    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + locator_id 4
+    // + device_name[20]).
+    const val LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE = 32
+    // Candidate-list cap, mirroring the firmware's kSearchMaxChannels.  A longer
+    // list is not refused, it is truncated — by the firmware, so the app must not
+    // build one it cannot see the end of.
+    const val LOCATOR_SEARCH_MAX_CHANNELS = 16
+    /** [LocatorSearchRequest] flag: stop a run already in progress. */
+    const val LOCATOR_SEARCH_FLAG_CANCEL = 0x01
     const val RECEIVER_CONFIG_PAYLOAD_MESSAGE_SIZE = 1
     // channel (1) + name (20) + noise_floor (2) + bad_frames (1).  The trailing
     // channel status is what lets the app measure the channel while the locator is
@@ -452,7 +466,9 @@ enum class MsgType(val value: UByte) {
     FlightEvents(19u),          // Per-record flight event summary sent alongside a FlightData transfer.
     ChannelSurveyRequest(20u),  // Request from the app to the receiver to sweep the band (no locator involved).
     ChannelSurvey(21u),         // Response from the receiver with per-channel occupancy.
-    PadAlertSnoozeRequest(22u); // App→locator: suppress the prepped-and-disarmed alert for N minutes (#37).
+    PadAlertSnoozeRequest(22u), // App→locator: suppress the prepped-and-disarmed alert for N minutes (#37).
+    LocatorSearchRequest(23u),  // Request from the app to the receiver to listen on named channels (no locator involved).
+    LocatorSearchResult(24u);   // Streamed response: one per channel searched, plus a terminator.
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

@@ -341,6 +341,36 @@ class ChannelSurveyTest {
     }
 
     @Test
+    fun `the occupant of a confirmed channel is carried alongside the count`() {
+        // Identity rides index-aligned with the confirmed list, and it is what turns
+        // "channel 11 is busy" into "your other rocket is on channel 11".
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -110 }, homeChannel = 40,
+            confirmedChannels   = listOf(40, 11, 22),
+            confirmedFrames     = listOf(0, 3, 1),
+            confirmedLocatorIds = listOf(0L, 0x11223344L, 0L),
+        )
+        assertEquals(0x11223344L, r.occupied.first { it.channel == 11 }.locatorId)
+        // Occupied with no id: a frame type that carries none. Still excluded from
+        // the suggestions, because the count is what decides that, not the id.
+        assertEquals(0L, r.occupied.first { it.channel == 22 }.locatorId)
+        assertFalse(22 in r.suggestions.map { it.channel })
+    }
+
+    @Test
+    fun `a missing id list leaves the ids zero`() {
+        // A receiver flashed before identity was added ends the frame early. The
+        // sweep must still rank and exclude exactly as it did before.
+        val r = ChannelSurvey.analyze(
+            Status.Ok, List(64) { -110 }, homeChannel = 0,
+            confirmedChannels = listOf(1, 2),
+            confirmedFrames   = listOf(0, 2),
+        )
+        assertEquals(0L, r.confirmed.first { it.channel == 2 }.locatorId)
+        assertEquals(listOf(1), r.suggestions.map { it.channel })
+    }
+
+    @Test
     fun `status decodes from the wire byte`() {
         assertEquals(Status.Ok, Status.fromByte(0))
         assertEquals(Status.RefusedArmed, Status.fromByte(1))

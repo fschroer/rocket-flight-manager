@@ -801,6 +801,9 @@ fun HomeScreen(
                         onMapLoaded = { isMapLoaded = true },
                         onRescan = onRescan,
                         onSnoozePadAlert = onSnoozePadAlert,
+                        onFindLocator = {
+                            navController.navigate(NavDestination.Channels.name)
+                        },
                         hasCompass = hasCompass,
                         azimuth = azimuth,
                         lastAzimuth = lastAzimuth,
@@ -1156,8 +1159,13 @@ private fun AppDrawerContent(
 ) {
     val items = buildList {
         add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
-        if (bluetoothConnectionState == BluetoothConnectionState.Ready)
+        if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
+            // Above Receiver Settings: reached far more often, because it is where
+            // you go when something is missing rather than when something needs
+            // configuring.
+            add(DrawerItem(R.string.channels, R.drawable.radio, NavDestination.Channels))
             add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
+        }
         if (locatorActive && !armedState) {
             add(DrawerItem(R.string.locator_settings, R.drawable.navigation, NavDestination.LocatorSettings))
             add(DrawerItem(R.string.flight_profiles, R.drawable.u_turn_right, NavDestination.FlightProfiles))
@@ -1202,6 +1210,7 @@ private fun MapWithOverlays(
     locatorGPSLock: Boolean,
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
+    onFindLocator: () -> Unit,
     isMapLoaded: Boolean,
     onMapLoaded: () -> Unit,
     hasCompass: Boolean,
@@ -1507,6 +1516,7 @@ private fun MapWithOverlays(
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
                     onSnoozePadAlert = onSnoozePadAlert,
+                    onFindLocator = onFindLocator,
                     textToSpeech = textToSpeech,
                     locatorConnected = locatorConnected,
                     actionsExpanded = actionsExpanded,
@@ -2127,6 +2137,7 @@ private fun MapControlsColumn(
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
+    onFindLocator: () -> Unit,
     textToSpeech: TextToSpeech?,
     locatorConnected: Boolean = true,
     actionsExpanded: Boolean,
@@ -2432,6 +2443,29 @@ private fun MapControlsColumn(
                             .height(48.dp),
                     ) {
                         Text(stringResource(R.string.action_rescan))
+                    }
+                    // Offered exactly where the problem is noticed. Someone staring at
+                    // "No Locator" does not think "Receiver Settings", and with one
+                    // receiver and several rockets the commonest cause is not range or
+                    // interference but listening on the wrong channel — which the
+                    // channel readings cannot show, because they are measuring a
+                    // channel nobody is talking on.
+                    //
+                    // Only while the receiver is up and no locator is being heard:
+                    // with a locator on screen there is nothing to find, and with no
+                    // receiver the search has nothing to run on.
+                    if (!locatorConnected && bluetoothConnectionState == BluetoothConnectionState.Ready) {
+                        Button(
+                            onClick = {
+                                onActionsExpandedChange(false)
+                                onFindLocator()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                        ) {
+                            Text(stringResource(R.string.channels_find_locator))
+                        }
                     }
                     // Snooze appears ONLY while the alert is actually sounding, so it
                     // cannot be pressed pre-emptively to keep a rocket permanently

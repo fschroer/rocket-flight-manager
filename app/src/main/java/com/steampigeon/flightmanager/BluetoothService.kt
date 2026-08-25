@@ -254,6 +254,7 @@ class BluetoothService : Service() {
             MsgType.ReceiverInfo     -> Protocol.RECEIVER_INFO_PAYLOAD_SIZE
             MsgType.VersionInfo      -> Protocol.VERSION_INFO_PAYLOAD_SIZE
             MsgType.ChannelSurvey    -> Protocol.CHANNEL_SURVEY_PAYLOAD_SIZE
+            MsgType.LocatorSearchResult -> Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE
             MsgType.FlightData -> {
                 // Variable-length: compute the EXACT on-wire length from the packet
                 // header so the framer delimits each packet precisely. Consuming the
@@ -371,6 +372,37 @@ class BluetoothService : Service() {
     fun requestChannelSurvey(): Boolean =
         sendMessage(MsgType.ChannelSurveyRequest, null)
 
+    /** Ask the receiver to listen for locators on [channels], or on the whole band
+     *  when [channels] is empty.
+     *
+     *  [targetLocatorId] stops the run as soon as that locator is decoded. Pass 0
+     *  to report every hit instead — the only useful behaviour when the app has
+     *  never seen the locator before, since a borrowed one has no id to name.
+     *
+     *  The receiver answers with a stream of [MsgType.LocatorSearchResult]: one per
+     *  channel as it finishes, then a terminator. It refuses while the locator is
+     *  armed or flying — a whole-band run is ~77 s of deafness. */
+    fun requestLocatorSearch(channels: List<Int>, targetLocatorId: Long = 0L): Boolean {
+        val payload = ByteArray(Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE)
+        val listed = channels.take(Protocol.LOCATOR_SEARCH_MAX_CHANNELS)
+        payload[0] = 0                       // flags
+        payload[1] = listed.size.toByte()    // 0 = whole band
+        payload[2] = (targetLocatorId and 0xFF).toByte()
+        payload[3] = ((targetLocatorId shr 8) and 0xFF).toByte()
+        payload[4] = ((targetLocatorId shr 16) and 0xFF).toByte()
+        payload[5] = ((targetLocatorId shr 24) and 0xFF).toByte()
+        listed.forEachIndexed { i, ch -> payload[6 + i] = ch.toByte() }
+        return sendMessage(MsgType.LocatorSearchRequest, payload)
+    }
+
+    /** Stop a search in progress. Answered with a Cancelled terminator even when
+     *  nothing was running, so the app never waits on silence. */
+    fun cancelLocatorSearch(): Boolean {
+        val payload = ByteArray(Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE)
+        payload[0] = Protocol.LOCATOR_SEARCH_FLAG_CANCEL.toByte()
+        return sendMessage(MsgType.LocatorSearchRequest, payload)
+    }
+
     /** Ask the locator (via the receiver) for firmware version strings.
      *  The receiver forwards the request to the locator, which responds with its
      *  version; the receiver appends its own version before relaying to the app. */
@@ -401,7 +433,11 @@ class BluetoothService : Service() {
     private fun isReceiverDirected(msgType: MsgType) =
         msgType == MsgType.ReceiverCfgChgRequest ||
                 msgType == MsgType.ReceiverInfoRequest ||
-                msgType == MsgType.ChannelSurveyRequest
+                msgType == MsgType.ChannelSurveyRequest ||
+                // Same reasoning, and more load-bearing: a search is started
+                // precisely when no locator is connected, so gating it on a
+                // connection would disable it in the only state it is for.
+                msgType == MsgType.LocatorSearchRequest
 
     @SuppressLint("MissingPermission")
     private fun sendMessage(msgType: MsgType, payload: ByteArray?): Boolean {

@@ -36,4 +36,13 @@ message KnownLocator {
   fixed32 id = 1;            // locator_id (STM MPU UID)
   fixed32 password_key = 2;  // FNV-1a of the accepted password (0 = open)
   string label = 3;          // device name last seen, for display
+  // The receiver's LoRa channel the last time this locator was heard on it. Fed
+  // to the locator search as its first guess, which is the whole reason a
+  // receiver used with several rockets can find one of them in a couple of
+  // seconds rather than sweeping the band for a minute.
+  //
+  // `optional` for explicit presence, and that is not decoration: channel 0 is
+  // the factory default (ADR-0025), so plain proto3 would read "never heard"
+  // and "heard on the default channel" as the same number.
+  optional uint32 last_channel = 4;
 }
