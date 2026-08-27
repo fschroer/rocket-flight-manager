@@ -1,0 +1,38 @@
+<!-- Communication: a transmitter with signal arcs either side. Distinct from
+     radio.xml (Receiver Settings), which is the device; this is the link.
+     Geometry is hand-computed on a 24 grid: centre (12,12), arcs at r=5 and
+     r=8.5 spanning +/-55 degrees about the horizontal. Icon() tints the whole
+     drawable, so the colours here are placeholders. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M9.5,12 A2.5,2.5 0 1,1 14.5,12 A2.5,2.5 0 1,1 9.5,12 Z"
+      android:fillColor="#5f6368"/>
+  <path
+      android:pathData="M14.87,7.9 A5,5 0 0,1 14.87,16.1"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineCap="round"/>
+  <path
+      android:pathData="M9.13,7.9 A5,5 0 0,0 9.13,16.1"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineCap="round"/>
+  <path
+      android:pathData="M16.88,5.04 A8.5,8.5 0 0,1 16.88,18.96"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineCap="round"/>
+  <path
+      android:pathData="M7.12,5.04 A8.5,8.5 0 0,0 7.12,18.96"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineCap="round"/>
+</vector>

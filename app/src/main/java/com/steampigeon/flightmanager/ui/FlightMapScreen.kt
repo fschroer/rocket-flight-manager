@@ -802,7 +802,7 @@ fun HomeScreen(
                         onRescan = onRescan,
                         onSnoozePadAlert = onSnoozePadAlert,
                         onFindLocator = {
-                            navController.navigate(NavDestination.Channels.name)
+                            navController.navigate(NavDestination.Communication.name)
                         },
                         hasCompass = hasCompass,
                         azimuth = azimuth,
@@ -1157,24 +1157,27 @@ private fun AppDrawerContent(
     locatorActive: Boolean,
     onNavigate: (NavDestination) -> Unit,
 ) {
+    // Order is fschroer's, 2026-08-25; the show/hide conditions are unchanged from
+    // the version that grouped them differently, so each entry still appears in
+    // exactly the situations it did before — only its position moved.
     val items = buildList {
-        add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
-        if (bluetoothConnectionState == BluetoothConnectionState.Ready) {
-            // Above Receiver Settings: reached far more often, because it is where
-            // you go when something is missing rather than when something needs
-            // configuring.
-            add(DrawerItem(R.string.channels, R.drawable.radio, NavDestination.Channels))
-            add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
-        }
+        // First: where you go when the link is not working, which is the reason the
+        // menu gets opened in a hurry.
+        if (bluetoothConnectionState == BluetoothConnectionState.Ready)
+            add(DrawerItem(R.string.communication, R.drawable.broadcast, NavDestination.Communication))
         if (locatorActive && !armedState) {
             add(DrawerItem(R.string.locator_settings, R.drawable.navigation, NavDestination.LocatorSettings))
+            // Kept beside Locator Settings: it shares that entry's gate exactly
+            // (heard and disarmed) and is the other thing you do with a locator on
+            // the bench. Not named in the requested order, so it stays where it was.
             add(DrawerItem(R.string.flight_profiles, R.drawable.u_turn_right, NavDestination.FlightProfiles))
         }
+        if (bluetoothConnectionState == BluetoothConnectionState.Ready)
+            add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
+        add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
+        add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
-        // Last: site prep done at home on Wi-Fi, not something reached for at the pad, so it
-        // sits below the entries that track what is currently connected and armed.
-        add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
     }
 
     Column(modifier = Modifier.padding(0.dp)) {

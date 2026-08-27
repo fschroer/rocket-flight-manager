@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,9 +55,10 @@ import kotlinx.coroutines.delay
  * locator", and the tools that answer it were filed under the hardware that
  * happens to perform the search.
  *
- * The four controls here are one workflow, in the order you actually reach for
- * them: find the locator you have lost, find a channel worth moving to, point the
- * receiver by hand, move the locator by hand.
+ * The controls are one workflow, in the order you actually reach for them: find
+ * the locator you have lost, find a channel worth moving to, point the receiver by
+ * hand, move the locator by hand. The middle two appear only when they can do
+ * anything — see the gate at each.
  *
  * **Choosing from a list acts; typing a number needs Update.** A channel picked
  * out of a scan result is a decision already made — the search just established
@@ -74,7 +76,7 @@ import kotlinx.coroutines.delay
  * when one of them does not take.
  */
 @Composable
-fun ChannelsScreen(
+fun CommunicationScreen(
     viewModel: RocketViewModel = viewModel(),
     service: BluetoothService?,
     onCancelButtonClicked: () -> Unit = {},
@@ -94,6 +96,24 @@ fun ChannelsScreen(
     val locatorSearch by viewModel.locatorSearch.collectAsState()
     val knownLocators by viewModel.knownLocators.collectAsState()
     val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
+
+    // Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
+    // channel watchdog uses for "the locator has gone quiet". Deliberately not the
+    // 2 s freshness the map applies to a reading: this decides whether a whole
+    // section is on screen, and at 1 Hz a single dropped broadcast would blink it.
+    //
+    // Recomputed on a tick because silence has no event. Nothing arrives to trigger
+    // recomposition when the locator stops, so without this the section would stay
+    // on screen until something else happened to redraw it.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000L)
+            now = System.currentTimeMillis()
+        }
+    }
+    val hearingLocator = rocketState.lastMessageTime != 0L &&
+            now - rocketState.lastMessageTime < RocketViewModel.CHANNEL_WATCH_SILENCE_MS
 
     // Which locator the search should stop on; null = report everything it finds,
     // which is also the only thing that works for a borrowed locator the app has
@@ -251,38 +271,50 @@ fun ChannelsScreen(
                 },
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            // Shown only while a locator is being heard (fschroer, 2026-08-25).
+            // "Find a clean channel" is for a link that is working badly; with nothing
+            // coming through, the question is not which channel is quiet but where the
+            // rocket is, and that is the section above.
+            //
+            // This NARROWS ADR-0019, whose tier-2 addendum argued for offering the sweep
+            // from the no-locator state: it is the one instrument that catches a
+            // continuous non-LoRa emitter, which the passive path cannot see. That
+            // diagnostic is unreachable without a locator now, and ADR-0029 records the
+            // trade rather than leaving it to be rediscovered.
+            if (hearingLocator) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-            ChannelSurveySection(
-                survey = channelSurvey,
-                inProgress = surveyInProgress,
-                knownLocators = knownLocators,
-                // Ready, not Connected: Connected is a transient step the connection
-                // manager passes through on its way to Ready, so gating on it leaves
-                // the button permanently disabled.
-                enabled = bluetoothConnectionState == BluetoothConnectionState.Ready &&
-                        !surveyInProgress && locatorSearch?.running != true,
-                onScan = { viewModel.requestChannelSurvey(service) },
-                locatorConnected = locatorConnected,
-                onPick = { channel ->
-                    if (locatorConnected) {
-                        // Move the whole system. "Find a clean channel" means the rocket
-                        // goes there too — staging a receiver-only change would point the
-                        // receiver at an empty channel and strand the locator behind on
-                        // the old one (ADR-0011 invariant 1 vs 5).
-                        viewModel.moveLocatorToChannel(service, channel)
-                    } else {
-                        // Nothing to move: point the receiver, the legitimate "go look
-                        // at that channel" case. Applied on the tap for the same reason
-                        // the search's pick is — choosing from a ranked list is the
-                        // decision, not a draft of one.
-                        stagedReceiverChannel = channel
-                        receiverChannelEdited = false
-                        viewModel.pointReceiverAtChannel(service, channel)
-                    }
-                    viewModel.clearChannelSurvey()
-                },
-            )
+                ChannelSurveySection(
+                    survey = channelSurvey,
+                    inProgress = surveyInProgress,
+                    knownLocators = knownLocators,
+                    // Ready, not Connected: Connected is a transient step the connection
+                    // manager passes through on its way to Ready, so gating on it leaves
+                    // the button permanently disabled.
+                    enabled = bluetoothConnectionState == BluetoothConnectionState.Ready &&
+                            !surveyInProgress && locatorSearch?.running != true,
+                    onScan = { viewModel.requestChannelSurvey(service) },
+                    locatorConnected = locatorConnected,
+                    onPick = { channel ->
+                        if (locatorConnected) {
+                            // Move the whole system. "Find a clean channel" means the rocket
+                            // goes there too — staging a receiver-only change would point the
+                            // receiver at an empty channel and strand the locator behind on
+                            // the old one (ADR-0011 invariant 1 vs 5).
+                            viewModel.moveLocatorToChannel(service, channel)
+                        } else {
+                            // Nothing to move: point the receiver, the legitimate "go look
+                            // at that channel" case. Applied on the tap for the same reason
+                            // the search's pick is — choosing from a ranked list is the
+                            // decision, not a draft of one.
+                            stagedReceiverChannel = channel
+                            receiverChannelEdited = false
+                            viewModel.pointReceiverAtChannel(service, channel)
+                        }
+                        viewModel.clearChannelSurvey()
+                    },
+                )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 

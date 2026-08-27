@@ -66,7 +66,7 @@ import com.steampigeon.flightmanager.ui.FlightProfilesScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorPasswordDialog
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
-import com.steampigeon.flightmanager.ui.ChannelsScreen
+import com.steampigeon.flightmanager.ui.CommunicationScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
 import java.util.Locale
@@ -80,7 +80,7 @@ enum class NavDestination(@StringRes val title: Int) {
     AppSettings(title = R.string.application_settings),
     LocatorSettings(title = R.string.locator_settings),
     ReceiverSettings(title = R.string.receiver_settings),
-    Channels(title = R.string.channels),
+    Communication(title = R.string.communication),
     DeploymentTest(title = R.string.deployment_test),
     FlightProfiles(title = R.string.flight_profiles),
     Export(title = R.string.export),
@@ -383,8 +383,8 @@ fun RocketApp(
                 ReceiverSettingsScreen(viewModel, bluetoothService,
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
-            composable(route = NavDestination.Channels.name) {
-                ChannelsScreen(viewModel, bluetoothService,
+            composable(route = NavDestination.Communication.name) {
+                CommunicationScreen(viewModel, bluetoothService,
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
             composable(route = NavDestination.FlightProfiles.name) {
