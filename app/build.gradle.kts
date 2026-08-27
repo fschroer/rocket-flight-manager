@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +8,57 @@ plugins {
     id("com.google.android.libraries.mapsplatform.secrets-gradle-plugin")
     id("org.jetbrains.kotlin.plugin.noarg") version "1.8.22"
     alias(libs.plugins.protobuf)
+}
+
+/**
+ * The same version stamp the two firmwares carry, computed the same way.
+ *
+ * Mirrors `Scripts/GenVersion.sh` in the Locator and Receiver repos deliberately,
+ * down to the shape of the string: `YYYY.MM.DD-<git describe>` with `.HHMMSS`
+ * appended when the tree is dirty. The point is that the three versions a user can
+ * read off one screen each — app here, locator and receiver on their settings
+ * screens — are directly comparable, and that "which of these three is behind?"
+ * is answerable by looking at them.
+ *
+ * The dirty suffix exists for the reason the firmware script records at length: a
+ * dirty tree describes IDENTICALLY for as long as it stays dirty, so without the
+ * time of day every build made between two commits carries the same stamp and the
+ * version stops identifying the build. The time buys uniqueness, which is the only
+ * property a development build needs. A clean build gets no suffix, and that
+ * absence is the signal that the stamp names an actual commit.
+ *
+ * The build DATE, not the commit date — again matching the firmware, where the
+ * question being answered is "when was this thing built".
+ *
+ * Runs at configuration time, so it is re-evaluated on every configuration rather
+ * than cached in a task output. Falls back to "unknown" rather than failing the
+ * build: git missing, or a source drop that is not a repo, must not stop the app
+ * compiling. (Note this is not configuration-cache friendly; the project does not
+ * enable it. If that changes, this wants a ValueSource.)
+ */
+fun gitVersionStamp(): String {
+    fun git(vararg args: String): String? = try {
+        val process = ProcessBuilder(listOf("git", *args))
+            .directory(rootDir)
+            .redirectErrorStream(false)
+            .start()
+        val out = process.inputStream.bufferedReader().readText().trim()
+        process.errorStream.close()
+        if (process.waitFor() == 0 && out.isNotEmpty()) out else null
+    } catch (e: Exception) {
+        null
+    }
+
+    // --always so a repo with no tags still yields the short hash rather than
+    // failing; --long so tags, once they exist, carry their distance.
+    val describe = git("describe", "--tags", "--long", "--dirty", "--always") ?: return "unknown"
+    val now = LocalDateTime.now()
+    val stamp = now.format(DateTimeFormatter.ofPattern("yyyy.MM.dd")) + "-" + describe
+    return if (describe.endsWith("-dirty")) {
+        stamp + "." + now.format(DateTimeFormatter.ofPattern("HHmmss"))
+    } else {
+        stamp
+    }
 }
 
 android {
@@ -17,6 +71,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+        // What versionName cannot answer: WHICH build is on this phone. The two
+        // firmwares have carried a git stamp for a while and the app had nothing,
+        // so of the three halves of the system the one being changed most often was
+        // the only one that could not identify itself — which matters most across a
+        // breaking wire change, where the question is exactly "are these two in
+        // step?".
+        buildConfigField("String", "GIT_VERSION", "\"${gitVersionStamp()}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

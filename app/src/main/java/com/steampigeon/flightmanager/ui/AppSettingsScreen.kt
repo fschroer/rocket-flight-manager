@@ -36,6 +36,7 @@ import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.steampigeon.flightmanager.BuildConfig
 import com.steampigeon.flightmanager.R
 import kotlinx.coroutines.launch
 import androidx.compose.material3.MenuAnchorType
@@ -66,6 +67,15 @@ fun AppSettingsScreen(
                 .padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
+            // At the top, where the locator's and receiver's firmware versions sit
+            // on their own screens, so the three are read the same way and compare
+            // directly. A stamp ending in a time (…-dirty.HHMMSS) is a development
+            // build made from an uncommitted tree; a clean one names a commit.
+            Text(
+                text = "App version: ${BuildConfig.GIT_VERSION}",
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
             val voiceEnabled = viewModel.voiceEnabled.collectAsState().value
             Row(
                 modifier = modifier,
