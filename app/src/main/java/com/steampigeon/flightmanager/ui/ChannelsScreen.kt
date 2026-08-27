@@ -106,17 +106,26 @@ fun ChannelsScreen(
     // over there light up the Update button over here with nothing to send.
     var stagedReceiverChannel by remember { mutableIntStateOf(remoteReceiverConfig.channel) }
     var stagedLocatorChannel by remember { mutableIntStateOf(remoteLocatorConfig.loraChannel) }
+    // "The user typed here" is tracked, not derived. Deriving it from
+    // staged != remote reads correctly and behaves backwards: the sync below runs
+    // BECAUSE the device value changed, which is the moment the two are guaranteed
+    // to differ, so a derived flag is true exactly when the sync is needed and
+    // blocks it. That is what left the locator channel reading 0 — the screen
+    // composed before the locator's config had arrived, seeded 0, and then refused
+    // every update on the grounds that 0 was an edit in progress.
+    var receiverChannelEdited by remember { mutableStateOf(false) }
+    var locatorChannelEdited by remember { mutableStateOf(false) }
     val receiverChannelChanged = stagedReceiverChannel != remoteReceiverConfig.channel
     val locatorChannelChanged = stagedLocatorChannel != remoteLocatorConfig.loraChannel
 
-    // Follow the device while the user has not typed anything, so an arriving
-    // broadcast or a scan pick shows up immediately — but never overwrite a number
-    // being edited.
+    // Follow the device while the user has not typed anything, so a late-arriving
+    // config or a channel changed from elsewhere shows up immediately — but never
+    // overwrite a number being edited.
     LaunchedEffect(remoteReceiverConfig.channel) {
-        if (!receiverChannelChanged) stagedReceiverChannel = remoteReceiverConfig.channel
+        if (!receiverChannelEdited) stagedReceiverChannel = remoteReceiverConfig.channel
     }
     LaunchedEffect(remoteLocatorConfig.loraChannel) {
-        if (!locatorChannelChanged) stagedLocatorChannel = remoteLocatorConfig.loraChannel
+        if (!locatorChannelEdited) stagedLocatorChannel = remoteLocatorConfig.loraChannel
     }
 
     LaunchedEffect(Unit) {
@@ -234,6 +243,7 @@ fun ChannelsScreen(
                     // The staged value moves with it, or the field below would sit at
                     // the old number offering to undo what this just did.
                     stagedReceiverChannel = channel
+                    receiverChannelEdited = false
                     viewModel.pointReceiverAtChannel(service, channel)
                     // Results are deliberately NOT cleared: the hit just acted on is
                     // the thing worth still seeing, and the row now reports that the
@@ -267,6 +277,7 @@ fun ChannelsScreen(
                         // the search's pick is — choosing from a ranked list is the
                         // decision, not a draft of one.
                         stagedReceiverChannel = channel
+                        receiverChannelEdited = false
                         viewModel.pointReceiverAtChannel(service, channel)
                     }
                     viewModel.clearChannelSurvey()
@@ -290,6 +301,7 @@ fun ChannelsScreen(
                 modifier = Modifier
             ) { newConfigValue ->
                 stagedReceiverChannel = newConfigValue
+                receiverChannelEdited = true
             }
             ChannelNote(
                 stringResource(R.string.channels_receiver_explainer),
@@ -324,7 +336,10 @@ fun ChannelsScreen(
                 // lives on Receiver Settings and rides in this same message, so sending
                 // a locally-staged copy of the whole struct would let this screen
                 // quietly revert a rename made over there.
-                onApply = { viewModel.pointReceiverAtChannel(service, stagedReceiverChannel) },
+                onApply = {
+                    receiverChannelEdited = false
+                    viewModel.pointReceiverAtChannel(service, stagedReceiverChannel)
+                },
             )
 
             // ── Locator channel ─────────────────────────────────────────────────
@@ -342,6 +357,7 @@ fun ChannelsScreen(
                     modifier = Modifier
                 ) { newConfigValue ->
                     stagedLocatorChannel = newConfigValue
+                    locatorChannelEdited = true
                 }
                 ChannelNote(
                     stringResource(R.string.channels_locator_explainer),
@@ -370,6 +386,7 @@ fun ChannelsScreen(
                             locatorConfigMessageState == LocatorMessageState.Idle,
                     messageState = locatorConfigMessageState,
                     onApply = {
+                        locatorChannelEdited = false
                         // The same call the survey's "Move here" makes, deliberately:
                         // one mechanism with two entry points rather than a second path
                         // to the same wire message. It carries the ADR-0011 confirm and
