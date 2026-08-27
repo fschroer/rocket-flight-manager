@@ -506,7 +506,11 @@ internal fun ChannelSurveySection(
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = onScan, enabled = enabled) {
+            // Filled, like Update: these start work rather than offering a choice,
+            // and the outlined style read as secondary next to the fields below.
+            // "Return to main" stays outlined — it is the one control here that does
+            // nothing to the hardware.
+            Button(onClick = onScan, enabled = enabled) {
                 Text(
                     stringResource(
                         if (inProgress) R.string.survey_scanning else R.string.survey_scan
@@ -738,7 +742,7 @@ internal fun LocatorSearchSection(
                 MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            OutlinedButton(onClick = { onSearch(candidates) }, enabled = enabled) {
+            Button(onClick = { onSearch(candidates) }, enabled = enabled) {
                 Text(stringResource(R.string.search_start, candidates.size))
             }
         }
@@ -809,7 +813,7 @@ internal fun LocatorSearchSection(
                     stringResource(R.string.search_none),
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedButton(
+                Button(
                     onClick = { onSearch(emptyList()) },
                     enabled = enabled,
                     modifier = Modifier.padding(top = 4.dp),

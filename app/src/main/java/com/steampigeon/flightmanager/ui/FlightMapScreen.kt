@@ -1166,11 +1166,12 @@ private fun AppDrawerContent(
         if (bluetoothConnectionState == BluetoothConnectionState.Ready)
             add(DrawerItem(R.string.communication, R.drawable.broadcast, NavDestination.Communication))
         if (locatorActive && !armedState) {
-            add(DrawerItem(R.string.locator_settings, R.drawable.navigation, NavDestination.LocatorSettings))
-            // Kept beside Locator Settings: it shares that entry's gate exactly
-            // (heard and disarmed) and is the other thing you do with a locator on
-            // the bench. Not named in the requested order, so it stays where it was.
+            // Flight Profiles ahead of Locator Settings (fschroer, 2026-08-25). The
+            // two share a gate exactly — heard and disarmed — so they always appear
+            // and disappear together; only their order between themselves is a
+            // choice, and this is it.
             add(DrawerItem(R.string.flight_profiles, R.drawable.u_turn_right, NavDestination.FlightProfiles))
+            add(DrawerItem(R.string.locator_settings, R.drawable.navigation, NavDestination.LocatorSettings))
         }
         if (bluetoothConnectionState == BluetoothConnectionState.Ready)
             add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
