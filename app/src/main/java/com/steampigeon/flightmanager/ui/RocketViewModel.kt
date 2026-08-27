@@ -952,6 +952,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Point the receiver at [channel] now.
+     *
+     * The single apply path for a receiver-only channel change: the search's "Point
+     * receiver", the survey's pick when no locator is connected, and the manual
+     * field's Update all land here. They were three call sites doing the same four
+     * steps, which is how one of them came to *stage* the change and leave the user
+     * hunting for an Update button in another section to finish a decision they had
+     * already made by choosing a channel from a list.
+     *
+     * Recognition is armed first, so the next PreLaunchData on the new channel is
+     * recognized, challenged for a password, or reverted (ADR-0011). That is what
+     * makes applying immediately safe rather than reckless: pointing at a locator
+     * the app does not know still has to get past the password prompt, and a channel
+     * with nothing on it reverts.
+     *
+     * A no-op when the receiver is already there, so a button press cannot start a
+     * confirm cycle that has nothing to confirm.
+     */
+    fun pointReceiverAtChannel(service: BluetoothService?, channel: Int) {
+        val remote = _remoteReceiverConfig.value
+        if (channel == remote.channel) return
+        if (_receiverConfigMessageState.value != LocatorMessageState.Idle) return
+        beginChannelChangeRecognition(remote.channel)
+        updateReceiverConfigMessageState(LocatorMessageState.SendRequested)
+        val target = remote.copy(channel = channel)
+        updateReceiverConfigMessageState(
+            if (service?.changeReceiverConfig(target) == true) LocatorMessageState.Sent
+            else LocatorMessageState.SendFailure
+        )
+        updateReceiverConfigState(target)
+    }
+
     fun clearLocatorSearch() {
         searchTimeoutJob?.cancel()
         _locatorSearch.value = null

@@ -56,10 +56,15 @@ import kotlinx.coroutines.delay
  *
  * The four controls here are one workflow, in the order you actually reach for
  * them: find the locator you have lost, find a channel worth moving to, point the
- * receiver by hand, move the locator by hand. Keeping them together is not only
- * tidiness — [LocatorSearchSection]'s "Point receiver" stages a channel that the
- * receiver Update button applies, and separating those two put half a workflow on
- * each of two screens.
+ * receiver by hand, move the locator by hand.
+ *
+ * **Choosing from a list acts; typing a number needs Update.** A channel picked
+ * out of a scan result is a decision already made — the search just established
+ * that the locator is on 48, and there is nothing left to confirm — so the button
+ * applies. A number being typed has no such moment, since every keystroke is a
+ * valid channel, so the field keeps an Update button. The first cut staged the
+ * picks as well, which meant tapping "Point receiver" appeared to do nothing and
+ * left the real action in a different section of the screen.
  *
  * **Two devices, two Update buttons, deliberately.** The receiver's channel and
  * the locator's channel are different messages with different acknowledgment paths
@@ -220,12 +225,19 @@ fun ChannelsScreen(
                     viewModel.startLocatorSearch(service, channels, searchTargetId ?: 0L)
                 },
                 onCancel = { viewModel.cancelLocatorSearch(service) },
+                currentChannel = remoteReceiverConfig.channel,
                 onPick = { channel ->
                     // Receiver-only, always. The locator is already ON that channel —
                     // that is what the search just established — so moving it would be
                     // the one action guaranteed to lose it again.
+                    //
+                    // The staged value moves with it, or the field below would sit at
+                    // the old number offering to undo what this just did.
                     stagedReceiverChannel = channel
-                    viewModel.clearLocatorSearch()
+                    viewModel.pointReceiverAtChannel(service, channel)
+                    // Results are deliberately NOT cleared: the hit just acted on is
+                    // the thing worth still seeing, and the row now reports that the
+                    // receiver is there.
                 },
             )
 
@@ -250,9 +262,12 @@ fun ChannelsScreen(
                         // the old one (ADR-0011 invariant 1 vs 5).
                         viewModel.moveLocatorToChannel(service, channel)
                     } else {
-                        // Nothing to move: stage the receiver-only change, the legitimate
-                        // "go look at that channel" case.
+                        // Nothing to move: point the receiver, the legitimate "go look
+                        // at that channel" case. Applied on the tap for the same reason
+                        // the search's pick is — choosing from a ranked list is the
+                        // decision, not a draft of one.
                         stagedReceiverChannel = channel
+                        viewModel.pointReceiverAtChannel(service, channel)
                     }
                     viewModel.clearChannelSurvey()
                 },
@@ -304,23 +319,12 @@ fun ChannelsScreen(
                 enabled = receiverChannelChanged &&
                         receiverConfigMessageState == LocatorMessageState.Idle,
                 messageState = receiverConfigMessageState,
-                onApply = {
-                    // A channel change points the receiver at a (possibly different)
-                    // locator. Arm recognition first so the next PreLaunchData on the new
-                    // channel is recognized, challenged for a password, or reverted.
-                    viewModel.beginChannelChangeRecognition(remoteReceiverConfig.channel)
-                    viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendRequested)
-                    // Built from the last read-back, changing only this screen's field.
-                    // The name lives on Receiver Settings and rides in the same message,
-                    // so sending a locally-staged copy of the whole struct would let this
-                    // screen quietly revert a rename made over there.
-                    val target = remoteReceiverConfig.copy(channel = stagedReceiverChannel)
-                    if (service?.changeReceiverConfig(target) == true)
-                        viewModel.updateReceiverConfigMessageState(LocatorMessageState.Sent)
-                    else
-                        viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendFailure)
-                    viewModel.updateReceiverConfigState(target)
-                },
+                // Same call the two pick buttons make. It builds the message from the
+                // last read-back and changes only the channel — the receiver's name
+                // lives on Receiver Settings and rides in this same message, so sending
+                // a locally-staged copy of the whole struct would let this screen
+                // quietly revert a rename made over there.
+                onApply = { viewModel.pointReceiverAtChannel(service, stagedReceiverChannel) },
             )
 
             // ── Locator channel ─────────────────────────────────────────────────
@@ -618,6 +622,7 @@ internal fun LocatorSearchSection(
     onSearch: (List<Int>) -> Unit,
     onCancel: () -> Unit,
     onPick: (Int) -> Unit,
+    currentChannel: Int,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
         Text(
@@ -711,8 +716,19 @@ internal fun LocatorSearchSection(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = { onPick(hit.channel) }) {
-                    Text(stringResource(R.string.search_point_receiver))
+                // The receiver's own channel is the acknowledgment: it is read back
+                // from the device (ReceiverInfo, or the next broadcast), so this flips
+                // when the move has actually landed rather than when it was requested.
+                if (hit.channel == currentChannel) {
+                    Text(
+                        text = stringResource(R.string.search_receiver_here),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    TextButton(onClick = { onPick(hit.channel) }) {
+                        Text(stringResource(R.string.search_point_receiver))
+                    }
                 }
             }
         }
