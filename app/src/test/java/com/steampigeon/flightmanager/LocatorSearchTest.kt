@@ -16,6 +16,9 @@ import org.junit.Test
  */
 class LocatorSearchTest {
 
+    private val ours = 0x11111111L
+    private val theirs = 0x22222222L
+
     @Test fun targetChannelIsSearchedFirst() {
         // The firmware stops on the first frame from the target, so the ordering is
         // the difference between one dwell and all of them.
@@ -109,6 +112,57 @@ class LocatorSearchTest {
         assertFalse(
             short.copy(hits = listOf(LocatorSearch.Hit(4, 1L, "x", -70, false))).missed
         )
+    }
+
+    @Test fun `a targeted run that finds somebody else has still missed`() {
+        // The case the feature exists for: hunting Prometheus while Twist 0 is audible
+        // on the current channel. Counting hits calls that success and leaves the user
+        // hunting a locator the app believes it already found.
+        val run = LocatorSearch.Run(
+            running = false, searched = 6, total = 6,
+            status = LocatorSearch.Status.Done, wholeBand = false,
+            targetLocatorId = ours,
+            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, false)),
+        )
+        assertTrue(run.missed)
+        assertTrue(run.canWiden)
+    }
+
+    @Test fun `a targeted run that finds the target has not missed`() {
+        val run = LocatorSearch.Run(
+            running = false, searched = 1, total = 6,
+            status = LocatorSearch.Status.Done, wholeBand = false,
+            targetLocatorId = ours,
+            hits = listOf(LocatorSearch.Hit(48, ours, "Prometheus", -55, false)),
+        )
+        assertFalse(run.missed)
+        // Still widenable: finding it does not prove there is nothing else worth a look.
+        assertTrue(run.canWiden)
+    }
+
+    @Test fun `an untargeted run that finds anything has not missed`() {
+        val run = LocatorSearch.Run(
+            running = false, searched = 6, total = 6,
+            status = LocatorSearch.Status.Done, wholeBand = false,
+            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, false)),
+        )
+        assertFalse(run.missed)
+        assertTrue(run.canWiden)
+    }
+
+    @Test fun `widening is offered after any completed short run`() {
+        val base = LocatorSearch.Run(
+            running = false, searched = 6, total = 6,
+            status = LocatorSearch.Status.Done, wholeBand = false,
+        )
+        assertTrue(base.canWiden)
+        assertTrue(base.copy(hits = listOf(LocatorSearch.Hit(1, theirs, "x", -70, false))).canWiden)
+        // But not while it is still going, not after a whole-band run, and not after a
+        // cancel — answering "stop" with an 80-second sweep is not reading the room.
+        assertFalse(base.copy(running = true).canWiden)
+        assertFalse(base.copy(wholeBand = true).canWiden)
+        assertFalse(base.copy(status = LocatorSearch.Status.Cancelled).canWiden)
+        assertFalse(base.copy(status = LocatorSearch.Status.RefusedArmed).canWiden)
     }
 
     @Test fun progressFractionSurvivesAnEmptyRun() {

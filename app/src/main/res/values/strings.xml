@@ -117,6 +117,7 @@
     <string name="search_receiver_here">Receiver is here</string>
     <string name="search_receiver_only">Pointing the receiver takes effect straight away. Your locator stays where it is, and you will be asked for its password if the app does not know it yet.</string>
     <string name="search_none">Nothing found on those channels.</string>
+    <string name="search_target_not_found">%1$s was not on those channels.</string>
     <string name="search_widen">Search all 64 channels (about 80 seconds)</string>
     <string name="search_none_band">Nothing found anywhere in the band. Check that the locator is powered on and within range.</string>
     <string name="search_cancelled">Search stopped.</string>

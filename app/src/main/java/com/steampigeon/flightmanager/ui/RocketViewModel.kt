@@ -935,6 +935,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             running = true,
             total = if (wholeBand) Protocol.SURVEY_CHANNEL_COUNT else channels.size,
             wholeBand = wholeBand,
+            targetLocatorId = targetLocatorId,
         )
         armSearchTimeout()
     }

@@ -806,13 +806,26 @@ internal fun LocatorSearchSection(
                 )
                 else -> Unit
             }
-            // Widening is offered, never automatic. It is ~80 s of a deaf receiver,
-            // which is a decision the user makes knowing what it costs.
-            if (run.missed) {
-                ChannelNote(
-                    stringResource(R.string.search_none),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Widening is offered after ANY completed short run, never automatically.
+            // It is ~80 s of a deaf receiver, so it stays a decision the user makes
+            // knowing what it costs — but it has to be reachable. Gating it behind an
+            // empty result meant that while any locator was audible there was no way
+            // to sweep the band at all, which is precisely the multi-rocket case.
+            if (run.canWiden) {
+                // Said only when the run failed at its actual job. A targeted run that
+                // turned up somebody else has not succeeded, and naming the locator is
+                // clearer than "nothing found" when the screen is showing a hit.
+                if (run.missed) {
+                    val wanted = run.targetLocatorId
+                        .takeIf { it != 0L }
+                        ?.let { knownLocators[it]?.label?.takeIf { n -> n.isNotEmpty() } }
+                    ChannelNote(
+                        if (wanted != null)
+                            stringResource(R.string.search_target_not_found, wanted)
+                        else stringResource(R.string.search_none),
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Button(
                     onClick = { onSearch(emptyList()) },
                     enabled = enabled,

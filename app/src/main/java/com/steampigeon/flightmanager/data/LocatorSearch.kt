@@ -78,13 +78,42 @@ object LocatorSearch {
         val status: Status? = null,
         /** True for a whole-band run, so the UI can say how long this will take. */
         val wholeBand: Boolean = false,
+        /** The locator this run was told to stop on, or 0 for a census. Carried so
+         *  [missed] can ask the question that actually matters — see below. */
+        val targetLocatorId: Long = 0L,
     ) {
         val fraction: Float get() = if (total <= 0) 0f else (searched.toFloat() / total)
 
-        /** A finished run that searched everywhere it was asked to and found nothing.
-         *  The only state from which widening to the whole band makes sense. */
+        /**
+         * A finished short run that did not find **what it was looking for**.
+         *
+         * With a target named, that means no hit carried its id — *whatever else*
+         * turned up. Defining a miss as "found nothing at all" reads sensibly and
+         * fails in the case this feature exists for: hunting Prometheus while Twist 0
+         * is audible on the current channel, the run finds Twist 0, and a hit-count
+         * test calls that success. The user is then hunting a locator the app has
+         * decided it already found.
+         */
         val missed: Boolean
-            get() = !running && status == Status.Done && hits.isEmpty() && !wholeBand
+            get() = canWiden && if (targetLocatorId != 0L) {
+                hits.none { it.locatorId == targetLocatorId }
+            } else {
+                hits.isEmpty()
+            }
+
+        /**
+         * Whether widening to the whole band is a coherent next step.
+         *
+         * Any **completed** short run qualifies, not only a missed one: finding some
+         * locator is not evidence that the one you want is not out there, and gating
+         * the band sweep behind an empty result left no way to reach it at all while
+         * anything was audible.
+         *
+         * A *cancelled* run does not qualify — the user just stopped a search, and
+         * answering that by offering an 80-second one is not reading the room.
+         */
+        val canWiden: Boolean
+            get() = !running && status == Status.Done && !wholeBand
     }
 
     /**
