@@ -39,10 +39,10 @@ object Protocol {
     // LocatorSearchRequest: C++ sizeof 28 → payload 22 (flags 1 + channel_count 1
     // + target_locator_id 4 + channel[16]).
     const val LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE = 22
-    // LocatorSearchResult: C++ sizeof 38 → payload 32 (status 1 + channel 1
-    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + locator_id 4
+    // LocatorSearchResult: C++ sizeof 39 → payload 33 (status 1 + channel 1
+    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + snr 1 + locator_id 4
     // + device_name[20]).
-    const val LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE = 32
+    const val LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE = 33
     // Candidate-list cap, mirroring the firmware's kSearchMaxChannels.  A longer
     // list is not refused, it is truncated — by the firmware, so the app must not
     // build one it cannot see the end of.

@@ -53,12 +53,22 @@ object LocatorSearch {
         val channel: Int,
         val locatorId: Long,
         val deviceName: String,
-        // Carried, not currently displayed. It is real evidence — a strong hit is a
-        // rocket nearby, a weak one is across the field — but ADR-0019 is emphatic
-        // that uncalibrated dBm must not be presented as truth, and turning it into
-        // "strong/weak" needs thresholds nobody has established. Kept on the wire and
-        // in the model so a future UI does not have to reopen the parser for it.
+        // Shown on the hit row, in the same form and with the same colour scales the
+        // status panel already uses for the connected locator.
+        //
+        // An earlier comment here claimed ADR-0019 forbade displaying this. That
+        // conflated two different measurements: the ADR's rule is about the survey's
+        // uncalibrated CHANNEL LEVEL near the noise floor, not about a decoded
+        // packet's RSSI, which this app has displayed since long before the search
+        // existed.
+        //
+        // Both numbers, because neither decides alone. A locator a few feet from the
+        // receiver is heard on channels it is nowhere near, and that artifact reads
+        // as strong; SNR is what separates it from a genuine occupant. Bench
+        // 2026-08-27 hit exactly that — one locator reported on two channels — and
+        // relocating it 15-20 ft was the only way to tell which was real.
         val rssi: Int,
+        val snr: Int,
         val armed: Boolean,
     )
 

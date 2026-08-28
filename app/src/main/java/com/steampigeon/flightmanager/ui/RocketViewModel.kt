@@ -145,6 +145,7 @@ data class LocatorSearchParsed(
     val found: Boolean,
     val armed: Boolean,
     val rssi: Int,
+    val snr: Int,
     val locatorId: Long,
     val deviceName: String,
 )
@@ -1023,6 +1024,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                     locatorId = msg.locatorId,
                     deviceName = msg.deviceName,
                     rssi = msg.rssi,
+                    snr = msg.snr,
                     armed = msg.armed,
                 ),
             )
@@ -2942,13 +2944,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         val found = Bytes.u8(frame[o]) != 0; o += 1
         val armed = Bytes.u8(frame[o]) != 0; o += 1
         val rssi = Bytes.i16(frame, o); o += 2
+        val snr = Bytes.i8(frame[o]); o += 1
         val locatorId = Bytes.u32(frame, o); o += 4
         val nameBytes = frame.copyOfRange(o, o + Protocol.DEVICE_NAME_LENGTH)
         val deviceName = nameBytes.takeWhile { it != 0.toByte() }
             .toByteArray()
             .toString(Charsets.UTF_8)
         return LocatorSearchParsed(
-            status, channel, searched, total, found, armed, rssi, locatorId, deviceName,
+            status, channel, searched, total, found, armed, rssi, snr, locatorId, deviceName,
         )
     }
 

@@ -70,7 +70,7 @@ class ChannelOccupancyTest {
         val r = survey(12 to theirs, home = 34)
         val search = LocatorSearch.Run(
             running = false, status = LocatorSearch.Status.Done,
-            hits = listOf(LocatorSearch.Hit(12, 0x33333333L, "Testy McTestface", -60, false)),
+            hits = listOf(LocatorSearch.Hit(12, 0x33333333L, "Testy McTestface", -60, 8, false)),
         )
         assertEquals(
             "Testy McTestface",
@@ -82,7 +82,7 @@ class ChannelOccupancyTest {
         // Not only the survey path: a search run while connected finds us as readily.
         val search = LocatorSearch.Run(
             running = false, status = LocatorSearch.Status.Done,
-            hits = listOf(LocatorSearch.Hit(34, ours, "Twist 0", -50, false)),
+            hits = listOf(LocatorSearch.Hit(34, ours, "Twist 0", -50, 8, false)),
         )
         assertNull(ChannelOccupancy.occupantOf(34, null, search, excludeLocatorId = ours))
     }

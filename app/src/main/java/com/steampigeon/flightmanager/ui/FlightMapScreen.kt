@@ -3026,7 +3026,7 @@ private fun LinkQualityNote(text: String, color: Color, width: Dp) {
 
 // ── RSSI signal strength color ────────────────────────────────────────────────
 
-private fun rssiColor(rssi: Int): Color = when {
+internal fun rssiColor(rssi: Int): Color = when {
     rssi >= -80  -> Color(0xFF4CAF50)  // green  — excellent
     rssi >= -100 -> Color(0xFFFFC107)  // amber  — good
     rssi >= -110 -> Color(0xFFFF9800)  // orange — fair
@@ -3044,7 +3044,7 @@ private fun rssiColor(rssi: Int): Color = when {
 // verdict under this row, which stays silent unless the signal is *also* strong
 // (ADR-0019). Coloring SNR by the interference rule would put the apogee false
 // alarm back in, as color instead of text.
-private fun snrColor(snr: Int): Color = when {
+internal fun snrColor(snr: Int): Color = when {
     snr >= 5  -> Color(0xFF4CAF50)  // green  — wide margin
     snr >= 0  -> Color(0xFFFFC107)  // amber  — comfortable
     snr >= -5 -> Color(0xFFFF9800)  // orange — thinning

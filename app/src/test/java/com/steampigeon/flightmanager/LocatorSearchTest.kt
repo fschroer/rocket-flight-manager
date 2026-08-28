@@ -110,7 +110,7 @@ class LocatorSearchTest {
         // A refusal is not a miss: nothing was searched, so there is nothing to widen.
         assertFalse(short.copy(status = LocatorSearch.Status.RefusedArmed).missed)
         assertFalse(
-            short.copy(hits = listOf(LocatorSearch.Hit(4, 1L, "x", -70, false))).missed
+            short.copy(hits = listOf(LocatorSearch.Hit(4, 1L, "x", -70, 8, false))).missed
         )
     }
 
@@ -122,7 +122,7 @@ class LocatorSearchTest {
             running = false, searched = 6, total = 6,
             status = LocatorSearch.Status.Done, wholeBand = false,
             targetLocatorId = ours,
-            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, false)),
+            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, 8, false)),
         )
         assertTrue(run.missed)
         assertTrue(run.canWiden)
@@ -133,7 +133,7 @@ class LocatorSearchTest {
             running = false, searched = 1, total = 6,
             status = LocatorSearch.Status.Done, wholeBand = false,
             targetLocatorId = ours,
-            hits = listOf(LocatorSearch.Hit(48, ours, "Prometheus", -55, false)),
+            hits = listOf(LocatorSearch.Hit(48, ours, "Prometheus", -55, 8, false)),
         )
         assertFalse(run.missed)
         // Still widenable: finding it does not prove there is nothing else worth a look.
@@ -144,7 +144,7 @@ class LocatorSearchTest {
         val run = LocatorSearch.Run(
             running = false, searched = 6, total = 6,
             status = LocatorSearch.Status.Done, wholeBand = false,
-            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, false)),
+            hits = listOf(LocatorSearch.Hit(34, theirs, "Twist 0", -60, 8, false)),
         )
         assertFalse(run.missed)
         assertTrue(run.canWiden)
@@ -156,7 +156,7 @@ class LocatorSearchTest {
             status = LocatorSearch.Status.Done, wholeBand = false,
         )
         assertTrue(base.canWiden)
-        assertTrue(base.copy(hits = listOf(LocatorSearch.Hit(1, theirs, "x", -70, false))).canWiden)
+        assertTrue(base.copy(hits = listOf(LocatorSearch.Hit(1, theirs, "x", -70, 8, false))).canWiden)
         // But not while it is still going, not after a whole-band run, and not after a
         // cancel — answering "stop" with an 80-second sweep is not reading the room.
         assertFalse(base.copy(running = true).canWiden)

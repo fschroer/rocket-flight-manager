@@ -105,15 +105,15 @@ class WireLayoutTest {
             Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE,
             1 + 1 + 4 + Protocol.LOCATOR_SEARCH_MAX_CHANNELS,
         )
-    // LocatorSearchResult: C++ sizeof 38 → payload 32 (status 1 + channel 1
-    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + locator_id 4
+    // LocatorSearchResult: C++ sizeof 39 → payload 33 (status 1 + channel 1
+    // + searched 1 + total 1 + found 1 + armed 1 + rssi 2 + snr 1 + locator_id 4
     // + device_name[20]).
     @Test fun locatorSearchResultPayloadSize() =
-        assertEquals(32, Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE)
+        assertEquals(33, Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE)
     @Test fun locatorSearchResultPayloadIsItsParts() =
         assertEquals(
             Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE,
-            1 + 1 + 1 + 1 + 1 + 1 + 2 + 4 + Protocol.DEVICE_NAME_LENGTH,
+            1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 4 + Protocol.DEVICE_NAME_LENGTH,
         )
 
     // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────

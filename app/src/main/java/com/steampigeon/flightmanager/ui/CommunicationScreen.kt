@@ -760,15 +760,35 @@ internal fun LocatorSearchSection(
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = when {
-                        name == null -> stringResource(R.string.search_hit_unknown, hit.channel)
-                        hit.armed -> stringResource(R.string.search_hit_armed, name, hit.channel)
-                        else -> stringResource(R.string.search_hit, name, hit.channel)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            name == null -> stringResource(R.string.search_hit_unknown, hit.channel)
+                            hit.armed -> stringResource(R.string.search_hit_armed, name, hit.channel)
+                            else -> stringResource(R.string.search_hit, name, hit.channel)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    // Both numbers, in the status panel's format and colours. Neither
+                    // decides alone: a locator a few feet from the receiver is heard on
+                    // channels it is nowhere near and reads STRONG, and SNR is what
+                    // separates that artifact from a genuine occupant. With the same
+                    // locator reported on two channels, this row is what tells you
+                    // which one to point at.
+                    Row {
+                        Text(
+                            text = "${hit.rssi} dBm",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = rssiColor(hit.rssi),
+                        )
+                        Text("  ", style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            text = "SNR ${hit.snr} dB",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = snrColor(hit.snr),
+                        )
+                    }
+                }
                 // The receiver's own channel is the acknowledgment: it is read back
                 // from the device (ReceiverInfo, or the next broadcast), so this flips
                 // when the move has actually landed rather than when it was requested.
