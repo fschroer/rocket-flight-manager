@@ -165,6 +165,67 @@ class LocatorSearchTest {
         assertFalse(base.copy(status = LocatorSearch.Status.RefusedArmed).canWiden)
     }
 
+    private fun run(vararg hits: LocatorSearch.Hit) = LocatorSearch.Run(
+        running = false, searched = 64, total = 64,
+        status = LocatorSearch.Status.Done, wholeBand = true, hits = hits.toList(),
+    )
+
+    @Test fun `one locator on two channels flags all but the strongest`() {
+        // The measured case: a locator on 57 also reported on 17, 8 MHz away, because
+        // it was close enough to overload the front end.
+        val r = run(
+            LocatorSearch.Hit(17, ours, "Prometheus", -95, -7, false),
+            LocatorSearch.Hit(57, ours, "Prometheus", -60, 9, false),
+        )
+        assertEquals(setOf(17), r.suspectChannels)
+    }
+
+    @Test fun `a locator on one channel is never suspect`() {
+        val r = run(LocatorSearch.Hit(57, ours, "Prometheus", -60, 9, false))
+        assertTrue(r.suspectChannels.isEmpty())
+    }
+
+    @Test fun `two different locators on two channels are both fine`() {
+        // The census case. Grouping is per locator, so two rockets on two channels is
+        // the normal answer and must not be flagged as a contradiction.
+        val r = run(
+            LocatorSearch.Hit(12, ours, "Prometheus", -70, 5, false),
+            LocatorSearch.Hit(34, theirs, "Twist 0", -65, 7, false),
+        )
+        assertTrue(r.suspectChannels.isEmpty())
+    }
+
+    @Test fun `hits with no id are never grouped`() {
+        // id 0 means the frame did not say who. Two of them cannot be known to be the
+        // same locator, so neither can be called the other's stray.
+        val r = run(
+            LocatorSearch.Hit(12, 0L, "", -90, -5, false),
+            LocatorSearch.Hit(34, 0L, "", -60, 8, false),
+        )
+        assertTrue(r.suspectChannels.isEmpty())
+    }
+
+    @Test fun `three channels leave exactly one unflagged`() {
+        val r = run(
+            LocatorSearch.Hit(5, ours, "Prometheus", -99, -9, false),
+            LocatorSearch.Hit(17, ours, "Prometheus", -95, -7, false),
+            LocatorSearch.Hit(57, ours, "Prometheus", -60, 9, false),
+        )
+        assertEquals(setOf(5, 17), r.suspectChannels)
+    }
+
+    @Test fun `ranking is rssi plus snr, so a strong noisy hit can lose`() {
+        // Pins the ordering rule deliberately, because it is a heuristic and this is
+        // where it would be changed. A near-field artifact that arrived STRONGER than
+        // the true channel would be picked as the winner here — if that is ever
+        // measured, the rule becomes SNR-first and this test is what has to change.
+        val r = run(
+            LocatorSearch.Hit(17, ours, "Prometheus", -50, -12, false),  // sum -62
+            LocatorSearch.Hit(57, ours, "Prometheus", -70, 10, false),   // sum -60, wins
+        )
+        assertEquals(setOf(17), r.suspectChannels)
+    }
+
     @Test fun progressFractionSurvivesAnEmptyRun() {
         // total is 0 until the first result arrives; a bare division would throw or
         // produce NaN and the progress bar would render garbage.

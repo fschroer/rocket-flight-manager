@@ -124,6 +124,39 @@ object LocatorSearch {
          */
         val canWiden: Boolean
             get() = !running && status == Status.Done && !wholeBand
+
+        /**
+         * Channels carrying a hit that is probably **not** where that locator is.
+         *
+         * One locator cannot be on two channels, but a search reports it on two when
+         * it is close enough to the receiver to overload the front end: bench
+         * 2026-08-27 found a locator on 57 also reported on 17, 8 MHz away, and only
+         * moving it 15–20 ft settled which was real. Every hit for one locator except
+         * its best is therefore suspect, and saying so is the difference between a
+         * result the user can act on and two channels to guess between.
+         *
+         * Ranked by `rssi + snr`. The two are different units and adding them is a
+         * figure of merit rather than a physical quantity — the justification is only
+         * that both are "more is better" and that the true channel should lead on
+         * both, since an off-frequency leak reaches the demodulator attenuated by the
+         * filter it leaked through. **If a real artifact is ever measured with a
+         * HIGHER rssi than the true channel, this ordering picks the wrong one and
+         * should become SNR-first.** That measurement has not been taken; it needs the
+         * near-field rig the rest of the bench procedures tell you to avoid.
+         *
+         * Hits with no id are never grouped: id 0 means the frame did not say who,
+         * so two of them cannot be known to be the same locator.
+         */
+        val suspectChannels: Set<Int>
+            get() = hits
+                .filter { it.locatorId != 0L }
+                .groupBy { it.locatorId }
+                .filterValues { it.size > 1 }
+                .flatMap { (_, group) ->
+                    val best = group.maxByOrNull { it.rssi + it.snr }
+                    group.filter { it !== best }.map { it.channel }
+                }
+                .toSet()
     }
 
     /**

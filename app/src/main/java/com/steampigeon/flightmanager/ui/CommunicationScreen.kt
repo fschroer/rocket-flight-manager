@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -34,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
@@ -76,6 +79,12 @@ import kotlinx.coroutines.delay
  * to hide that difference, and the difference is exactly what a user needs to see
  * when one of them does not take.
  */
+/** Width of the trailing Connect / Connected slot on a search hit row. Wide enough
+ *  for either label plus a Button's content padding, so both start at the same x and
+ *  the rows form a column. `widthIn` rather than `width` so an outsized font scale
+ *  grows it instead of clipping it. */
+private val SearchActionSlotWidth = 132.dp
+
 @Composable
 fun CommunicationScreen(
     viewModel: RocketViewModel = viewModel(),
@@ -255,7 +264,7 @@ fun CommunicationScreen(
                     viewModel.startLocatorSearch(service, channels, searchTargetId ?: 0L)
                 },
                 onCancel = { viewModel.cancelLocatorSearch(service) },
-                currentChannel = remoteReceiverConfig.channel,
+                connectedLocatorId = connectedLocatorId,
                 onPick = { channel ->
                     // Receiver-only, always. The locator is already ON that channel —
                     // that is what the search just established — so moving it would be
@@ -676,7 +685,7 @@ internal fun LocatorSearchSection(
     onSearch: (List<Int>) -> Unit,
     onCancel: () -> Unit,
     onPick: (Int) -> Unit,
-    currentChannel: Int,
+    connectedLocatorId: Long?,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
         Text(
@@ -788,26 +797,57 @@ internal fun LocatorSearchSection(
                             style = MaterialTheme.typography.labelSmall,
                             color = snrColor(hit.snr),
                         )
+                        // One locator cannot be on two channels. When it is reported on
+                        // several, all but the strongest are flagged rather than hidden:
+                        // the reading is real, it is the CHANNEL attribution that is
+                        // doubtful, and the numbers beside it are what let the user
+                        // check that judgement instead of taking it on trust.
+                        if (hit.channel in run.suspectChannels) {
+                            Text("  ", style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                text = stringResource(R.string.search_hit_suspect),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
                 // The receiver's own channel is the acknowledgment: it is read back
                 // from the device (ReceiverInfo, or the next broadcast), so this flips
                 // when the move has actually landed rather than when it was requested.
-                if (hit.channel == currentChannel) {
-                    // Text, not a disabled button — there is no action left to offer.
-                    // It carries the Button's own type scale and content padding so it
-                    // lands on the same baseline and the same left edge as the Connect
-                    // labels on the rows around it; a bare Text would sit flush to the
-                    // row and step out of the column they form.
-                    Text(
-                        text = stringResource(R.string.search_connected),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(ButtonDefaults.ContentPadding),
-                    )
-                } else {
-                    Button(onClick = { onPick(hit.channel) }) {
-                        Text(stringResource(R.string.search_connect))
+                // A fixed-width slot with both branches aligned to its START.
+                //
+                // The first attempt padded the text with ButtonDefaults.ContentPadding
+                // and stopped there, which aligns the wrong edge: the Column above
+                // takes weight(1f), so the trailing element is pushed against the row's
+                // END, and equal end padding lines up the RIGHT edges. "Connected" is
+                // the longer word, so its left edge hung out past the Connect labels.
+                // Anchoring the slot instead makes the button and the text both start
+                // at the same x, and the button's own start padding then puts its label
+                // exactly where the padded text sits.
+                Box(
+                    modifier = Modifier.widthIn(min = SearchActionSlotWidth),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    // Identity, not channel. Being tuned to a channel is not being
+                    // connected: for a locator the app does not yet know, the receiver
+                    // arrives on the channel while an ADR-0006 password challenge is
+                    // still outstanding, and the row would have claimed Connected
+                    // through the whole of it.
+                    if (hit.locatorId != 0L && hit.locatorId == connectedLocatorId) {
+                        Text(
+                            text = stringResource(R.string.search_connected),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = ButtonDefaults.ContentPadding
+                                    .calculateStartPadding(LayoutDirection.Ltr)
+                            ),
+                        )
+                    } else {
+                        Button(onClick = { onPick(hit.channel) }) {
+                            Text(stringResource(R.string.search_connect))
+                        }
                     }
                 }
             }

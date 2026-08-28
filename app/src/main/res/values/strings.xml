@@ -118,6 +118,9 @@
          "Connect" would promise something that is not there. -->
     <string name="search_connect">Connect</string>
     <string name="search_connected">Connected</string>
+    <!-- Shown on every hit for a locator except its strongest: one locator cannot be
+         on two channels, so the weaker attributions are probably front-end overload. -->
+    <string name="search_hit_suspect">· likely stray</string>
     <string name="search_receiver_only">Connecting points the receiver at that channel, and takes effect straight away. Your locator stays where it is, and you will be asked for its password if the app does not know it yet.</string>
     <string name="search_none">Nothing found on those channels.</string>
     <string name="search_target_not_found">%1$s was not on those channels.</string>
