@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,10 +45,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -176,6 +177,15 @@ fun CommunicationScreen(
         // Re-entering is the user asking to see conflicts again, so a dismissal from
         // a previous visit does not persist.
         viewModel.resetConflictDismissals()
+        // And a previous visit's search does not persist either. The run lives in the
+        // ViewModel, so re-entering the screen showed results from minutes ago as
+        // though they were current — and with them the "Search all 64 channels"
+        // button, which is offered on the strength of a completed short run. It
+        // therefore appeared before the user had searched for anything in this visit,
+        // proposing an 80-second sweep on the evidence of a run they may not remember.
+        // Stale results are worse than none here: the receiver's channel and the band
+        // around it can both have changed since.
+        viewModel.clearLocatorSearch()
         // With no locator being heard, ReceiverInfo over BLE is the only way to learn
         // the channel we are actually on — and being on the wrong one is the whole
         // reason to open this screen.
@@ -529,8 +539,18 @@ private fun SectionHelp(help: List<String>) {
             if (showHelp) {
                 // focusable = true is what makes a tap anywhere else dismiss it, and
                 // what routes the back gesture here rather than off the screen.
+                // The vertical drop is applied to the POPUP, not to its content.
+                //
+                // Offsetting the Surface inside the window left the window itself
+                // starting at the icon and covering the 28 dp of transparent space
+                // above the card. A focusable popup consumes touches anywhere in its
+                // own window, so taps on the icon — and along the band to its right —
+                // landed inside the popup, were swallowed, and dismissed nothing.
+                // Moving the offset out makes the window exactly the card, so
+                // everything else on the screen is genuinely outside it.
                 Popup(
                     alignment = Alignment.TopStart,
+                    offset = IntOffset(0, with(LocalDensity.current) { 28.dp.roundToPx() }),
                     onDismissRequest = { showHelp = false },
                     properties = PopupProperties(focusable = true),
                 ) {
@@ -544,7 +564,6 @@ private fun SectionHelp(help: List<String>) {
                         tonalElevation = 3.dp,
                         shadowElevation = 6.dp,
                         modifier = Modifier
-                            .offset(y = 28.dp)
                             .widthIn(max = 300.dp)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
