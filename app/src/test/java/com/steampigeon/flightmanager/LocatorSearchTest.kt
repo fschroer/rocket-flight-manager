@@ -215,10 +215,11 @@ class LocatorSearchTest {
     }
 
     @Test fun `ranking is rssi plus snr, so a strong noisy hit can lose`() {
-        // Pins the ordering rule deliberately, because it is a heuristic and this is
-        // where it would be changed. A near-field artifact that arrived STRONGER than
-        // the true channel would be picked as the winner here — if that is ever
-        // measured, the rule becomes SNR-first and this test is what has to change.
+        // Pins the ordering rule deliberately. Bench 2026-08-28 confirmed it against
+        // hardware: the channel this rule flags is the one that disappears when the
+        // locator is moved away, so it picks the real channel. This test is still where
+        // the rule would change if an artifact were ever seen arriving STRONGER than
+        // the true channel — not observed on that rig.
         val r = run(
             LocatorSearch.Hit(17, ours, "Prometheus", -50, -12, false),  // sum -62
             LocatorSearch.Hit(57, ours, "Prometheus", -70, 10, false),   // sum -60, wins

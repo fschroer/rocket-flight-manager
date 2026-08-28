@@ -91,6 +91,8 @@
     <string name="survey_home_in_use_named">Your channel (%1$d) carries %2$s.</string>
     <!-- %1$s is the git stamp, generated into a resource by app/build.gradle.kts. -->
     <string name="app_version">App version: %1$s</string>
+    <!-- Content description for the "i" that reveals a section's help. -->
+    <string name="help_show">Show help</string>
     <!-- Communication screen -->
     <string name="communication">Communication</string>
     <string name="channels_manual_title">Set a channel by hand</string>

@@ -158,13 +158,16 @@ object LocatorSearch {
          * result the user can act on and two channels to guess between.
          *
          * Ranked by `rssi + snr`. The two are different units and adding them is a
-         * figure of merit rather than a physical quantity — the justification is only
-         * that both are "more is better" and that the true channel should lead on
-         * both, since an off-frequency leak reaches the demodulator attenuated by the
-         * filter it leaked through. **If a real artifact is ever measured with a
-         * HIGHER rssi than the true channel, this ordering picks the wrong one and
-         * should become SNR-first.** That measurement has not been taken; it needs the
-         * near-field rig the rest of the bench procedures tell you to avoid.
+         * figure of merit rather than a physical quantity — the reasoning is that both
+         * are "more is better" and that the true channel should lead on both, since an
+         * off-frequency leak reaches the demodulator attenuated by the filter it leaked
+         * through.
+         *
+         * **Measured 2026-08-28, and it holds.** One locator, receiver close in, two
+         * channels reported: the channel this rule flagged was the one that disappears
+         * when the locator is moved 15–20 ft away — i.e. the artifact. The rule picks
+         * the real channel. It would need revisiting only if an artifact were ever seen
+         * arriving *stronger* than the true channel, which this rig did not produce.
          *
          * Hits with no id are never grouped: id 0 means the frame did not say who,
          * so two of them cannot be known to be the same locator.

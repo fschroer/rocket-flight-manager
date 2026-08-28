@@ -6,14 +6,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -22,6 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,6 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -329,9 +339,12 @@ fun CommunicationScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-            Text(
-                text = stringResource(R.string.channels_manual_title),
-                style = MaterialTheme.typography.titleSmall,
+            SectionTitle(
+                title = stringResource(R.string.channels_manual_title),
+                help = listOf(
+                    stringResource(R.string.channels_receiver_explainer),
+                    stringResource(R.string.channels_locator_explainer),
+                ),
             )
 
             // ── Receiver channel ────────────────────────────────────────────────
@@ -346,10 +359,6 @@ fun CommunicationScreen(
                 stagedReceiverChannel = newConfigValue
                 receiverChannelEdited = true
             }
-            ChannelNote(
-                stringResource(R.string.channels_receiver_explainer),
-                MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             // What is known to be on the channel being typed. The scans already
             // gathered this; without it the manual field is the only control on this
             // screen that does not know the band it is pointing at, and typing a
@@ -402,10 +411,6 @@ fun CommunicationScreen(
                     stagedLocatorChannel = newConfigValue
                     locatorChannelEdited = true
                 }
-                ChannelNote(
-                    stringResource(R.string.channels_locator_explainer),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 // Gated on a staged change, because the warning is a claim about a
                 // MOVE. Ungated it fired on the channel the locator is already using,
                 // telling the user that staying put would collide with themselves —
@@ -478,6 +483,74 @@ private fun ApplyRow(
     }
 }
 
+/**
+ * A section title with an **i** that reveals its help on demand.
+ *
+ * The prose used to sit permanently under every control, and the screen grew to the
+ * point where the standing explanations outweighed the results they were explaining
+ * — the thing a user actually came to read was surrounded by paragraphs they had
+ * already read on every previous visit. Help that is one tap away is help that can
+ * afford to be complete.
+ *
+ * Only STATIC prose belongs here. Anything that varies with what just happened — a
+ * scan's verdict, a refusal, "nothing found on those channels", the occupant of a
+ * channel being typed — stays on the screen, because it is the answer rather than
+ * the instructions.
+ */
+@Composable
+private fun SectionTitle(title: String, help: List<String>) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(text = title, style = MaterialTheme.typography.titleSmall)
+        SectionHelp(help)
+    }
+}
+
+/** The **i** on its own, for a section whose title is already a control. */
+@Composable
+private fun SectionHelp(help: List<String>) {
+    var showHelp by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box {
+            IconButton(
+                onClick = { showHelp = true },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = stringResource(R.string.help_show),
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (showHelp) {
+                // focusable = true is what makes a tap anywhere else dismiss it, and
+                // what routes the back gesture here rather than off the screen.
+                Popup(
+                    alignment = Alignment.TopStart,
+                    onDismissRequest = { showHelp = false },
+                    properties = PopupProperties(focusable = true),
+                ) {
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        tonalElevation = 3.dp,
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.offset(y = 28.dp).widthIn(max = 300.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            help.forEach {
+                                Text(text = it, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 internal fun ChannelNote(text: String, color: Color) {
     Text(
@@ -528,6 +601,20 @@ internal fun ChannelSurveySection(
                     )
                 )
             }
+            // This section's button is its title, so the help hangs off the button.
+            // What a pick does depends on whether a locator is connected — moving the
+            // whole system or only the receiver — so that line is chosen here rather
+            // than being two entries.
+            SectionHelp(
+                help = listOf(
+                    stringResource(
+                        if (locatorConnected) R.string.survey_moves_both
+                        else R.string.survey_receiver_only
+                    ),
+                    stringResource(R.string.survey_confirmed_note),
+                    stringResource(R.string.survey_caveat),
+                ),
+            )
         }
 
         when {
@@ -608,13 +695,6 @@ internal fun ChannelSurveySection(
                         }
                     }
                 }
-                ChannelNote(
-                    stringResource(
-                        if (locatorConnected) R.string.survey_moves_both
-                        else R.string.survey_receiver_only
-                    ),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 // Naming the channels that were excluded, and why, so a short list
                 // does not read as a failed scan.
                 if (survey.homeChannelInUse) {
@@ -653,14 +733,6 @@ internal fun ChannelSurveySection(
                         MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                ChannelNote(
-                    stringResource(R.string.survey_confirmed_note),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                ChannelNote(
-                    stringResource(R.string.survey_caveat),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
@@ -690,13 +762,13 @@ internal fun LocatorSearchSection(
     connectedLocatorId: Long?,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-        Text(
-            text = stringResource(R.string.search_title),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        ChannelNote(
-            stringResource(R.string.search_explainer),
-            MaterialTheme.colorScheme.onSurfaceVariant,
+        SectionTitle(
+            title = stringResource(R.string.search_title),
+            help = listOf(
+                stringResource(R.string.search_explainer),
+                stringResource(R.string.search_receiver_only),
+                stringResource(R.string.search_unauthenticated),
+            ),
         )
 
         // Targeting is an accelerator, not a requirement: with a target the receiver
@@ -827,9 +899,13 @@ internal fun LocatorSearchSection(
                 // Anchoring the slot instead makes the button and the text both start
                 // at the same x, and the button's own start padding then puts its label
                 // exactly where the padded text sits.
+                // Both branches fill the slot and centre their content, so the word
+                // sits on the same axis whichever it is. Start-aligning them lined up
+                // the left edges instead, which reads as ragged once a column of rows
+                // mixes the two.
                 Box(
                     modifier = Modifier.widthIn(min = SearchActionSlotWidth),
-                    contentAlignment = Alignment.CenterStart,
+                    contentAlignment = Alignment.Center,
                 ) {
                     // Channel AND identity — see Hit.connectedOn. Identity alone
                     // marked every row for one locator as Connected, because a
@@ -840,13 +916,14 @@ internal fun LocatorSearchSection(
                             text = stringResource(R.string.search_connected),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(
-                                start = ButtonDefaults.ContentPadding
-                                    .calculateStartPadding(LayoutDirection.Ltr)
-                            ),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     } else {
-                        Button(onClick = { onPick(hit.channel) }) {
+                        Button(
+                            onClick = { onPick(hit.channel) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
                             Text(stringResource(R.string.search_connect))
                         }
                     }
@@ -906,16 +983,6 @@ internal fun LocatorSearchSection(
             ) {
                 ChannelNote(
                     stringResource(R.string.search_none_band),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (run.hits.isNotEmpty()) {
-                ChannelNote(
-                    stringResource(R.string.search_receiver_only),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                ChannelNote(
-                    stringResource(R.string.search_unauthenticated),
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
