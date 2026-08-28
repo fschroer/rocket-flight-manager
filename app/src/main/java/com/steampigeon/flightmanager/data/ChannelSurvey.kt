@@ -20,12 +20,16 @@ package com.steampigeon.flightmanager.data
 object ChannelSurvey {
 
     /** Mirrors the firmware's `ChannelSurveyStatus`. */
-    enum class Status { Ok, RefusedArmed, RefusedBusy, Unknown;
+    enum class Status { Ok, RefusedArmed, RefusedBusy, Cancelled, Unknown;
         companion object {
             fun fromByte(v: Int) = when (v) {
                 0 -> Ok
                 1 -> RefusedArmed
                 2 -> RefusedBusy
+                // Given up so a queued command to the locator could go out. One more
+                // value in a byte that already existed, so no size changed; a receiver
+                // predating it simply never sends 3.
+                3 -> Cancelled
                 else -> Unknown
             }
         }

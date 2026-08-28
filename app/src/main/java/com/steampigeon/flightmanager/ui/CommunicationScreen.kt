@@ -670,6 +670,12 @@ internal fun ChannelSurveySection(
                 MaterialTheme.colorScheme.error,
             )
 
+            // Not an error: the scan gave way to something the user asked for.
+            survey.status == ChannelSurvey.Status.Cancelled -> ChannelNote(
+                stringResource(R.string.survey_cancelled),
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             survey.status != ChannelSurvey.Status.Ok -> ChannelNote(
                 stringResource(R.string.survey_failed),
                 MaterialTheme.colorScheme.error,

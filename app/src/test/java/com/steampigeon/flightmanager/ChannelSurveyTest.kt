@@ -375,6 +375,10 @@ class ChannelSurveyTest {
         assertEquals(Status.Ok, Status.fromByte(0))
         assertEquals(Status.RefusedArmed, Status.fromByte(1))
         assertEquals(Status.RefusedBusy, Status.fromByte(2))
+        // Added when a queued locator command was given the right to end a sweep.
+        // One more value in an existing byte, so nothing resized; an older receiver
+        // simply never sends it.
+        assertEquals(Status.Cancelled, Status.fromByte(3))
         assertEquals(Status.Unknown, Status.fromByte(99))
     }
 }
