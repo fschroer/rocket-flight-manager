@@ -49,6 +49,28 @@ fun gitVersionStamp(): String {
         null
     }
 
+    // Refresh the index before asking about --dirty. This is hygiene, not a fix for
+    // a demonstrated bug, and the distinction is recorded so nobody credits it with
+    // more than it does.
+    //
+    // `git describe --dirty` decides via `git diff-index`, which does not refresh
+    // the index first — the same reason git's own require_clean_work_tree refreshes
+    // before testing. What it does NOT explain is a stamp reading dirty on a clean
+    // tree: diff-index falls back to comparing CONTENT when stat data differs, and
+    // a touched-but-unchanged file was tried on 2026-08-27 without producing a
+    // false -dirty.
+    //
+    // If a build ever stamps -dirty against a clean tree, suspect the binary before
+    // this line. The stamp is fixed at BUILD time, and installing an APK again does
+    // not restamp it, so an app showing dirty may simply be older than the commit.
+    // Verified 2026-08-27 that a normal assembleDebug — no --rerun-tasks — does
+    // re-run generateDebugBuildConfig and pick up a newly dirty tree.
+    //
+    // The result is ignored on purpose: a non-zero exit means genuinely modified
+    // files, which is the case --dirty exists to report. (git() returns null here
+    // either way — update-index prints nothing on success.)
+    git("update-index", "-q", "--refresh")
+
     // --always so a repo with no tags still yields the short hash rather than
     // failing; --long so tags, once they exist, carry their distance.
     val describe = git("describe", "--tags", "--long", "--dirty", "--always") ?: return "unknown"
