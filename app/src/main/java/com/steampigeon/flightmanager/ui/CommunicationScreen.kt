@@ -264,6 +264,7 @@ fun CommunicationScreen(
                     viewModel.startLocatorSearch(service, channels, searchTargetId ?: 0L)
                 },
                 onCancel = { viewModel.cancelLocatorSearch(service) },
+                currentChannel = remoteReceiverConfig.channel,
                 connectedLocatorId = connectedLocatorId,
                 onPick = { channel ->
                     // Receiver-only, always. The locator is already ON that channel —
@@ -685,6 +686,7 @@ internal fun LocatorSearchSection(
     onSearch: (List<Int>) -> Unit,
     onCancel: () -> Unit,
     onPick: (Int) -> Unit,
+    currentChannel: Int,
     connectedLocatorId: Long?,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
@@ -829,12 +831,11 @@ internal fun LocatorSearchSection(
                     modifier = Modifier.widthIn(min = SearchActionSlotWidth),
                     contentAlignment = Alignment.CenterStart,
                 ) {
-                    // Identity, not channel. Being tuned to a channel is not being
-                    // connected: for a locator the app does not yet know, the receiver
-                    // arrives on the channel while an ADR-0006 password challenge is
-                    // still outstanding, and the row would have claimed Connected
-                    // through the whole of it.
-                    if (hit.locatorId != 0L && hit.locatorId == connectedLocatorId) {
+                    // Channel AND identity — see Hit.connectedOn. Identity alone
+                    // marked every row for one locator as Connected, because a
+                    // near-field locator's several hits all carry the same id, which
+                    // left no way to reach the real channel from the false one.
+                    if (hit.connectedOn(currentChannel, connectedLocatorId)) {
                         Text(
                             text = stringResource(R.string.search_connected),
                             style = MaterialTheme.typography.labelLarge,

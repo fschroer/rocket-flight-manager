@@ -226,6 +226,39 @@ class LocatorSearchTest {
         assertEquals(setOf(17), r.suspectChannels)
     }
 
+    @Test fun `only the row on the receiver's own channel reads connected`() {
+        // Bench 2026-08-28: one locator close to the receiver was reported on two
+        // channels, both rows read Connected because both hits carry the same id, and
+        // sitting on the false channel left no way to reach the real one.
+        val onFalse = LocatorSearch.Hit(17, ours, "Prometheus", -95, -7, false)
+        val onReal = LocatorSearch.Hit(57, ours, "Prometheus", -60, 9, false)
+
+        // Receiver parked on the false channel: that row is where it is connected, and
+        // the real channel must still offer a way to get there.
+        assertTrue(onFalse.connectedOn(currentChannel = 17, connectedLocatorId = ours))
+        assertFalse(onReal.connectedOn(currentChannel = 17, connectedLocatorId = ours))
+
+        // And the other way round once it has moved.
+        assertFalse(onFalse.connectedOn(currentChannel = 57, connectedLocatorId = ours))
+        assertTrue(onReal.connectedOn(currentChannel = 57, connectedLocatorId = ours))
+    }
+
+    @Test fun `being tuned to the channel is not being connected`() {
+        // An unknown locator: the receiver arrives on the channel while an ADR-0006
+        // password challenge is still outstanding, and nothing is connected yet.
+        val hit = LocatorSearch.Hit(57, theirs, "Borrowed", -60, 9, false)
+        assertFalse(hit.connectedOn(currentChannel = 57, connectedLocatorId = null))
+        assertFalse(hit.connectedOn(currentChannel = 57, connectedLocatorId = ours))
+        assertTrue(hit.connectedOn(currentChannel = 57, connectedLocatorId = theirs))
+    }
+
+    @Test fun `a hit with no id is never connected`() {
+        // id 0 is "the frame did not say who", which cannot match anything.
+        val hit = LocatorSearch.Hit(57, 0L, "", -60, 9, false)
+        assertFalse(hit.connectedOn(currentChannel = 57, connectedLocatorId = null))
+        assertFalse(hit.connectedOn(currentChannel = 57, connectedLocatorId = 0L))
+    }
+
     @Test fun progressFractionSurvivesAnEmptyRun() {
         // total is 0 until the first result arrives; a bare division would throw or
         // produce NaN and the progress bar would render garbage.

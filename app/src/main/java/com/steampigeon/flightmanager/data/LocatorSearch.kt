@@ -70,7 +70,29 @@ object LocatorSearch {
         val rssi: Int,
         val snr: Int,
         val armed: Boolean,
-    )
+    ) {
+        /**
+         * Whether the receiver is connected to this locator **on this channel**.
+         *
+         * Both halves are needed and each was got wrong on its own first.
+         *
+         * Channel alone is not connection: tuned to a channel, the app may still be
+         * waiting on an ADR-0006 password challenge, and the row claimed Connected
+         * throughout it.
+         *
+         * Identity alone is not enough either, and that is the subtler one. A locator
+         * close to the receiver is reported on more than one channel (see
+         * [Run.suspectChannels]) — and every one of those hits carries the SAME id, so
+         * an identity test marks them all Connected. Bench 2026-08-28 hit exactly
+         * that: both rows read Connected, neither offered a button, and a user sitting
+         * on the false channel had no way to reach the real one. The row is about a
+         * channel, so the test has to be too.
+         */
+        fun connectedOn(currentChannel: Int, connectedLocatorId: Long?): Boolean =
+            channel == currentChannel &&
+                    locatorId != 0L &&
+                    locatorId == connectedLocatorId
+    }
 
     /**
      * A run in progress or just finished.
