@@ -353,25 +353,32 @@ fun CommunicationScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-            SectionTitle(
-                title = stringResource(R.string.channels_manual_title),
-                help = listOf(
-                    stringResource(R.string.channels_receiver_explainer),
-                    stringResource(R.string.channels_locator_explainer),
-                ),
+            // No help on the heading. The two fields do different things to different
+            // devices, and one icon holding both paragraphs made the reader work out
+            // which applied to which — the question the icon was meant to answer. Each
+            // field carries its own instead.
+            Text(
+                text = stringResource(R.string.channels_manual_title),
+                style = MaterialTheme.typography.titleSmall,
             )
 
             // ── Receiver channel ────────────────────────────────────────────────
-            ConfigurationItemNumeric(
-                configItemName = stringResource(R.string.channels_receiver_channel),
-                initialConfigValue = stagedReceiverChannel,
-                minValue = 0,
-                maxValue = 63,
-                configMessageState = receiverConfigMessageState,
-                modifier = Modifier
-            ) { newConfigValue ->
-                stagedReceiverChannel = newConfigValue
-                receiverChannelEdited = true
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // weight(1f) so the field takes the row and leaves the icon its place;
+                // ConfigurationItemNumeric applies fillMaxWidth internally, which would
+                // otherwise push the icon off the end.
+                ConfigurationItemNumeric(
+                    configItemName = stringResource(R.string.channels_receiver_channel),
+                    initialConfigValue = stagedReceiverChannel,
+                    minValue = 0,
+                    maxValue = 63,
+                    configMessageState = receiverConfigMessageState,
+                    modifier = Modifier.weight(1f)
+                ) { newConfigValue ->
+                    stagedReceiverChannel = newConfigValue
+                    receiverChannelEdited = true
+                }
+                SectionHelp(listOf(stringResource(R.string.channels_receiver_explainer)))
             }
             // What is known to be on the channel being typed. The scans already
             // gathered this; without it the manual field is the only control on this
@@ -414,16 +421,19 @@ fun CommunicationScreen(
             // address and the send would be refused anyway.
             if (locatorConnected) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.channels_locator_channel),
-                    initialConfigValue = stagedLocatorChannel,
-                    minValue = 0,
-                    maxValue = 63,
-                    configMessageState = locatorConfigMessageState,
-                    modifier = Modifier
-                ) { newConfigValue ->
-                    stagedLocatorChannel = newConfigValue
-                    locatorChannelEdited = true
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConfigurationItemNumeric(
+                        configItemName = stringResource(R.string.channels_locator_channel),
+                        initialConfigValue = stagedLocatorChannel,
+                        minValue = 0,
+                        maxValue = 63,
+                        configMessageState = locatorConfigMessageState,
+                        modifier = Modifier.weight(1f)
+                    ) { newConfigValue ->
+                        stagedLocatorChannel = newConfigValue
+                        locatorChannelEdited = true
+                    }
+                    SectionHelp(listOf(stringResource(R.string.channels_locator_explainer)))
                 }
                 // Gated on a staged change, because the warning is a claim about a
                 // MOVE. Ungated it fired on the channel the locator is already using,
