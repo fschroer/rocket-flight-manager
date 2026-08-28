@@ -899,10 +899,15 @@ internal fun LocatorSearchSection(
                 // Anchoring the slot instead makes the button and the text both start
                 // at the same x, and the button's own start padding then puts its label
                 // exactly where the padded text sits.
-                // Both branches fill the slot and centre their content, so the word
-                // sits on the same axis whichever it is. Start-aligning them lined up
-                // the left edges instead, which reads as ragged once a column of rows
-                // mixes the two.
+                // Both branches are CENTRED in a slot that sizes to its own content.
+                //
+                // They must not fillMaxWidth: this Box is an unweighted child of the
+                // Row, and Row measures those against the whole available width before
+                // the weighted ones get anything. Filling it therefore consumed the
+                // entire row and left the weight(1f) column — the name and the
+                // RSSI/SNR — measured at zero width, which took the results off the
+                // screen and wrapped what remained into a very tall row. Letting each
+                // branch wrap keeps the slot honest and leaves the rest for the column.
                 Box(
                     modifier = Modifier.widthIn(min = SearchActionSlotWidth),
                     contentAlignment = Alignment.Center,
@@ -917,13 +922,9 @@ internal fun LocatorSearchSection(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
                         )
                     } else {
-                        Button(
-                            onClick = { onPick(hit.channel) },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
+                        Button(onClick = { onPick(hit.channel) }) {
                             Text(stringResource(R.string.search_connect))
                         }
                     }
