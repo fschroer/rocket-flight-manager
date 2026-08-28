@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -793,14 +794,20 @@ internal fun LocatorSearchSection(
                 // from the device (ReceiverInfo, or the next broadcast), so this flips
                 // when the move has actually landed rather than when it was requested.
                 if (hit.channel == currentChannel) {
+                    // Text, not a disabled button — there is no action left to offer.
+                    // It carries the Button's own type scale and content padding so it
+                    // lands on the same baseline and the same left edge as the Connect
+                    // labels on the rows around it; a bare Text would sit flush to the
+                    // row and step out of the column they form.
                     Text(
-                        text = stringResource(R.string.search_receiver_here),
-                        style = MaterialTheme.typography.labelSmall,
+                        text = stringResource(R.string.search_connected),
+                        style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(ButtonDefaults.ContentPadding),
                     )
                 } else {
-                    TextButton(onClick = { onPick(hit.channel) }) {
-                        Text(stringResource(R.string.search_point_receiver))
+                    Button(onClick = { onPick(hit.channel) }) {
+                        Text(stringResource(R.string.search_connect))
                     }
                 }
             }
