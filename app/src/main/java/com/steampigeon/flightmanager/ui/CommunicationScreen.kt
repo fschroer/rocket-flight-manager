@@ -3,6 +3,8 @@ package com.steampigeon.flightmanager.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
@@ -22,8 +24,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.TextField
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -793,7 +799,7 @@ internal fun ChannelSurveySection(
  * channel list is shown before the run starts for the same reason: the user
  * should see that this is seconds of work, not a black box.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun LocatorSearchSection(
     run: LocatorSearch.Run?,
@@ -827,6 +833,12 @@ internal fun LocatorSearchSection(
             val targetName = targetId?.let { knownLocators[it]?.label }
                 ?.takeIf { it.isNotEmpty() }
                 ?: stringResource(R.string.search_target_any)
+            // The house dropdown: a read-only TextField carrying the selection with a
+            // trailing chevron, the same shape Locator Settings' EnumDropdown and App
+            // Settings' voice picker use. This had been a bare TextButton, which reads
+            // as an action rather than as a field holding a current value — and the
+            // value here is exactly what the user needs to check before starting a
+            // search that behaves differently depending on it.
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -834,12 +846,38 @@ internal fun LocatorSearchSection(
                 Text(
                     text = stringResource(R.string.search_target_label),
                     style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(end = 8.dp),
                 )
-                Box {
-                    TextButton(onClick = { expanded = true }, enabled = enabled) {
-                        Text(targetName)
-                    }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { if (enabled) expanded = !expanded },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    TextField(
+                        value = targetName,
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = enabled,
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                        },
+                        // NotEditable, because the field cannot be typed into: it makes
+                        // the whole field the anchor, so tapping the text opens the menu
+                        // rather than only the chevron doing so.
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .fillMaxWidth(),
+                        shape = if (expanded)
+                            RoundedCornerShape(4.dp).copy(
+                                bottomEnd = CornerSize(0.dp),
+                                bottomStart = CornerSize(0.dp),
+                            )
+                        else RoundedCornerShape(4.dp),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                    ) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.search_target_any)) },
                             onClick = { onTargetChange(null); expanded = false },
