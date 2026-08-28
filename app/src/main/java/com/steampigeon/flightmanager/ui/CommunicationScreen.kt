@@ -355,7 +355,7 @@ fun CommunicationScreen(
             // field carries its own instead.
             Text(
                 text = stringResource(R.string.channels_manual_title),
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleMedium,
             )
 
             // ── Receiver channel ────────────────────────────────────────────────
@@ -520,7 +520,7 @@ private fun ApplyRow(
 @Composable
 private fun SectionTitle(title: String, help: List<String>) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(text = title, style = MaterialTheme.typography.titleSmall)
+        Text(text = title, style = MaterialTheme.typography.titleMedium)
         SectionHelp(help)
     }
 }
