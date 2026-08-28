@@ -36,7 +36,6 @@ import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.steampigeon.flightmanager.BuildConfig
 import com.steampigeon.flightmanager.R
 import kotlinx.coroutines.launch
 import androidx.compose.material3.MenuAnchorType
@@ -71,8 +70,13 @@ fun AppSettingsScreen(
             // on their own screens, so the three are read the same way and compare
             // directly. A stamp ending in a time (…-dirty.HHMMSS) is a development
             // build made from an uncommitted tree; a clean one names a commit.
+            //
+            // Read from a resource rather than BuildConfig deliberately — see the
+            // long note in app/build.gradle.kts. A BuildConfig String is a
+            // compile-time constant and gets inlined HERE, which froze this line at
+            // a three-hour-old stamp while every build produced the correct one.
             Text(
-                text = "App version: ${BuildConfig.GIT_VERSION}",
+                text = stringResource(R.string.app_version, stringResource(R.string.git_version)),
                 modifier = Modifier.padding(bottom = 8.dp),
             )
 

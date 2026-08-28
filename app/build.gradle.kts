@@ -99,7 +99,29 @@ android {
         // the only one that could not identify itself — which matters most across a
         // breaking wire change, where the question is exactly "are these two in
         // step?".
-        buildConfigField("String", "GIT_VERSION", "\"${gitVersionStamp()}\"")
+        //
+        // A RESOURCE, not a buildConfigField, and this is load-bearing rather than a
+        // style preference. `buildConfigField` emits a `public static final String`,
+        // which is a compile-time constant, so the compiler INLINES it into whichever
+        // class reads it. Regenerating BuildConfig then updates BuildConfig.class and
+        // nothing else: Kotlin's incremental compilation does not treat the changed
+        // constant as a reason to recompile the reader, so the screen keeps
+        // displaying the literal it was compiled against.
+        //
+        // That is not a theory. The first cut used buildConfigField, and the app
+        // reported a stamp four commits and three hours stale while the build was
+        // producing the right one. Unzipping the APK showed BOTH strings in it:
+        // classes3.dex carried the new value next to BuildConfig, and classes6.dex
+        // carried the old one next to AppSettingsScreen — the inlined copy, still
+        // being drawn. No amount of reinstalling could have fixed it, which is what
+        // made it look like a deployment problem for as long as it did.
+        //
+        // A resource cannot be inlined: `R.string.git_version` compiles to an id and
+        // the value is fetched from resources.arsc at runtime, and the arsc is
+        // repackaged whenever the value changes. (The firmwares never had this
+        // problem because version.h is a real prerequisite of Communication.o, so a
+        // changed stamp forces the recompile that Kotlin here declined to do.)
+        resValue("string", "git_version", gitVersionStamp())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

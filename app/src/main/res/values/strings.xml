@@ -89,6 +89,8 @@
     <string name="survey_channel_occupied">Channel %1$d has another locator on it — not offered.</string>
     <string name="survey_channel_occupied_named">Channel %1$d has %2$s on it — not offered.</string>
     <string name="survey_home_in_use_named">Your channel (%1$d) carries %2$s.</string>
+    <!-- %1$s is the git stamp, generated into a resource by app/build.gradle.kts. -->
+    <string name="app_version">App version: %1$s</string>
     <!-- Communication screen -->
     <string name="communication">Communication</string>
     <string name="channels_manual_title">Set a channel by hand</string>
