@@ -177,15 +177,11 @@ fun CommunicationScreen(
         // Re-entering is the user asking to see conflicts again, so a dismissal from
         // a previous visit does not persist.
         viewModel.resetConflictDismissals()
-        // And a previous visit's search does not persist either. The run lives in the
-        // ViewModel, so re-entering the screen showed results from minutes ago as
-        // though they were current — and with them the "Search all 64 channels"
-        // button, which is offered on the strength of a completed short run. It
-        // therefore appeared before the user had searched for anything in this visit,
-        // proposing an 80-second sweep on the evidence of a run they may not remember.
-        // Stale results are worse than none here: the receiver's channel and the band
-        // around it can both have changed since.
-        viewModel.clearLocatorSearch()
+        // And neither scan's results persist across a visit — both live in the
+        // ViewModel, so re-entering showed minutes-old findings as though they were
+        // current. A run still in progress is left alone; the rule and the reasons
+        // are in clearScansForNewVisit.
+        viewModel.clearScansForNewVisit()
         // With no locator being heard, ReceiverInfo over BLE is the only way to learn
         // the channel we are actually on — and being on the wrong one is the whole
         // reason to open this screen.

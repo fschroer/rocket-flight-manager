@@ -987,6 +987,27 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         updateReceiverConfigState(target)
     }
 
+    /**
+     * Drop what the previous visit left on the Communication screen — **except** a
+     * scan that is still running.
+     *
+     * Both halves were learned the hard way. Keeping the results meant re-entering
+     * the screen showed a run from minutes ago as current, and offered the
+     * whole-band sweep on the strength of it; and a stale refusal ("the locator is
+     * armed") sat there after the locator had been disarmed, describing a state that
+     * had since gone away.
+     *
+     * Clearing unconditionally was worse. [onLocatorSearchResult] drops every message
+     * that arrives while the run is null, so wiping a run in flight orphaned it: the
+     * receiver went on sweeping — deaf, for up to 77 s — while the app ignored the
+     * stream and the terminator alike, and the search simply appeared to die on
+     * leaving the screen. Anything still running is therefore left exactly as it is.
+     */
+    fun clearScansForNewVisit() {
+        if (_locatorSearch.value?.running != true) clearLocatorSearch()
+        if (!_surveyInProgress.value) clearChannelSurvey()
+    }
+
     fun clearLocatorSearch() {
         searchTimeoutJob?.cancel()
         _locatorSearch.value = null
