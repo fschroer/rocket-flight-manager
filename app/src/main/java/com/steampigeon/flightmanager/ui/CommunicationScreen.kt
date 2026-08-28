@@ -106,6 +106,11 @@ import kotlinx.coroutines.delay
  *  grows it instead of clipping it. */
 private val SearchActionSlotWidth = 132.dp
 
+/** Width of the "Looking for" field and its menu. Sized for the longest locator name
+ *  likely to be seen rather than for the widest possible one: a name that overruns
+ *  ellipsises in the field and still reads in full in the open menu. */
+private val SearchTargetFieldWidth = 200.dp
+
 @Composable
 fun CommunicationScreen(
     viewModel: RocketViewModel = viewModel(),
@@ -851,7 +856,6 @@ internal fun LocatorSearchSection(
                 ExposedDropdownMenuBox(
                     expanded = expanded,
                     onExpandedChange = { if (enabled) expanded = !expanded },
-                    modifier = Modifier.weight(1f),
                 ) {
                     TextField(
                         value = targetName,
@@ -864,9 +868,14 @@ internal fun LocatorSearchSection(
                         // NotEditable, because the field cannot be typed into: it makes
                         // the whole field the anchor, so tapping the text opens the menu
                         // rather than only the chevron doing so.
+                        // An explicit width is the only thing that shrinks this.
+                        // Material gives a TextField a wide default minimum, so
+                        // widthIn(max) is ignored and weight(1f) made it fill the row —
+                        // a large filled block for a two-word value. The menu inherits
+                        // the anchor's width, so this sizes both.
                         modifier = Modifier
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth(),
+                            .width(SearchTargetFieldWidth),
                         shape = if (expanded)
                             RoundedCornerShape(4.dp).copy(
                                 bottomEnd = CornerSize(0.dp),
