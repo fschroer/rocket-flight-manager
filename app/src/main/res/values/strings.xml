@@ -126,7 +126,8 @@
     <string name="search_receiver_only">Connecting points the receiver at that channel, and takes effect straight away. Your locator stays where it is, and you will be asked for its password if the app does not know it yet.</string>
     <string name="search_none">Nothing found on those channels.</string>
     <string name="search_target_not_found">%1$s was not on those channels.</string>
-    <string name="search_widen">Search all 64 channels (about 80 seconds)</string>
+    <string name="search_widen">Search all 64 channels</string>
+    <string name="search_widen_help">Search all 64 channels appears once a shorter search has finished. It sweeps the whole band — about 80 seconds, during which the receiver hears nothing — and is worth it when the locator is not on any channel the app knows to try, or when you are looking for one it has never met.</string>
     <string name="search_none_band">Nothing found anywhere in the band. Check that the locator is powered on and within range.</string>
     <string name="search_cancelled">Search stopped.</string>
     <string name="search_refused_armed">The locator is armed or in flight. Searching would leave the receiver deaf for up to a minute, so it is refused until it lands and disarms.</string>

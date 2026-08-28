@@ -1,6 +1,10 @@
 package com.steampigeon.flightmanager.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -530,11 +534,22 @@ private fun SectionHelp(help: List<String>) {
                     onDismissRequest = { showHelp = false },
                     properties = PopupProperties(focusable = true),
                 ) {
+                    // Clickable as well as focusable: focusable dismisses a tap
+                    // OUTSIDE, and without this the popup itself was the one place on
+                    // the screen where tapping did nothing. Reading it is the whole
+                    // interaction, so the tap that follows is "done", wherever it lands.
+                    // No indication — a ripple would suggest the surface is a control.
                     Surface(
                         shape = MaterialTheme.shapes.medium,
                         tonalElevation = 3.dp,
                         shadowElevation = 6.dp,
-                        modifier = Modifier.offset(y = 28.dp).widthIn(max = 300.dp),
+                        modifier = Modifier
+                            .offset(y = 28.dp)
+                            .widthIn(max = 300.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { showHelp = false },
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
@@ -747,6 +762,7 @@ internal fun ChannelSurveySection(
  * channel list is shown before the run starts for the same reason: the user
  * should see that this is seconds of work, not a black box.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun LocatorSearchSection(
     run: LocatorSearch.Run?,
@@ -766,6 +782,7 @@ internal fun LocatorSearchSection(
             title = stringResource(R.string.search_title),
             help = listOf(
                 stringResource(R.string.search_explainer),
+                stringResource(R.string.search_widen_help),
                 stringResource(R.string.search_receiver_only),
                 stringResource(R.string.search_unauthenticated),
             ),
@@ -826,8 +843,29 @@ internal fun LocatorSearchSection(
                 MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Button(onClick = { onSearch(candidates) }, enabled = enabled) {
-                Text(stringResource(R.string.search_start, candidates.size))
+            // Both searches side by side, because they are the same decision at two
+            // scales — try the likely channels, or try everything — and stacking them
+            // made the second read as a consequence of the first rather than an
+            // alternative to it. Widening only appears once a short run has completed;
+            // the help behind the section's "i" says so.
+            // FlowRow, not Row: side by side is the intent, but "Search 6 channels"
+            // and "Search all 64 channels" together are within a few dp of a phone's
+            // usable width at the default font scale, and past it at a larger one. A
+            // Row would clip the second button; this drops it to the next line only
+            // when it genuinely does not fit.
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Button(onClick = { onSearch(candidates) }, enabled = enabled) {
+                    Text(stringResource(R.string.search_start, candidates.size))
+                }
+                if (run?.canWiden == true) {
+                    Button(onClick = { onSearch(emptyList()) }, enabled = enabled) {
+                        Text(stringResource(R.string.search_widen))
+                    }
+                }
             }
         }
 
@@ -952,15 +990,12 @@ internal fun LocatorSearchSection(
                 )
                 else -> Unit
             }
-            // Widening is offered after ANY completed short run, never automatically.
-            // It is ~80 s of a deaf receiver, so it stays a decision the user makes
-            // knowing what it costs — but it has to be reachable. Gating it behind an
-            // empty result meant that while any locator was audible there was no way
-            // to sweep the band at all, which is precisely the multi-rocket case.
+            // The widen BUTTON now sits beside the short search above; what stays here
+            // is the reason it appeared. Said only when the run failed at its actual
+            // job: a targeted run that turned up somebody else has not succeeded, and
+            // naming the locator is clearer than "nothing found" when the screen is
+            // showing a hit.
             if (run.canWiden) {
-                // Said only when the run failed at its actual job. A targeted run that
-                // turned up somebody else has not succeeded, and naming the locator is
-                // clearer than "nothing found" when the screen is showing a hit.
                 if (run.missed) {
                     val wanted = run.targetLocatorId
                         .takeIf { it != 0L }
@@ -971,13 +1006,6 @@ internal fun LocatorSearchSection(
                         else stringResource(R.string.search_none),
                         MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                Button(
-                    onClick = { onSearch(emptyList()) },
-                    enabled = enabled,
-                    modifier = Modifier.padding(top = 4.dp),
-                ) {
-                    Text(stringResource(R.string.search_widen))
                 }
             } else if (run.wholeBand && run.hits.isEmpty() &&
                 run.status == LocatorSearch.Status.Done
