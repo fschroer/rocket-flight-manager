@@ -65,6 +65,7 @@ import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
+import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.ChannelOccupancy
 import com.steampigeon.flightmanager.data.ChannelSurvey
 import com.steampigeon.flightmanager.data.LocatorMessageState
@@ -122,6 +123,7 @@ fun CommunicationScreen(
     val receiverConfigMessageState = viewModel.receiverConfigMessageState.collectAsState().value
     val locatorConfigMessageState by viewModel.locatorConfigMessageState.collectAsState()
     val rocketState by viewModel.rocketState.collectAsState()
+    val armedState by BluetoothManagerRepository.armedState.collectAsState()
     val bluetoothConnectionState by BluetoothManagerRepository.bluetoothConnectionState.collectAsState()
     val conflictLocatorId by viewModel.conflictLocatorId.collectAsState()
     val locatorConnected by viewModel.locatorConnected.collectAsState()
@@ -150,6 +152,24 @@ fun CommunicationScreen(
     }
     val hearingLocator = rocketState.lastMessageTime != 0L &&
             now - rocketState.lastMessageTime < RocketViewModel.CHANNEL_WATCH_SILENCE_MS
+
+    // Both scans are refused by the RECEIVER while the locator is armed or flying
+    // (ADR-0029 decision 7). Mirrored here so the buttons go dead with the reason
+    // already on screen, rather than inviting a press whose only outcome is a
+    // refusal — fschroer, 2026-08-30, running bench 4.
+    //
+    // Written to match the receiver's condition exactly rather than reusing
+    // FlightMapScreen's isInFlight, which counts Landed as in flight: the receiver
+    // excludes Landed deliberately, so a rocket on the ground is refused for being
+    // ARMED and not for flying, and disabling on a stricter rule here would gray out
+    // a scan the receiver would have run.
+    //
+    // This is an affordance, NOT enforcement. The receiver's gate is the real one and
+    // stays — app-side gating is soft (ADR-0006 Decision 5), and the refusal text
+    // below still renders if a request gets through anyway.
+    val locatorArmedOrFlying = armedState ||
+            (rocketState.flightState != FlightStates.WaitingLaunch &&
+                    rocketState.flightState != FlightStates.Landed)
 
     // Which locator the search should stop on; null = report everything it finds,
     // which is also the only thing that works for a borrowed locator the app has
@@ -281,6 +301,15 @@ fun CommunicationScreen(
                 }
             }
 
+            // Said once, above both scans, because one condition disables both and
+            // two identical notes read as two problems.
+            if (locatorArmedOrFlying) {
+                ChannelNote(
+                    stringResource(R.string.scans_blocked_armed),
+                    MaterialTheme.colorScheme.error,
+                )
+            }
+
             // Search first, scan second. This screen is opened far more often because
             // something is missing than because something is noisy.
             LocatorSearchSection(
@@ -289,7 +318,8 @@ fun CommunicationScreen(
                 targetId = searchTargetId,
                 candidates = viewModel.searchCandidates(searchTargetId),
                 enabled = bluetoothConnectionState == BluetoothConnectionState.Ready &&
-                        locatorSearch?.running != true && !surveyInProgress,
+                        locatorSearch?.running != true && !surveyInProgress &&
+                        !locatorArmedOrFlying,
                 onTargetChange = { searchTargetId = it },
                 onSearch = { channels ->
                     viewModel.startLocatorSearch(service, channels, searchTargetId ?: 0L)
@@ -297,16 +327,21 @@ fun CommunicationScreen(
                 onCancel = { viewModel.cancelLocatorSearch(service) },
                 currentChannel = remoteReceiverConfig.channel,
                 connectedLocatorId = connectedLocatorId,
+                canConnect = receiverConfigMessageState == LocatorMessageState.Idle,
                 onPick = { channel ->
                     // Receiver-only, always. The locator is already ON that channel —
                     // that is what the search just established — so moving it would be
                     // the one action guaranteed to lose it again.
                     //
                     // The staged value moves with it, or the field below would sit at
-                    // the old number offering to undo what this just did.
-                    stagedReceiverChannel = channel
-                    receiverChannelEdited = false
-                    viewModel.pointReceiverAtChannel(service, channel)
+                    // the old number offering to undo what this just did — but ONLY if
+                    // the change actually went out. Staging first and asking afterwards
+                    // put a channel the app never visited into the field, with an
+                    // enabled Update button offering to apply it.
+                    if (viewModel.pointReceiverAtChannel(service, channel)) {
+                        stagedReceiverChannel = channel
+                        receiverChannelEdited = false
+                    }
                     // Results are deliberately NOT cleared: the hit just acted on is
                     // the thing worth still seeing, and the row now reports that the
                     // receiver is there.
@@ -323,7 +358,26 @@ fun CommunicationScreen(
             // continuous non-LoRa emitter, which the passive path cannot see. That
             // diagnostic is unreachable without a locator now, and ADR-0029 records the
             // trade rather than leaving it to be rediscovered.
-            if (hearingLocator) {
+            //
+            // **But never hide a scan this section is running, or the answer it
+            // produced.** The rule above is about OFFERING the sweep. A sweep leaves
+            // the receiver deaf for ~7.8 s — longer than the 5 s silence window — so
+            // gating on `hearingLocator` alone made the section hide itself about five
+            // seconds into its own scan, taking the "Scanning…" indicator with it, and
+            // reappear with the results once broadcasts resumed. Reported 2026-08-30 as
+            // the indicator vanishing and results arriving 3–4 seconds later; the scan
+            // was running the whole time.
+            //
+            // `channelSurvey != null` is load-bearing, not belt-and-braces. Without it
+            // the section hides again at the instant the results land — the sweep has
+            // ended, so `surveyInProgress` is false, while the locator's next broadcast
+            // is still up to a second away — and flickers back a moment later. Results
+            // do not linger across visits: clearScansForNewVisit drops them on entry,
+            // with the same "except one still running" exception.
+            //
+            // Same lesson as clearScansForNewVisit: a rule about when to START
+            // something must not be applied to something already under way.
+            if (hearingLocator || surveyInProgress || channelSurvey != null) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
                 ChannelSurveySection(
@@ -334,9 +388,13 @@ fun CommunicationScreen(
                     // manager passes through on its way to Ready, so gating on it leaves
                     // the button permanently disabled.
                     enabled = bluetoothConnectionState == BluetoothConnectionState.Ready &&
-                            !surveyInProgress && locatorSearch?.running != true,
+                            !surveyInProgress && locatorSearch?.running != true &&
+                            !locatorArmedOrFlying,
                     onScan = { viewModel.requestChannelSurvey(service) },
                     locatorConnected = locatorConnected,
+                    canPick = if (locatorConnected)
+                        locatorConfigMessageState == LocatorMessageState.Idle
+                    else receiverConfigMessageState == LocatorMessageState.Idle,
                     onPick = { channel ->
                         if (locatorConnected) {
                             // Move the whole system. "Find a clean channel" means the rocket
@@ -348,10 +406,12 @@ fun CommunicationScreen(
                             // Nothing to move: point the receiver, the legitimate "go look
                             // at that channel" case. Applied on the tap for the same reason
                             // the search's pick is — choosing from a ranked list is the
-                            // decision, not a draft of one.
-                            stagedReceiverChannel = channel
-                            receiverChannelEdited = false
-                            viewModel.pointReceiverAtChannel(service, channel)
+                            // decision, not a draft of one. Staged only if the change
+                            // went out, for the reason the search's pick is.
+                            if (viewModel.pointReceiverAtChannel(service, channel)) {
+                                stagedReceiverChannel = channel
+                                receiverChannelEdited = false
+                            }
                         }
                         viewModel.clearChannelSurvey()
                     },
@@ -400,6 +460,7 @@ fun CommunicationScreen(
                     stagedReceiverChannel, channelSurvey, locatorSearch,
                     excludeLocatorId = connectedLocatorId,
                     labelOf = { id -> knownLocators[id]?.label?.takeIf { it.isNotEmpty() } },
+                    unrecognizedLabel = stringResource(R.string.channels_occupant_unrecognized),
                 )?.let { who ->
                     ChannelNote(
                         stringResource(R.string.channels_occupant_note, stagedReceiverChannel, who),
@@ -451,6 +512,7 @@ fun CommunicationScreen(
                         stagedLocatorChannel, channelSurvey, locatorSearch,
                         excludeLocatorId = connectedLocatorId,
                         labelOf = { id -> knownLocators[id]?.label?.takeIf { it.isNotEmpty() } },
+                        unrecognizedLabel = stringResource(R.string.channels_occupant_unrecognized),
                     )?.let { who ->
                         ChannelNote(
                             stringResource(
@@ -633,6 +695,9 @@ internal fun ChannelSurveySection(
     inProgress: Boolean,
     enabled: Boolean,
     locatorConnected: Boolean,
+    // Which device the pick commands decides which in-flight change has to finish
+    // first — see LocatorSearchSection's canConnect.
+    canPick: Boolean,
     // Only ever read to put a name against an id the sweep reported. Claimed
     // identity from the air, so it labels and nothing more.
     knownLocators: Map<Long, KnownLocator>,
@@ -739,7 +804,7 @@ internal fun ChannelSurveySection(
                             progress = { ((s.level - quietest).toFloat() / span).coerceIn(0f, 1f) },
                             modifier = Modifier.weight(1f).padding(end = 8.dp),
                         )
-                        TextButton(onClick = { onPick(s.channel) }) {
+                        TextButton(onClick = { onPick(s.channel) }, enabled = canPick) {
                             // Different actions, so different labels: with a locator
                             // connected this moves the whole system, without one it
                             // only re-points the receiver.
@@ -812,6 +877,11 @@ internal fun LocatorSearchSection(
     targetId: Long?,
     candidates: List<Int>,
     enabled: Boolean,
+    // A change is already on its way to the receiver. Connect stays VISIBLE but
+    // stops responding: pointReceiverAtChannel refuses while the receiver's config
+    // message is not idle, so the second tap was dropped on the floor — a control
+    // that silently did nothing, which is the failure this screen exists to avoid.
+    canConnect: Boolean,
     onTargetChange: (Long?) -> Unit,
     onSearch: (List<Int>) -> Unit,
     onCancel: () -> Unit,
@@ -951,9 +1021,10 @@ internal fun LocatorSearchSection(
         // run ends the moment one is found, and on a census the user should not have
         // to wait out 63 more channels to see the first answer.
         run?.hits?.forEach { hit ->
-            // The name off the air, else the one we stored, else the raw id. A
-            // TelemetryData hit carries no name at all — an armed locator's frame has
-            // no room for one — so the stored label is what covers that case.
+            // The name off the air, else the one we stored, else nothing — the row
+            // reads "Unrecognized locator on channel N" rather than falling back to a
+            // hex id. A TelemetryData hit carries no name at all — an armed locator's
+            // frame has no room for one — so the stored label is what covers that case.
             val name = hit.deviceName.takeIf { it.isNotEmpty() }
                 ?: knownLocators[hit.locatorId]?.label?.takeIf { it.isNotEmpty() }
             Row(
@@ -1040,7 +1111,7 @@ internal fun LocatorSearchSection(
                             textAlign = TextAlign.Center,
                         )
                     } else {
-                        Button(onClick = { onPick(hit.channel) }) {
+                        Button(onClick = { onPick(hit.channel) }, enabled = canConnect) {
                             Text(stringResource(R.string.search_connect))
                         }
                     }

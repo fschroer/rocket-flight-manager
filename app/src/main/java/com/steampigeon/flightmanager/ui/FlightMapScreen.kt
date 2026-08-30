@@ -1273,6 +1273,9 @@ private fun MapWithOverlays(
         val liveMapMaxZoom =
             resolveMapMaxZoom(viewModel.mapMaxZoom.collectAsState().value).toDouble()
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+        val surveyInProgress by viewModel.surveyInProgress.collectAsState()
+        val locatorSearchRunning =
+            viewModel.locatorSearch.collectAsState().value?.running == true
         val rocketFresh = lastMessageAge < messageTimeout
         // Link age is checked first: if we are not hearing from the locator, its
         // last-reported gpsStatus is itself stale and cannot qualify anything.
@@ -1517,6 +1520,13 @@ private fun MapWithOverlays(
                     padAlert = padAlert,
                     padAlertSnoozeMinutes = padAlertSnoozeMinutes,
                     locatorArmedMessageState = locatorArmedMessageState,
+                    // Search first: it is the longer of the two and the one whose
+                    // silence a user is most likely to misread.
+                    scanInProgress = when {
+                        locatorSearchRunning -> stringResource(R.string.status_searching)
+                        surveyInProgress -> stringResource(R.string.status_scanning)
+                        else -> null
+                    },
                     onToggleArmed = { viewModel.updateArmedState() },
                     onRescan = onRescan,
                     onSnoozePadAlert = onSnoozePadAlert,
@@ -2138,6 +2148,10 @@ private fun MapControlsColumn(
     padAlert: PadAlertState,
     padAlertSnoozeMinutes: Int,
     locatorArmedMessageState: LocatorMessageState,
+    // What the receiver is doing instead of listening, or null when it is listening.
+    // A scan is the app's OWN doing, so the silence it causes must not be reported as
+    // a missing locator — see the name row below.
+    scanInProgress: String?,
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
@@ -2319,6 +2333,16 @@ private fun MapControlsColumn(
                     // faults instead of one.
                     text = when {
                         lastMessageAge < messageTimeout -> locatorConfig.deviceName
+                        // A scan parks the receiver on other channels for up to ~90 s,
+                        // so the locator goes quiet BECAUSE THE USER ASKED IT TO. Saying
+                        // "No Locator" reports the app's own action as a fault — and it
+                        // is the dangerous direction, not a cosmetic one: arm/disarm
+                        // stays live throughout (deliberately — ADR-0029 decision 7 has
+                        // a queued command END the sweep so an operator's Arm is never
+                        // silently delayed), so the panel was inviting the user to press
+                        // Arm believing nothing could happen, and then it happens.
+                        // Reported from the bench 2026-08-30 running bench 4.
+                        scanInProgress != null -> scanInProgress
                         bluetoothConnectionState == BluetoothConnectionState.Ready -> "No Locator"
                         else -> ""
                     },

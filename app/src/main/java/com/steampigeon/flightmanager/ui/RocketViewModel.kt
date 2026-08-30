@@ -898,8 +898,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // Every other locator this receiver has been tuned to. A receiver shared
             // across several rockets has been on each of their channels at some
             // point, and that history is the whole reason the short list usually wins.
+            // Sorted by id, because `known` is built from a protobuf map whose
+            // iteration order is unspecified. The load-bearing positions are fixed
+            // either way — target first, default and current last — but WHICH of
+            // several remembered channels survive the 16-channel cap, and in what
+            // order, could differ between two runs with identical stored state. With
+            // more than 14 remembered locators that changes which channels are
+            // actually searched. Ported from iOS `LinkViewModel.searchCandidates`.
             knownChannels = known
                 .filterKeys { it != targetLocatorId }
+                .toSortedMap()
                 .values.mapNotNull { it.lastChannelOrNull() },
             attemptedChannel = _pendingChannelMove.value ?: channelChangePreviousChannel
                 .takeIf { awaitingChannelRecognition },
@@ -973,10 +981,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * A no-op when the receiver is already there, so a button press cannot start a
      * confirm cycle that has nothing to confirm.
      */
-    fun pointReceiverAtChannel(service: BluetoothService?, channel: Int) {
+    fun pointReceiverAtChannel(service: BluetoothService?, channel: Int): Boolean {
         val remote = _remoteReceiverConfig.value
-        if (channel == remote.channel) return
-        if (_receiverConfigMessageState.value != LocatorMessageState.Idle) return
+        if (channel == remote.channel) return false
+        if (_receiverConfigMessageState.value != LocatorMessageState.Idle) return false
         beginChannelChangeRecognition(remote.channel)
         updateReceiverConfigMessageState(LocatorMessageState.SendRequested)
         val target = remote.copy(channel = channel)
@@ -985,6 +993,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             else LocatorMessageState.SendFailure
         )
         updateReceiverConfigState(target)
+        return true
     }
 
     /**
@@ -1175,6 +1184,26 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // every time it heard from each of them.
             noteLocatorChannel(locatorId, receiverChannel)
 
+            // ...but it does NOT get the connection back just because we opened the
+            // slot on the way somewhere else. A receiver-only move releases the
+            // connection before the change goes out, and the locator we are leaving
+            // goes on broadcasting into that empty slot at 1 Hz until the receiver
+            // actually retunes. Admitting one of those frames re-adopts the old
+            // locator AND clears awaitingChannelRecognition, so the challenge armed
+            // for the new channel never fires — the reported "no auth popup from a
+            // search result, but the conflict banner's Connect works". See
+            // LocatorConnection.isFromChannelBeingLeft for the full account.
+            //
+            // The name and channel above are still worth keeping: they are true facts
+            // about a locator we are authorized for, and the search runs on them.
+            if (LocatorConnection.isFromChannelBeingLeft(
+                    frameChannel = receiverChannel,
+                    previousChannel = channelChangePreviousChannel,
+                    awaitingRecognition = awaitingChannelRecognition,
+                    moveInFlight = _receiverConfigMessageState.value != LocatorMessageState.Idle,
+                )
+            ) return
+
             val mayConnect = LocatorConnection.mayConnect(
                 connected = _connectedLocatorId.value,
                 sender = locatorId,
@@ -1212,8 +1241,46 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
             return
         }
-        // Unauthorized.  Never disturbs a standing connection — an armed stranger on
-        // the channel must not knock out the locator we are connected to.
+        // Unauthorized.
+        //
+        // **The locator we believe we are connected to has stopped authenticating** —
+        // its password was changed on the device. Reported from the phone and
+        // reproduced on iOS 2026-08-29: nothing further was admitted, no prompt could
+        // be raised (the passive branch below refuses while anything is connected),
+        // and the conflict banner called this very locator "another locator" over a
+        // panel reading "No Locator". There was no way out short of dropping the BLE
+        // link.
+        //
+        // The connection is RELEASED first, because it is a stale belief rather than a
+        // live connection to protect: the evidence it rested on is this locator's own
+        // authenticated broadcasts, and those have stopped verifying. Releasing it is
+        // also what lets the prompt through, and what stops the banner describing the
+        // holder as somebody else. Asked even if this locator was declined before — a
+        // decline was about a locator we had no business displaying, not about the one
+        // already on screen.
+        //
+        // Checked BEFORE the !challengeable return, matching iOS: an armed locator
+        // sends TelemetryData, which carries no device name, so there is nothing to
+        // title a prompt with — but the stale connection is just as wrong and the
+        // banner just as misleading. That case releases and stays silent.
+        //
+        // Identity here is the frame's CLEARTEXT locator_id, which ADR-0006 Decision 5
+        // scopes to accidental cross-connection rather than to an attacker; a locator
+        // claiming to be ours can therefore drop the connection it claims. That is the
+        // declared threat model, noted because this is the first place identity gates a
+        // state change rather than only a label.
+        if (locatorId == _connectedLocatorId.value) {
+            _connectedLocatorId.value = null
+            lastConnectedFrameMs = 0L
+            if (challengeable && _challenge.value == null) {
+                challengeFrame = frame
+                _challengeError.value = false
+                _challenge.value = LocatorChallenge(locatorId, deviceName, null)
+            }
+            return
+        }
+        // Never disturbs a standing connection otherwise — an armed stranger on the
+        // channel must not knock out the locator we are connected to.
         if (!challengeable) {
             if (locatorId !in dismissedConflictIds) { _conflictLocatorId.value = locatorId; lastConflictFrameMs = System.currentTimeMillis() }
             return
@@ -1237,6 +1304,44 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Drop what describes a locator we can no longer hear, when the **BLE link** to
+     * the receiver goes away.
+     *
+     * The same rule [beginChannelChangeRecognition] applies to a deliberate release
+     * (ADR-0011): the configuration goes with the connection. A dropped link is the
+     * other way to lose one, and it was the case nobody had walked through — a
+     * disconnect set `versionInfoStale` and left every locator readout standing, so
+     * the Communication screen went on showing the channel of a locator the app had
+     * no path to at all, on the screen whose whole job is "which channel am I
+     * talking to". It corrected only when a `PreLaunchData` from that locator was
+     * admitted again, which never happens if the user reconnects to a different
+     * receiver — or does not reconnect.
+     *
+     * **The connection goes too, not just the configuration.** Blanking the config
+     * alone would leave the Locator channel section on screen reading 0, and channel
+     * 0 is the factory default (ADR-0025) — a plausible-looking value where the truth
+     * is "nothing is connected", which is the failure ADR-0029 already recorded once
+     * for this very field. Releasing it hides the section instead, which is what iOS
+     * does (`clearLiveReadouts`, which clears `connectedLocatorId` with the rest).
+     *
+     * Deliberately narrow. Telemetry staleness is already handled by the 5 s liveness
+     * rule, the scans settle through their own timeouts, and `_remoteReceiverConfig`
+     * is **left alone**: unlike iOS's `receiverInfo` it is seeded from and saved to
+     * user preferences, so clearing it would blank the Receiver channel field on
+     * every drop and re-raise the "reads 0, looks plausible" hazard on the other
+     * field. Firmware versions are kept for the same reason iOS keeps them — they
+     * are a property of the hardware, not of this link.
+     */
+    private fun releaseLocatorOnLinkLoss() {
+        _connectedLocatorId.value = null
+        lastConnectedFrameMs = 0L
+        _remoteLocatorConfig.value = LocatorConfig()
+        // The banner names a locator sharing a channel we are no longer listening on.
+        _conflictLocatorId.value = null
+        lastConflictFrameMs = 0L
+    }
+
     /** Arm the channel-change flow: the next PreLaunchData on the new channel decides
      *  recognition, or raises a password challenge (cancel reverts to [previousChannel]).
      *  Releases the connection outright — the point of the change is to go somewhere
@@ -1247,6 +1352,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         awaitingChannelRecognition = true
         _connectedLocatorId.value = null
         lastConnectedFrameMs = 0L
+        // The configuration goes with the connection. Left behind, the Locator
+        // channel field goes on describing the locator we just let go of — reported
+        // 2026-08-29 with the receiver reading 48 and the field reading 34, two real
+        // locators on two real channels — and it corrects only when a PreLaunchData
+        // from the NEW locator is admitted, so a locator that is never admitted
+        // leaves it wrong indefinitely.
+        //
+        // iOS clears this on a BLE link drop too, in clearLiveReadouts. This app has
+        // no equivalent — a disconnect leaves the whole readout standing — so the gap
+        // is closed here only for the deliberate release. See ADR-0011.
+        _remoteLocatorConfig.value = LocatorConfig()
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         quietestPolledFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         lastLossMs = 0L
@@ -2343,7 +2459,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // edge above cannot see — the locator may keep transmitting throughout.
         val connectionJob = viewModelScope.launch {
             BluetoothManagerRepository.bluetoothConnectionState.collect { state ->
-                if (state == BluetoothConnectionState.Disconnected) versionInfoStale.value = true
+                if (state == BluetoothConnectionState.Disconnected) {
+                    versionInfoStale.value = true
+                    releaseLocatorOnLinkLoss()
+                }
             }
         }
 

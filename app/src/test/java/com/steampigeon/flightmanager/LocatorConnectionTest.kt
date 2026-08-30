@@ -59,4 +59,72 @@ class LocatorConnectionTest {
         // releasing early is how another rocket's data reaches the screen mid-flight.
         assertTrue("hold covers >= 10 missed broadcasts", CONNECTION_HOLD_MS >= 10_000L)
     }
+
+    // ── The channel a receiver-only move is leaving (reported 2026-08-29) ────────
+    //
+    // Connected to Twist 0 on 34, Connect tapped on Twist Lock 5's hit on 60. The move
+    // releases the connection first, and Twist 0 goes on broadcasting on 34 until the
+    // receiver retunes. Intermittent because it depends on whether one of those 1 Hz
+    // broadcasts lands inside the window.
+
+    @Test
+    fun `the locator we are leaving does not reclaim the slot mid-move`() {
+        // Twist 0's frame, relayed while the receiver was still on 34.
+        assertTrue(
+            LocatorConnection.isFromChannelBeingLeft(
+                frameChannel = 34, previousChannel = 34,
+                awaitingRecognition = true, moveInFlight = true,
+            )
+        )
+    }
+
+    @Test
+    fun `the locator on the channel we are moving to is admitted`() {
+        // Twist Lock 5's frame, relayed after the retune. This is the frame the
+        // recognition cycle was armed for; suppressing it would break the feature
+        // rather than fix it.
+        assertFalse(
+            LocatorConnection.isFromChannelBeingLeft(
+                frameChannel = 60, previousChannel = 34,
+                awaitingRecognition = true, moveInFlight = true,
+            )
+        )
+    }
+
+    @Test
+    fun `an unstamped frame cannot be placed during the move, so it waits`() {
+        // TelemetryData carries no receiver channel. During the window it could be
+        // either locator, and guessing wrong is the reported bug.
+        assertTrue(
+            LocatorConnection.isFromChannelBeingLeft(
+                frameChannel = null, previousChannel = 34,
+                awaitingRecognition = true, moveInFlight = true,
+            )
+        )
+    }
+
+    @Test
+    fun `the window closes when the move stops being in flight`() {
+        // The recognition flag alone would suppress forever on a move to a channel
+        // with nothing on it, leaving the app deaf to the locator it still has. The
+        // receiver's config message state always returns to idle, acknowledged or not.
+        assertFalse(
+            LocatorConnection.isFromChannelBeingLeft(
+                frameChannel = 34, previousChannel = 34,
+                awaitingRecognition = true, moveInFlight = false,
+            )
+        )
+    }
+
+    @Test
+    fun `no channel move in progress suppresses nothing`() {
+        // A receiver RENAME also drives the config message state, and leaves a stale
+        // channelChangePreviousChannel behind it.
+        assertFalse(
+            LocatorConnection.isFromChannelBeingLeft(
+                frameChannel = 34, previousChannel = 34,
+                awaitingRecognition = false, moveInFlight = true,
+            )
+        )
+    }
 }

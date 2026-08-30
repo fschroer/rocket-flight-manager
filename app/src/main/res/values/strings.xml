@@ -101,8 +101,19 @@
     <string name="channels_locator_channel">Locator channel</string>
     <string name="channels_locator_explainer">Moves the connected locator, and the receiver follows it automatically. Use this when the channel is chosen for you; otherwise let the scan pick one.</string>
     <string name="channels_occupant_note">%2$s was last heard on channel %1$d.</string>
+    <!-- A search heard a frame on this channel that carried no locator_id. The
+         channel is occupied; nobody said who. Reads as the subject of the two
+         sentences below. -->
+    <string name="channels_occupant_unrecognized">An unrecognized locator</string>
     <string name="channels_occupant_warning">%2$s is on channel %1$d — moving here would put two locators on one channel.</string>
     <string name="channels_find_locator">Find my locator</string>
+    <!-- Shown where the locator's name goes while a scan has the receiver parked on
+         other channels. The locator is not missing; the app stopped listening to it. -->
+    <!-- Shown above both scans while the receiver would refuse them, so the reason is
+         on screen before the buttons are pressed rather than after. -->
+    <string name="scans_blocked_armed">The locator is armed or in flight, so neither scan can run — either would leave the receiver deaf for up to a minute and a half. Disarm to scan.</string>
+    <string name="status_searching">Searching…</string>
+    <string name="status_scanning">Scanning…</string>
     <!-- Locator search (#33 follow-up) -->
     <string name="search_title">Find a locator</string>
     <string name="search_explainer">Listens on the channels your locators were last seen on. Use this when a locator is powered up but nothing is coming through.</string>
@@ -110,7 +121,7 @@
     <string name="search_target_any">Any locator</string>
     <string name="search_target_label">Looking for</string>
     <string name="search_progress">Listening on channel %1$d of %2$d…</string>
-    <string name="search_progress_band">Listening on channel %1$d of %2$d — a full sweep takes about 80 seconds.</string>
+    <string name="search_progress_band">Listening on channel %1$d of %2$d — a full sweep takes up to about 90 seconds.</string>
     <string name="search_cancel">Stop</string>
     <string name="search_hit">%1$s on channel %2$d</string>
     <string name="search_hit_armed">%1$s on channel %2$d — armed</string>
@@ -127,11 +138,11 @@
     <string name="search_none">Nothing found on those channels.</string>
     <string name="search_target_not_found">%1$s was not on those channels.</string>
     <string name="search_widen">Search all 64 channels</string>
-    <string name="search_widen_help">Search all 64 channels appears once a shorter search has finished. It sweeps the whole band — about 80 seconds, during which the receiver hears nothing — and is worth it when the locator is not on any channel the app knows to try, or when you are looking for one it has never met.</string>
+    <string name="search_widen_help">Search all 64 channels appears once a shorter search has finished. It sweeps the whole band — up to about 90 seconds, during which the receiver hears nothing, and less when it finds locators along the way, since it moves on as soon as a channel answers — and is worth it when the locator is not on any channel the app knows to try, or when you are looking for one it has never met.</string>
     <string name="search_none_band">Nothing found anywhere in the band. Check that the locator is powered on and within range.</string>
     <string name="search_cancelled">Search stopped. If you did not stop it, a command you sent to the locator did — the receiver has to be back on your channel to deliver it.</string>
-    <string name="search_refused_armed">The locator is armed or in flight. Searching would leave the receiver deaf for up to a minute, so it is refused until it lands and disarms.</string>
-    <string name="search_refused_busy">The receiver is busy — a scan or a flight data transfer is already running. Try again when it finishes.</string>
+    <string name="search_refused_armed">The locator is armed or in flight. Searching would leave the receiver deaf for up to a minute and a half, so it is refused until it lands and disarms.</string>
+    <string name="search_refused_busy">The receiver is busy — a scan, a flight data transfer, or a command still on its way to the locator. Try again in a moment.</string>
     <string name="search_failed">No response from the receiver. If its firmware predates locator search, update it — otherwise try again.</string>
     <string name="search_unauthenticated">Names and channels here come straight off the air and are not password-checked. Recognition happens as usual once the receiver is pointed at the channel.</string>
     <string name="survey_confirmed_note">Candidates are listened to for a full second each, so an intermittent transmitter cannot hide between samples.</string>
@@ -148,7 +159,7 @@
     <string name="survey_uniform_floor">Every channel reads the same raised level — a transmitter close to the receiver, usually your own locator, spilling across the whole band. It does not favor any channel, so these are all equally good. Move the receiver away from powered locators for a sharper reading.</string>
     <string name="survey_all_hot">Every channel reads loud, which usually means a transmitter is very close to the receiver — check for another powered locator nearby. Move it away and scan again for a true reading. The channels below are still the least affected, and should be clean once it is moved.</string>
     <string name="survey_refused_armed">The locator is armed. Scanning would stop telemetry for about a second, and the channel cannot be changed while armed. Disarm first.</string>
-    <string name="survey_refused_busy">A flight data transfer is in progress. Try again when it finishes.</string>
+    <string name="survey_refused_busy">The receiver is busy — a flight data transfer, or a command still on its way to the locator. Try again in a moment.</string>
     <string name="survey_cancelled">Scan stopped so your command could reach the locator. Scan again when you are ready.</string>
     <string name="survey_failed">No response from the receiver. If its firmware predates channel scanning, update it — otherwise try again.</string>
     <string name="survey_caveat">Measured where the receiver is. A channel that is quiet here may be busier at altitude.</string>
