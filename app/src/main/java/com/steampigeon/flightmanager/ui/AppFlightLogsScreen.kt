@@ -82,10 +82,16 @@ fun AppFlightLogsScreen(
             )
         }
         if (logs.isEmpty()) {
+            // weight(1f) on BOTH branches, so Cancel sits at the bottom either way.
+            // Without it the empty state packed everything to the top and the button
+            // moved down the screen the moment a first log existed — the same control
+            // in two places depending on state nobody chose.
             Text(
                 text = stringResource(R.string.flight_log_empty),
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(dimensionResource(R.dimen.padding_medium)),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(dimensionResource(R.dimen.padding_medium)),
             )
         } else {
             LazyColumn(
