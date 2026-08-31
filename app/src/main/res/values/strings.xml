@@ -151,6 +151,7 @@
     <string name="channel_move_failed">Could not send the channel change. Check the receiver connection.</string>
     <string name="channel_move_not_acknowledged">The locator did not confirm channel %1$d. It has been left on its previous channel.</string>
     <string name="channel_move_not_checked">Could not check where the locator is — the receiver was busy. The receiver is on channel %1$d; use Find a locator.</string>
+    <string name="channel_move_nothing_moved">The locator did not respond, so nothing was moved. The receiver is still on channel %1$d — power the locator up and the link should resume.</string>
     <string name="channel_move_unresolved">Could not confirm where the locator is. The receiver is on channel %1$d — if the locator does not come back, use Find a locator.</string>
     <string name="survey_move_here">Move here</string>
     <string name="survey_point_receiver">Point receiver</string>

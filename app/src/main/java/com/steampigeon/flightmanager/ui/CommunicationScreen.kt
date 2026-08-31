@@ -296,13 +296,34 @@ fun CommunicationScreen(
                                 MaterialTheme.colorScheme.error
                     // Three different endings share this state and leave the hardware
                     // in different places — see channelMoveOutcome.
+                    //
+                    // Where the receiver ACTUALLY is, not where the move was aimed.
+                    // These two messages used to name the attempted channel, which is
+                    // false whenever the forward never transmitted: with the locator
+                    // already silent no forwarding window ever opens, so the receiver
+                    // never follows and is still on the old channel. Reported from the
+                    // bench 2026-08-30 — right verdict, wrong sentence. The receiver's
+                    // own channel is known here regardless, because the channel watch
+                    // polls ReceiverInfo every 2 s while the locator is quiet.
                     LocatorMessageState.NotAcknowledged -> when (channelMoveOutcome) {
                         ChannelMove.Verdict.NotChecked ->
-                            stringResource(R.string.channel_move_not_checked, channel) to
-                                    MaterialTheme.colorScheme.error
+                            stringResource(
+                                R.string.channel_move_not_checked, remoteReceiverConfig.channel,
+                            ) to MaterialTheme.colorScheme.error
                         ChannelMove.Verdict.NoEvidence ->
-                            stringResource(R.string.channel_move_unresolved, channel) to
-                                    MaterialTheme.colorScheme.error
+                            // Nothing moved at all is a much smaller problem than a
+                            // locator that may be stranded, and saying so is the
+                            // difference between "turn it on" and "go find your rocket".
+                            if (remoteReceiverConfig.channel != channel)
+                                stringResource(
+                                    R.string.channel_move_nothing_moved,
+                                    remoteReceiverConfig.channel,
+                                ) to MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                stringResource(
+                                    R.string.channel_move_unresolved,
+                                    remoteReceiverConfig.channel,
+                                ) to MaterialTheme.colorScheme.error
                         else ->
                             stringResource(R.string.channel_move_not_acknowledged, channel) to
                                     MaterialTheme.colorScheme.error
