@@ -1063,6 +1063,18 @@ internal fun LocatorSearchSection(
             }
         }
 
+        // Hits are actionable the moment they appear, and acting ends the run — the
+        // receiver cannot both sweep and sit on the channel you just chose, so a
+        // receiver channel change cancels the scan rather than being applied
+        // underneath it (#40). Said out loud, because a scan stopping is otherwise
+        // indistinguishable from a scan failing.
+        if (run?.running == true && run.hits.isNotEmpty()) {
+            ChannelNote(
+                stringResource(R.string.search_connect_ends_scan),
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         // Hits appear as they arrive, including mid-run: on a targeted search the
         // run ends the moment one is found, and on a census the user should not have
         // to wait out 63 more channels to see the first answer.
