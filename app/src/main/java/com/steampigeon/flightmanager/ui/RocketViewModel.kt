@@ -19,6 +19,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
 import com.steampigeon.flightmanager.data.ChannelMove
+import com.steampigeon.flightmanager.data.ChannelMoveRunner
 import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
 import com.steampigeon.flightmanager.data.LocatorSearch as LocatorSearchData
 import com.steampigeon.flightmanager.data.LinkQuality
@@ -2932,165 +2933,108 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      * Work out what actually happened to an unconfirmed channel move, and act only
      * on what the receiver can hear (ADR-0011, "revert on evidence, not on silence").
      * Returns true if the locator ended up on the staged channel.
+     *
+     * The **sequence** lives in [ChannelMoveRunner] and is pinned by
+     * `ChannelMoveRunnerTest`; this supplies the side effects. It was moved out
+     * because every defect in that sequence — the lost retry, the refusal read as
+     * silence, the single look at silence — was found by hand on a bench, for want of
+     * any way to reach it from a test while it sat in here with a service in scope.
      */
     private suspend fun resolveChannelMove(
         stagedLocatorConfig: LocatorConfig,
         oldChannel: Int,
         service: BluetoothService,
-    ): Boolean {
-        val newChannel = stagedLocatorConfig.loraChannel
-        var verdict = probeChannelMove(newChannel, oldChannel, service)
-        // A dwell that hears nothing is not proof of absence — ADR-0029 says it
-        // plainly: zero frames proves nothing, because one 1.4 s dwell can still
-        // miss a 1 Hz burst.  NoEvidence is the branch with the least margin (it
-        // ends with the receiver on a channel nothing has been heard on), so it is
-        // the one worth paying another 2.8 s to avoid entering by accident.
-        if (verdict == ChannelMove.Verdict.NoEvidence)
-            verdict = probeChannelMove(newChannel, oldChannel, service)
-        // NotChecked already carries its own refusal retry, so it is not re-probed
-        // here — that would be a third ask for a receiver that has twice declined.
-        _channelMoveOutcome.value = verdict
-        // Only an evidenced LocatorStayed may move anything; see ChannelMove.action,
-        // which is pinned because reverting on anything else is the defect this
-        // amendment exists to remove.
-        return when (ChannelMove.action(verdict)) {
-            // The move worked; only the confirmation was late.  Nothing to revert.
-            ChannelMove.Action.Succeed -> true
-            // Now — and only now — the split is established rather than assumed.
-            ChannelMove.Action.Revert ->
-                recoverLocatorChannel(stagedLocatorConfig, oldChannel, service)
-            // Either heard nothing it could attribute (locator off, out of range, or
-            // broadcasting sparser than one dwell can catch) or never got to look at
-            // all.  Report the failure and move nothing; the UI tells the two apart.
-            ChannelMove.Action.Stand -> false
-        }
-    }
+    ): Boolean =
+        ChannelMoveRunner(
+            ops = channelMoveOps(stagedLocatorConfig, service),
+            refusedRetryMs = CHANNEL_PROBE_REFUSED_RETRY_MS,
+        ).resolve(stagedLocatorConfig.loraChannel, oldChannel)
 
     /**
-     * Ask the receiver which of the two channels the locator is actually on.
-     *
-     * A **census** over both, never a targeted run that stops on the first hit: a
-     * locator a few feet from the receiver decodes on channels it is nowhere near and
-     * the artifact reads as strong (ADR-0029), so the decision has to compare two
-     * dwells rather than trust one. This probe runs while the user is configuring a
-     * locator, which is exactly the range that produces the artifact.
-     *
-     * Reuses the ordinary search flow, so the run is visible in the search section
-     * and cancellable by the same button, and inherits the receiver's own refusals —
-     * an armed or in-flight locator returns no hits, which reads as no evidence and
-     * leaves the receiver untouched.
+     * The live side of a channel-move resolution: searches, BLE writes, and the two
+     * waits.  Everything here touches a flow, a service or the clock, which is exactly
+     * what the runner is kept free of.
      */
-    private suspend fun probeChannelMove(
-        newChannel: Int,
-        oldChannel: Int,
-        service: BluetoothService,
-    ): ChannelMove.Verdict {
-        // A run already going is somebody else's; its hits are not an answer to this
-        // question, and startLocatorSearch would no-op rather than replace it.
-        if (_locatorSearch.value?.running == true) return ChannelMove.Verdict.NotChecked
-        val run = runProbe(newChannel, oldChannel, service)
-            ?: return ChannelMove.Verdict.NotChecked
-        // A refusal is not an answer.  The receiver turns a search down while an
-        // operator command is queued — and after a move to a silent locator the
-        // queued command is OUR OWN undeliverable one, so the probe is blocked by
-        // exactly the situation it was sent to diagnose.  Wait out the receiver's
-        // stale-drop and ask once more before giving up.
-        val settled = if (run.status == LocatorSearchData.Status.Done) run else {
-            delay(CHANNEL_PROBE_REFUSED_RETRY_MS)
-            runProbe(newChannel, oldChannel, service)
-        }
-        if (settled == null || settled.status != LocatorSearchData.Status.Done)
-            return ChannelMove.Verdict.NotChecked
-        return ChannelMove.verdict(
-            hits = settled.hits,
-            locatorId = channelMoveLocatorId,
-            newChannel = newChannel,
-            oldChannel = oldChannel,
-        )
-    }
-
-    /** One probe run; null if it never terminated. */
-    private suspend fun runProbe(
-        newChannel: Int,
-        oldChannel: Int,
-        service: BluetoothService,
-    ): LocatorSearchData.Run? {
-        startLocatorSearch(service, ChannelMove.probeChannels(newChannel, oldChannel))
-        return withTimeoutOrNull(CHANNEL_PROBE_TIMEOUT_MS) {
-            locatorSearch.first { it != null && !it.running }
-        }
-    }
-
-    // Repair for a channel change the probe has shown the locator did not take:
-    // move the receiver back to the old channel (BLE, always reachable), wait for the
-    // link to resume, then re-send the locator change once.  Returns true if the retry
-    // is confirmed.
-    //
-    // Only ever reached from ChannelMove.Verdict.LocatorStayed.  Calling it on silence
-    // alone is the defect ADR-0011's amendment exists to remove.
-    private suspend fun recoverLocatorChannel(
+    private fun channelMoveOps(
         stagedLocatorConfig: LocatorConfig,
-        oldChannel: Int,
         service: BluetoothService,
-    ): Boolean {
-        val askedAtMs = System.currentTimeMillis()
-        service.changeReceiverConfig(
-            ReceiverConfig(channel = oldChannel, deviceName = _remoteReceiverConfig.value.deviceName)
-        )
+    ) = object : ChannelMoveRunner.Ops {
+
+        // A run already going is somebody else's; its hits are not an answer to our
+        // question, and startLocatorSearch would no-op rather than replace it.
+        override fun probeInProgress(): Boolean = _locatorSearch.value?.running == true
+
+        /**
+         * A **census** over both channels, never a targeted run that stops on the
+         * first hit: a locator a few feet from the receiver decodes on channels it is
+         * nowhere near and the artifact reads as strong (ADR-0029), so the decision
+         * has to compare two dwells rather than trust one.  This probe runs while the
+         * user is configuring a locator, which is exactly the range that produces it.
+         *
+         * Reuses the ordinary search flow, so the run is visible in the search section
+         * and cancellable by the same button, and inherits the receiver's own refusals.
+         */
+        override suspend fun runProbe(newChannel: Int, oldChannel: Int): ChannelMoveRunner.ProbeRun? {
+            startLocatorSearch(service, ChannelMove.probeChannels(newChannel, oldChannel))
+            val run = withTimeoutOrNull(CHANNEL_PROBE_TIMEOUT_MS) {
+                locatorSearch.first { it != null && !it.running }
+            } ?: return null
+            return ChannelMoveRunner.ProbeRun(
+                completed = run.status == LocatorSearchData.Status.Done,
+                verdict = ChannelMove.verdict(
+                    hits = run.hits,
+                    locatorId = channelMoveLocatorId,
+                    newChannel = newChannel,
+                    oldChannel = oldChannel,
+                ),
+            )
+        }
+
+        override suspend fun pause(ms: Long) = delay(ms)
+
+        override fun nowMs(): Long = System.currentTimeMillis()
+
+        override suspend fun pointReceiverAt(channel: Int) {
+            service.changeReceiverConfig(
+                ReceiverConfig(channel = channel, deviceName = _remoteReceiverConfig.value.deviceName)
+            )
+        }
+
         // Wait for the link to come back on the old channel — on EVIDENCE that a frame
         // was admitted after we asked, not merely on two readings that say `oldChannel`.
         // Both of those readings are updated only by a relayed PreLaunchData, so after a
         // move whose confirmation never arrived they were BOTH still reading the old
-        // channel: this test passed on its first 100 ms poll having verified nothing,
-        // and the retry then went out to a channel with nothing on it.
-        var relinked = false
-        for (i in 1..50) {
-            delay(100)
-            if (ChannelMove.relinked(
-                    receiverChannel = _remoteReceiverConfig.value.channel,
-                    locatorChannel = _remoteLocatorConfig.value.loraChannel,
-                    oldChannel = oldChannel,
-                    lastFrameMs = lastConnectedFrameMs,
-                    askedAtMs = askedAtMs,
-                )
-            ) {
-                relinked = true
-                break
+        // channel: a test on the two alone passed on its first 100 ms poll having
+        // verified nothing, and the retry then went out to a channel with nothing on it.
+        override suspend fun awaitRelink(oldChannel: Int, sinceMs: Long): Boolean {
+            for (i in 1..50) {
+                delay(100)
+                if (ChannelMove.relinked(
+                        receiverChannel = _remoteReceiverConfig.value.channel,
+                        locatorChannel = _remoteLocatorConfig.value.loraChannel,
+                        oldChannel = oldChannel,
+                        lastFrameMs = lastConnectedFrameMs,
+                        askedAtMs = sinceMs,
+                    )
+                ) return true
             }
+            return false
         }
-        if (!relinked)
-            return false
-        // Retry the locator channel change once now that the link is restored.
-        if (service.changeLocatorConfig(stagedLocatorConfig) != true)
-            return false
-        _locatorConfigMessageState.value = LocatorMessageState.Sent
-        // The retry is a fresh transmission, so it earns a fresh receipt.
-        channelMoveReceiptMs = 0L
-        if (waitForLocatorConfig(stagedLocatorConfig))
-            return true
 
-        // The retry's forward is a single unacknowledged LoRa frame on the channel
-        // the user is trying to LEAVE, and the receiver follows it whether or not the
-        // locator hears it.  So losing it reproduces the original split one layer
-        // down — and until 2026-08-30 this returned here, leaving the receiver on the
-        // new channel with the locator on the old one and nothing looking again.
-        // Bench-found at roughly one run in eight (#20).
-        //
-        // Look once more.  This is bounded: the probe cannot recurse, and there is no
-        // second retry — the only new action is putting the receiver back where the
-        // evidence says the locator is.  The invariant being bought is that a FAILED
-        // move never ends with the receiver on a channel the probe did not confirm.
-        val after = probeChannelMove(stagedLocatorConfig.loraChannel, oldChannel, service)
-        _channelMoveOutcome.value = after
-        if (after == ChannelMove.Verdict.Confirmed)
-            return true   // the retry landed after all; only its confirmation was late
-        if (after == ChannelMove.Verdict.LocatorStayed) {
-            // Heard on the old channel again, so end there with it rather than split.
-            service.changeReceiverConfig(
-                ReceiverConfig(channel = oldChannel, deviceName = _remoteReceiverConfig.value.deviceName)
-            )
+        override suspend fun resendLocatorConfig(): Boolean {
+            if (service.changeLocatorConfig(stagedLocatorConfig) != true) return false
+            _locatorConfigMessageState.value = LocatorMessageState.Sent
+            // The retry is a fresh transmission, so it earns a fresh receipt.
+            channelMoveReceiptMs = 0L
+            return true
         }
-        return false
+
+        override suspend fun awaitConfirmation(): Boolean =
+            waitForLocatorConfig(stagedLocatorConfig)
+
+        override fun onVerdict(verdict: ChannelMove.Verdict) {
+            _channelMoveOutcome.value = verdict
+        }
     }
 
     /**
