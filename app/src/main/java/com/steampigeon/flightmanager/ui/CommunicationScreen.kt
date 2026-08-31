@@ -134,8 +134,8 @@ fun CommunicationScreen(
     val surveyInProgress by viewModel.surveyInProgress.collectAsState()
     val locatorSearch by viewModel.locatorSearch.collectAsState()
     val knownLocators by viewModel.knownLocators.collectAsState()
-    val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
-    val channelMoveBannerDismissed by viewModel.channelMoveBannerDismissed.collectAsState()
+    val channelMoveBannerChannel by viewModel.channelMoveBannerChannel.collectAsState()
+    val channelMoveResult by viewModel.channelMoveResult.collectAsState()
     val channelMoveOutcome by viewModel.channelMoveOutcome.collectAsState()
 
     // Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
@@ -277,8 +277,13 @@ fun CommunicationScreen(
             // Dismiss hides the MESSAGE, not the staged channel: that channel is
             // what the ADR-0029 search looks on after a failed move, and it used to
             // be thrown away by the act of clearing the error describing it.
-            pendingChannelMove?.takeIf { !channelMoveBannerDismissed }?.let { channel ->
-                val (text, color) = when (locatorConfigMessageState) {
+            //
+            // The terminal state is read from channelMoveResult, which outlives the
+            // 2 s Idle reset — the outcome of a cycle that can run ~23 s used to be
+            // on screen for two.
+            channelMoveBannerChannel?.let { channel ->
+                val shownState = channelMoveResult ?: locatorConfigMessageState
+                val (text, color) = when (shownState) {
                     LocatorMessageState.SendRequested,
                     LocatorMessageState.Sent ->
                         stringResource(R.string.channel_move_in_progress, channel) to
@@ -289,15 +294,19 @@ fun CommunicationScreen(
                     LocatorMessageState.SendFailure ->
                         stringResource(R.string.channel_move_failed) to
                                 MaterialTheme.colorScheme.error
-                    // Two different endings share this state and leave the hardware
-                    // in opposite places — see channelMoveOutcome.
-                    LocatorMessageState.NotAcknowledged ->
-                        if (channelMoveOutcome == ChannelMove.Verdict.NoEvidence)
+                    // Three different endings share this state and leave the hardware
+                    // in different places — see channelMoveOutcome.
+                    LocatorMessageState.NotAcknowledged -> when (channelMoveOutcome) {
+                        ChannelMove.Verdict.NotChecked ->
+                            stringResource(R.string.channel_move_not_checked, channel) to
+                                    MaterialTheme.colorScheme.error
+                        ChannelMove.Verdict.NoEvidence ->
                             stringResource(R.string.channel_move_unresolved, channel) to
                                     MaterialTheme.colorScheme.error
-                        else
+                        else ->
                             stringResource(R.string.channel_move_not_acknowledged, channel) to
                                     MaterialTheme.colorScheme.error
+                    }
                     LocatorMessageState.Idle -> null to MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 text?.let {

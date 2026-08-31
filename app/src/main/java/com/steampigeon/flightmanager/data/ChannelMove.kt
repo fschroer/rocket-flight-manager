@@ -28,7 +28,30 @@ object ChannelMove {
      * the receiver heard nothing it could attribute, and the caller must then do
      * the *non-destructive* thing — leave the receiver where it is and say so.
      */
-    enum class Verdict { Confirmed, LocatorStayed, NoEvidence }
+    enum class Verdict {
+        Confirmed,
+        LocatorStayed,
+        NoEvidence,
+
+        /**
+         * The question was never asked — the receiver refused the probe.
+         *
+         * Distinct from [NoEvidence] on purpose, and the distinction is the whole
+         * lesson: *a rule about the link must be able to tell a gap the app created
+         * from a gap the world created.* A refused search means the app failed to
+         * look; treating that as "heard nothing" is the app mistaking its own
+         * blindness for the locator's absence.
+         *
+         * It is reachable by construction rather than by bad luck. A channel move
+         * queues a `LocatorCfgChgRequest`, `IsOperatorCommand` counts that as an
+         * operator command, and the receiver refuses a `LocatorSearchRequest` while
+         * one is pending. If the locator is silent the forward can never leave — the
+         * forwarding window needs a recent `PreLaunchData` — so the undelivered
+         * command blocks the very probe that would explain why it was undeliverable,
+         * until the receiver's `kPendingTxStaleMs` drops it.
+         */
+        NotChecked,
+    }
 
     /**
      * Which channel the locator is on, judged from one probe run.

@@ -224,6 +224,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // search's own 8 s silence timeout normally ends things first.
         const val CHANNEL_PROBE_TIMEOUT_MS = 20_000L
 
+        // How long to wait before re-asking a probe the receiver REFUSED.
+        //
+        // Sized against the receiver's kPendingTxStaleMs (10 s), and the coupling is
+        // deliberate rather than incidental: the thing being waited out is usually
+        // our OWN undelivered LocatorCfgChgRequest, which the receiver counts as an
+        // operator command and which blocks a search until it goes stale. The first
+        // probe lands ~5 s after the move, so this puts the retry past the 10 s drop.
+        // If that firmware constant moves, this must move with it.
+        const val CHANNEL_PROBE_REFUSED_RETRY_MS = 6_000L
+
         // How often the link verdict re-evaluates itself with no packet to trigger
         // it. Fast enough that the note and the red marker change together.
         const val LINK_LIVENESS_TICK_MS = 500L
@@ -1125,16 +1135,26 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _pendingChannelMove = MutableStateFlow<Int?>(null)
     val pendingChannelMove: StateFlow<Int?> = _pendingChannelMove.asStateFlow()
 
-    // Whether the user has dismissed the move banner.  Dismissing hides the
-    // MESSAGE and deliberately does not clear [_pendingChannelMove]: that channel is
-    // what puts the staged-but-unconfirmed move into the ADR-0029 search candidates,
-    // and it was reachable only from the banner reporting the failure — so clearing
-    // an error message threw away the one channel worth searching for the locator
-    // that error was about.
-    private val _channelMoveBannerDismissed = MutableStateFlow(false)
-    val channelMoveBannerDismissed: StateFlow<Boolean> = _channelMoveBannerDismissed.asStateFlow()
+    // The channel the BANNER is describing, which is deliberately not
+    // [_pendingChannelMove].  That one is the ADR-0029 search-candidate memory and is
+    // cleared when a move is confirmed; this one drives the message and is cleared
+    // only by Dismiss or by the next move.  Conflating them meant a SUCCESSFUL move
+    // cleared the candidate and took its own "Now on channel N" off screen in the
+    // same instant, before it could be read.
+    private val _channelMoveBannerChannel = MutableStateFlow<Int?>(null)
+    val channelMoveBannerChannel: StateFlow<Int?> = _channelMoveBannerChannel.asStateFlow()
 
-    fun dismissChannelMoveBanner() { _channelMoveBannerDismissed.value = true }
+    // The move's terminal state, held after [_locatorConfigMessageState] returns to
+    // Idle two seconds later.  Without it the outcome of a cycle that can run ~23 s
+    // was legible for two — reported from the bench as "a very quick message at the
+    // top indicating an issue, but it went away before I could read it".
+    private val _channelMoveResult = MutableStateFlow<LocatorMessageState?>(null)
+    val channelMoveResult: StateFlow<LocatorMessageState?> = _channelMoveResult.asStateFlow()
+
+    fun dismissChannelMoveBanner() {
+        _channelMoveBannerChannel.value = null
+        _channelMoveResult.value = null
+    }
 
     // How an unconfirmed move ended, so the failure message can say something true.
     // Both failure paths land on NotAcknowledged, but they leave the hardware in
@@ -1147,7 +1167,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun moveLocatorToChannel(service: BluetoothService?, channel: Int) {
         _pendingChannelMove.value = channel
-        _channelMoveBannerDismissed.value = false
+        _channelMoveBannerChannel.value = channel
+        _channelMoveResult.value = null
         _channelMoveOutcome.value = null
         channelMoveReceiptMs = 0L
         channelMoveLocatorId = _connectedLocatorId.value
@@ -2866,6 +2887,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 // after a failed move looks in the right place.
                 if (channelChanged) _pendingChannelMove.value = null
             }
+            // Held for the banner, which must outlive the Idle reset below.
+            if (channelChanged) _channelMoveResult.value = _locatorConfigMessageState.value
             delay(2000)
             _locatorConfigMessageState.value = LocatorMessageState.Idle
         }
@@ -2920,6 +2943,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // the one worth paying another 2.8 s to avoid entering by accident.
         if (verdict == ChannelMove.Verdict.NoEvidence)
             verdict = probeChannelMove(newChannel, oldChannel, service)
+        // NotChecked already carries its own refusal retry, so it is not re-probed
+        // here — that would be a third ask for a receiver that has twice declined.
         _channelMoveOutcome.value = verdict
         return when (verdict) {
             // The move worked; only the confirmation was late.  Nothing to do, and
@@ -2935,6 +2960,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // fixed here.  The user's remedy is Find a locator, which already carries
             // this channel in its candidates.
             ChannelMove.Verdict.NoEvidence -> false
+            // Never looked, so nothing is established and nothing is moved.  Said
+            // differently from NoEvidence in the UI, because "I could not check" and
+            // "I checked and heard nothing" are different things to tell a user
+            // standing on a flight line.
+            ChannelMove.Verdict.NotChecked -> false
         }
     }
 
@@ -2959,17 +2989,38 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     ): ChannelMove.Verdict {
         // A run already going is somebody else's; its hits are not an answer to this
         // question, and startLocatorSearch would no-op rather than replace it.
-        if (_locatorSearch.value?.running == true) return ChannelMove.Verdict.NoEvidence
-        startLocatorSearch(service, ChannelMove.probeChannels(newChannel, oldChannel))
-        val run = withTimeoutOrNull(CHANNEL_PROBE_TIMEOUT_MS) {
-            locatorSearch.first { it != null && !it.running }
-        } ?: return ChannelMove.Verdict.NoEvidence
+        if (_locatorSearch.value?.running == true) return ChannelMove.Verdict.NotChecked
+        val run = runProbe(newChannel, oldChannel, service)
+            ?: return ChannelMove.Verdict.NotChecked
+        // A refusal is not an answer.  The receiver turns a search down while an
+        // operator command is queued — and after a move to a silent locator the
+        // queued command is OUR OWN undeliverable one, so the probe is blocked by
+        // exactly the situation it was sent to diagnose.  Wait out the receiver's
+        // stale-drop and ask once more before giving up.
+        val settled = if (run.status == LocatorSearchData.Status.Done) run else {
+            delay(CHANNEL_PROBE_REFUSED_RETRY_MS)
+            runProbe(newChannel, oldChannel, service)
+        }
+        if (settled == null || settled.status != LocatorSearchData.Status.Done)
+            return ChannelMove.Verdict.NotChecked
         return ChannelMove.verdict(
-            hits = run.hits,
+            hits = settled.hits,
             locatorId = channelMoveLocatorId,
             newChannel = newChannel,
             oldChannel = oldChannel,
         )
+    }
+
+    /** One probe run; null if it never terminated. */
+    private suspend fun runProbe(
+        newChannel: Int,
+        oldChannel: Int,
+        service: BluetoothService,
+    ): LocatorSearchData.Run? {
+        startLocatorSearch(service, ChannelMove.probeChannels(newChannel, oldChannel))
+        return withTimeoutOrNull(CHANNEL_PROBE_TIMEOUT_MS) {
+            locatorSearch.first { it != null && !it.running }
+        }
     }
 
     // Repair for a channel change the probe has shown the locator did not take:
