@@ -2917,9 +2917,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 return true
             if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure)
                 return false
-            val receipt = channelMoveReceiptMs
-            if (receipt > started)
-                deadline = minOf(maxOf(deadline, receipt + CONFIG_CONFIRM_WINDOW_MS), hardDeadline)
+            deadline = ChannelMove.confirmDeadline(
+                startedMs = started,
+                deadlineMs = deadline,
+                receiptMs = channelMoveReceiptMs,
+                windowMs = CONFIG_CONFIRM_WINDOW_MS,
+                hardDeadlineMs = hardDeadline,
+            )
         }
         return false
     }
@@ -2946,25 +2950,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // NotChecked already carries its own refusal retry, so it is not re-probed
         // here — that would be a third ask for a receiver that has twice declined.
         _channelMoveOutcome.value = verdict
-        return when (verdict) {
-            // The move worked; only the confirmation was late.  Nothing to do, and
-            // in particular nothing to revert.
-            ChannelMove.Verdict.Confirmed -> true
+        // Only an evidenced LocatorStayed may move anything; see ChannelMove.action,
+        // which is pinned because reverting on anything else is the defect this
+        // amendment exists to remove.
+        return when (ChannelMove.action(verdict)) {
+            // The move worked; only the confirmation was late.  Nothing to revert.
+            ChannelMove.Action.Succeed -> true
             // Now — and only now — the split is established rather than assumed.
-            ChannelMove.Verdict.LocatorStayed ->
+            ChannelMove.Action.Revert ->
                 recoverLocatorChannel(stagedLocatorConfig, oldChannel, service)
-            // Heard nothing it could attribute: locator off, out of range, or
-            // broadcasting sparser than one dwell can catch.  Report the failure and
-            // leave the receiver where the search's home-restore put it — the new
-            // channel — because acting on no evidence is the whole defect being
-            // fixed here.  The user's remedy is Find a locator, which already carries
-            // this channel in its candidates.
-            ChannelMove.Verdict.NoEvidence -> false
-            // Never looked, so nothing is established and nothing is moved.  Said
-            // differently from NoEvidence in the UI, because "I could not check" and
-            // "I checked and heard nothing" are different things to tell a user
-            // standing on a flight line.
-            ChannelMove.Verdict.NotChecked -> false
+            // Either heard nothing it could attribute (locator off, out of range, or
+            // broadcasting sparser than one dwell can catch) or never got to look at
+            // all.  Report the failure and move nothing; the UI tells the two apart.
+            ChannelMove.Action.Stand -> false
         }
     }
 
@@ -3048,9 +3046,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         var relinked = false
         for (i in 1..50) {
             delay(100)
-            if (_remoteReceiverConfig.value.channel == oldChannel &&
-                _remoteLocatorConfig.value.loraChannel == oldChannel &&
-                lastConnectedFrameMs > askedAtMs) {
+            if (ChannelMove.relinked(
+                    receiverChannel = _remoteReceiverConfig.value.channel,
+                    locatorChannel = _remoteLocatorConfig.value.loraChannel,
+                    oldChannel = oldChannel,
+                    lastFrameMs = lastConnectedFrameMs,
+                    askedAtMs = askedAtMs,
+                )
+            ) {
                 relinked = true
                 break
             }

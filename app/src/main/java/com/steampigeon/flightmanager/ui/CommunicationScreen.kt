@@ -305,25 +305,29 @@ fun CommunicationScreen(
                     // bench 2026-08-30 — right verdict, wrong sentence. The receiver's
                     // own channel is known here regardless, because the channel watch
                     // polls ReceiverInfo every 2 s while the locator is quiet.
-                    LocatorMessageState.NotAcknowledged -> when (channelMoveOutcome) {
-                        ChannelMove.Verdict.NotChecked ->
+                    // Which sentence is earned is decided in ChannelMove.message and
+                    // pinned there; this only maps it to a resource. Three of this
+                    // amendment's defects were messages rather than logic, so the
+                    // choice does not live inline in a composable any more.
+                    LocatorMessageState.NotAcknowledged -> when (
+                        ChannelMove.message(
+                            verdict = channelMoveOutcome,
+                            attemptedChannel = channel,
+                            receiverChannel = remoteReceiverConfig.channel,
+                        )
+                    ) {
+                        ChannelMove.Message.NotChecked ->
                             stringResource(
                                 R.string.channel_move_not_checked, remoteReceiverConfig.channel,
                             ) to MaterialTheme.colorScheme.error
-                        ChannelMove.Verdict.NoEvidence ->
-                            // Nothing moved at all is a much smaller problem than a
-                            // locator that may be stranded, and saying so is the
-                            // difference between "turn it on" and "go find your rocket".
-                            if (remoteReceiverConfig.channel != channel)
-                                stringResource(
-                                    R.string.channel_move_nothing_moved,
-                                    remoteReceiverConfig.channel,
-                                ) to MaterialTheme.colorScheme.onSurfaceVariant
-                            else
-                                stringResource(
-                                    R.string.channel_move_unresolved,
-                                    remoteReceiverConfig.channel,
-                                ) to MaterialTheme.colorScheme.error
+                        ChannelMove.Message.NothingMoved ->
+                            stringResource(
+                                R.string.channel_move_nothing_moved, remoteReceiverConfig.channel,
+                            ) to MaterialTheme.colorScheme.onSurfaceVariant
+                        ChannelMove.Message.Unresolved ->
+                            stringResource(
+                                R.string.channel_move_unresolved, remoteReceiverConfig.channel,
+                            ) to MaterialTheme.colorScheme.error
                         else ->
                             stringResource(R.string.channel_move_not_acknowledged, channel) to
                                     MaterialTheme.colorScheme.error
