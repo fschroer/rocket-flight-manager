@@ -55,7 +55,7 @@ class LocatorSearchTest {
 
     @Test fun duplicatesCollapse() {
         // The sources overlap constantly: a locator's last channel is usually the
-        // one the receiver is still on. A duplicate would spend 1.2 s proving the
+        // one the receiver is still on. A duplicate would spend 1.4 s proving the
         // same thing twice.
         val c = LocatorSearch.candidates(
             currentChannel = 12,
@@ -158,7 +158,7 @@ class LocatorSearchTest {
         assertTrue(base.canWiden)
         assertTrue(base.copy(hits = listOf(LocatorSearch.Hit(1, theirs, "x", -70, 8, false))).canWiden)
         // But not while it is still going, not after a whole-band run, and not after a
-        // cancel — answering "stop" with an 80-second sweep is not reading the room.
+        // cancel — answering "stop" with a 90-second sweep is not reading the room.
         assertFalse(base.copy(running = true).canWiden)
         assertFalse(base.copy(wholeBand = true).canWiden)
         assertFalse(base.copy(status = LocatorSearch.Status.Cancelled).canWiden)

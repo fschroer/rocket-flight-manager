@@ -10,13 +10,22 @@ package com.steampigeon.flightmanager.data
  * noise on the channel you want, so it is shortlisted by that rule only by
  * accident.
  *
- * The cost of a dwell is what shapes everything else. A locator is on air ~138 ms
- * once per second, so a dwell shorter than a full broadcast period reads an
- * occupied channel as empty most of the time — the coarse pass's known failure,
- * and the reason the survey has a confirm phase at all. At ~1.2 s per channel the
- * whole band is ~77 s, which is a long time to be deaf. Hence candidates first:
- * a handful of channels the locator is actually likely to be on answers the usual
- * case in seconds, and the full band stays available for when it does not.
+ * The cost of a dwell is what shapes everything else. A **disarmed** locator —
+ * which is what a search hunts — is on air ~200 ms once per second
+ * (`PreLaunchData`, 118 bytes at SF7/125 kHz/CR 4/5). A dwell has to contain a
+ * WHOLE burst to rule a channel out, so it must exceed the period *plus* the
+ * airtime: 1000 + 200 = 1200 ms minimum, and the dwell is 1400 ms to leave margin
+ * for cadence jitter. Anything shorter reads an occupied channel as empty most of
+ * the time — the coarse pass's known failure, and the reason the survey has a
+ * confirm phase at all. At 1.4 s per channel a whole band with nothing on it is
+ * up to ~90 s, which is a long time to be deaf. Hence candidates first: a handful
+ * of channels the locator is actually likely to be on answers the usual case in
+ * seconds, and the full band stays available for when it does not.
+ *
+ * The figures were wrong until 2026-08-30 and are worth stating precisely for
+ * that reason: they read ~138 ms and ~77 s, which is `TelemetryData` — the frame
+ * an **armed** locator sends. Both scans look for a disarmed one. See ADR-0029,
+ * "The dwell was sized against the wrong frame".
  */
 object LocatorSearch {
 
@@ -142,7 +151,7 @@ object LocatorSearch {
          * anything was audible.
          *
          * A *cancelled* run does not qualify — the user just stopped a search, and
-         * answering that by offering an 80-second one is not reading the room.
+         * answering that by offering a 90-second one is not reading the room.
          */
         val canWiden: Boolean
             get() = !running && status == Status.Done && !wholeBand

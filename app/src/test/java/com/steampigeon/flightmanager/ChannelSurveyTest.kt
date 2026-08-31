@@ -15,8 +15,8 @@ import org.junit.Test
  * - A locator a few feet from the receiver saturates every channel, and a naive
  *   ranking would confidently recommend whichever one read lowest. The right
  *   answer is "move the transmitter", not "switch to channel 37".
- * - A locator is on air ~138 ms per second, so a short coarse dwell misses it
- *   roughly three times in four. A sweep once ranked the channel BOTH locators
+ * - A disarmed locator is on air ~200 ms per second, so a short coarse dwell
+ *   misses it roughly four times in five. A sweep once ranked the channel BOTH locators
  *   were using as the quietest in the band. Only channels given the long
  *   confirmation dwell may be suggested.
  */

@@ -18,6 +18,7 @@ import org.maplibre.android.geometry.LatLng
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.UserPreferences
+import com.steampigeon.flightmanager.data.ChannelMove
 import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
 import com.steampigeon.flightmanager.data.LocatorSearch as LocatorSearchData
 import com.steampigeon.flightmanager.data.LinkQuality
@@ -204,10 +205,24 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
         // A search streams, so this is not "how long the whole run takes" — it is
         // how long a *gap* in the stream may last before the run is presumed dead.
-        // One dwell is 1.2 s, so this is several missed results, and it restarts on
-        // every message. A whole-band run is ~77 s and never trips it while it is
-        // making progress.
+        // One dwell is 1.4 s, so this is several missed results, and it restarts on
+        // every message. A whole-band run is up to ~90 s and never trips it while it
+        // is making progress.
         const val SEARCH_SILENCE_TIMEOUT_MS = 8_000L
+
+        // How long to wait for a locator channel change to be confirmed by a
+        // PreLaunchData on the new channel.  Re-based, not merely started, by the
+        // receiver's transmit receipt: the clock used to start at the BLE write,
+        // but the receiver cannot forward until it sees a PreLaunchData and is
+        // 50-700 ms past it, so on the lossy channel that motivated the move the
+        // whole window was spent waiting for a forwarding window (ADR-0011).
+        const val CONFIG_CONFIRM_WINDOW_MS = 5_000L
+
+        // Ceiling on the ADR-0011 probe — two 1.4 s dwells plus BLE round trips and
+        // the receiver's own refusal replies.  Not the expected duration (~2.8 s):
+        // it is the point past which the run is presumed never to answer, and the
+        // search's own 8 s silence timeout normally ends things first.
+        const val CHANNEL_PROBE_TIMEOUT_MS = 20_000L
 
         // How often the link verdict re-evaluates itself with no packet to trigger
         // it. Fast enough that the note and the red marker change together.
@@ -787,6 +802,25 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // display to whoever else happens to be audible.
     @Volatile private var lastConnectedFrameMs = 0L
 
+    // Wall clock of the last ReceiverInfo whose channel matched a move in flight —
+    // the ADR-0011 transmit receipt.  The receiver arms its follow only after
+    // Send() and applies it only after TxDone, so this message cannot exist unless
+    // the forward actually went on air; its arrival is the first moment the confirm
+    // window is measuring anything real.
+    //
+    // Used ONLY to re-base that window, deliberately never to short-circuit.  Its
+    // absence is ambiguous — a receiver predating this change never sends one — and
+    // reading absence as "the command was never transmitted" would leave a genuine
+    // split unrepaired against older firmware.  The probe resolves that case
+    // correctly anyway, by hearing the locator on the old channel.
+    @Volatile private var channelMoveReceiptMs = 0L
+
+    // The locator the pending move was addressed to, captured when it was sent.
+    // The probe attributes its hits with this: an unattributed hit cannot be
+    // evidence, and a *different* locator's hit on the new channel must never read
+    // as confirmation.
+    @Volatile private var channelMoveLocatorId: Long? = null
+
     // Wall clock of the last frame heard from the conflicting locator.  The banner
     // is held for [CONFLICT_HOLD_MS] after that rather than being cleared by the
     // next good packet: with two locators sharing a channel the broadcasts
@@ -1008,7 +1042,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      *
      * Clearing unconditionally was worse. [onLocatorSearchResult] drops every message
      * that arrives while the run is null, so wiping a run in flight orphaned it: the
-     * receiver went on sweeping — deaf, for up to 77 s — while the app ignored the
+     * receiver went on sweeping — deaf, for up to ~90 s — while the app ignored the
      * stream and the terminator alike, and the search simply appeared to die on
      * leaving the screen. Anything still running is therefore left exactly as it is.
      */
@@ -1024,9 +1058,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     /**
      * Restart the timeout on every streamed message rather than running one for the
-     * whole sweep. A whole-band run is ~77 s — far longer than any fixed timeout
-     * that would still catch a receiver going quiet — but it reports every 1.2 s,
-     * so silence is the thing actually worth watching.
+     * whole sweep. A whole-band run is up to ~90 s — far longer than any fixed
+     * timeout that would still catch a receiver going quiet — but it reports every
+     * 1.4 s, so silence is the thing actually worth watching.
      */
     private fun armSearchTimeout() {
         searchTimeoutJob?.cancel()
@@ -1091,10 +1125,22 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _pendingChannelMove = MutableStateFlow<Int?>(null)
     val pendingChannelMove: StateFlow<Int?> = _pendingChannelMove.asStateFlow()
 
-    fun clearPendingChannelMove() { _pendingChannelMove.value = null }
+    // Whether the user has dismissed the move banner.  Dismissing hides the
+    // MESSAGE and deliberately does not clear [_pendingChannelMove]: that channel is
+    // what puts the staged-but-unconfirmed move into the ADR-0029 search candidates,
+    // and it was reachable only from the banner reporting the failure — so clearing
+    // an error message threw away the one channel worth searching for the locator
+    // that error was about.
+    private val _channelMoveBannerDismissed = MutableStateFlow(false)
+    val channelMoveBannerDismissed: StateFlow<Boolean> = _channelMoveBannerDismissed.asStateFlow()
+
+    fun dismissChannelMoveBanner() { _channelMoveBannerDismissed.value = true }
 
     fun moveLocatorToChannel(service: BluetoothService?, channel: Int) {
         _pendingChannelMove.value = channel
+        _channelMoveBannerDismissed.value = false
+        channelMoveReceiptMs = 0L
+        channelMoveLocatorId = _connectedLocatorId.value
         val target = _remoteLocatorConfig.value.copy(loraChannel = channel)
         _locatorConfigMessageState.value = LocatorMessageState.SendRequested
         _locatorConfigMessageState.value =
@@ -2297,6 +2343,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                         currentState.deviceName,
                                 )
                             }
+                            // The ADR-0011 transmit receipt.  The receiver answers a
+                            // ReceiverCfgChgRequest with one of these too, so the
+                            // channel is the discriminator: only a report matching the
+                            // move in flight says "your locator change is on air".  A
+                            // recovery revert reports the OLD channel and correctly
+                            // does not re-base anything.
+                            if (parsed.msg.channel == _pendingChannelMove.value)
+                                channelMoveReceiptMs = System.currentTimeMillis()
                             // The only channel measurement that does not need a
                             // locator. This is what separates "the locator is off"
                             // from "something is sitting on our channel" — during a
@@ -2761,57 +2815,154 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 // The BLE send itself failed: nothing left the phone, so the receiver
                 // never switched and there is nothing to recover.  Leave SendFailure.
             } else if (channelChanged && service != null) {
-                // The locator never appeared on the new channel, so it likely missed
-                // the LoRa command and is still on the old channel — but the receiver
-                // already followed the command onto the new channel, so the link is
-                // split.  Pull the receiver back to the old channel, wait for the link
-                // to resume, then retry the locator change once.
-                if (recoverLocatorChannel(stagedLocatorConfig, oldChannel, service))
-                    _locatorConfigMessageState.value = LocatorMessageState.AckUpdated
-                else
-                    _locatorConfigMessageState.value = LocatorMessageState.NotAcknowledged
+                // Nothing arrived on the new channel — which is NOT a diagnosis.
+                // Two opposite states produce that silence: the locator missed the
+                // command and stayed behind while the receiver followed (a real
+                // split), or everything moved and the confirmation was merely late.
+                // This branch used to assume the first and pull the receiver back,
+                // which in the second case MANUFACTURES the split it was written to
+                // repair — and strands the rocket, because the locator's move is
+                // flash-persistent.  So look before acting (ADR-0011 amendment).
+                _locatorConfigMessageState.value =
+                    if (resolveChannelMove(stagedLocatorConfig, oldChannel, service))
+                        LocatorMessageState.AckUpdated
+                    else
+                        LocatorMessageState.NotAcknowledged
             } else if (_locatorConfigMessageState.value == LocatorMessageState.SendRequested ||
                 _locatorConfigMessageState.value == LocatorMessageState.Sent) {
                 _locatorConfigMessageState.value = LocatorMessageState.NotAcknowledged
             }
 
-            if (_locatorConfigMessageState.value == LocatorMessageState.AckUpdated)
+            if (_locatorConfigMessageState.value == LocatorMessageState.AckUpdated) {
                 _locatorConfigChanged.value = false
+                // Confirmed, so it is no longer a move "staged but never confirmed"
+                // and has no business in the ADR-0029 search candidates.  An
+                // unconfirmed one is deliberately kept — that is the channel the
+                // locator may have taken alone, and it is the whole reason a search
+                // after a failed move looks in the right place.
+                if (channelChanged) _pendingChannelMove.value = null
+            }
             delay(2000)
             _locatorConfigMessageState.value = LocatorMessageState.Idle
         }
     }
 
-    // Poll ~5 s for the locator config to be echoed back (via PreLaunchData).
+    // Poll for the locator config to be echoed back (via PreLaunchData).
     // Returns true on confirmation, false on timeout or an explicit send failure.
+    //
+    // The window is RE-BASED by the receiver's transmit receipt rather than merely
+    // started at the BLE write.  The receiver cannot forward a command until it sees
+    // a PreLaunchData and is 50-700 ms past it, so on a channel dropping broadcasts —
+    // the channel that motivates a move in the first place — the old fixed window was
+    // spent waiting for the command to be transmitted at all, and expired before the
+    // locator had a chance to answer.  The noise that justifies the move was starving
+    // its confirmation.  See ADR-0011.
     private suspend fun waitForLocatorConfig(stagedLocatorConfig: LocatorConfig): Boolean {
-        for (i in 1..50) {
+        val started = System.currentTimeMillis()
+        var deadline = started + CONFIG_CONFIRM_WINDOW_MS
+        while (System.currentTimeMillis() < deadline) {
             delay(100)
             if (_remoteLocatorConfig.value == stagedLocatorConfig)
                 return true
             if (_locatorConfigMessageState.value == LocatorMessageState.SendFailure)
                 return false
+            val receipt = channelMoveReceiptMs
+            if (receipt > started)
+                deadline = maxOf(deadline, receipt + CONFIG_CONFIRM_WINDOW_MS)
         }
         return false
     }
 
-    // Recovery for a failed channel change: move the receiver back to the old channel
-    // (BLE, always reachable), wait for PreLaunchData to resume, then re-send the
-    // locator change once.  Returns true if the retry is confirmed.
+    /**
+     * Work out what actually happened to an unconfirmed channel move, and act only
+     * on what the receiver can hear (ADR-0011, "revert on evidence, not on silence").
+     * Returns true if the locator ended up on the staged channel.
+     */
+    private suspend fun resolveChannelMove(
+        stagedLocatorConfig: LocatorConfig,
+        oldChannel: Int,
+        service: BluetoothService,
+    ): Boolean {
+        val newChannel = stagedLocatorConfig.loraChannel
+        return when (probeChannelMove(newChannel, oldChannel, service)) {
+            // The move worked; only the confirmation was late.  Nothing to do, and
+            // in particular nothing to revert.
+            ChannelMove.Verdict.Confirmed -> true
+            // Now — and only now — the split is established rather than assumed.
+            ChannelMove.Verdict.LocatorStayed ->
+                recoverLocatorChannel(stagedLocatorConfig, oldChannel, service)
+            // Heard nothing it could attribute: locator off, out of range, or
+            // broadcasting sparser than one dwell can catch.  Report the failure and
+            // leave the receiver where the search's home-restore put it — the new
+            // channel — because acting on no evidence is the whole defect being
+            // fixed here.  The user's remedy is Find a locator, which already carries
+            // this channel in its candidates.
+            ChannelMove.Verdict.NoEvidence -> false
+        }
+    }
+
+    /**
+     * Ask the receiver which of the two channels the locator is actually on.
+     *
+     * A **census** over both, never a targeted run that stops on the first hit: a
+     * locator a few feet from the receiver decodes on channels it is nowhere near and
+     * the artifact reads as strong (ADR-0029), so the decision has to compare two
+     * dwells rather than trust one. This probe runs while the user is configuring a
+     * locator, which is exactly the range that produces the artifact.
+     *
+     * Reuses the ordinary search flow, so the run is visible in the search section
+     * and cancellable by the same button, and inherits the receiver's own refusals —
+     * an armed or in-flight locator returns no hits, which reads as no evidence and
+     * leaves the receiver untouched.
+     */
+    private suspend fun probeChannelMove(
+        newChannel: Int,
+        oldChannel: Int,
+        service: BluetoothService,
+    ): ChannelMove.Verdict {
+        // A run already going is somebody else's; its hits are not an answer to this
+        // question, and startLocatorSearch would no-op rather than replace it.
+        if (_locatorSearch.value?.running == true) return ChannelMove.Verdict.NoEvidence
+        startLocatorSearch(service, ChannelMove.probeChannels(newChannel, oldChannel))
+        val run = withTimeoutOrNull(CHANNEL_PROBE_TIMEOUT_MS) {
+            locatorSearch.first { it != null && !it.running }
+        } ?: return ChannelMove.Verdict.NoEvidence
+        return ChannelMove.verdict(
+            hits = run.hits,
+            locatorId = channelMoveLocatorId,
+            newChannel = newChannel,
+            oldChannel = oldChannel,
+        )
+    }
+
+    // Repair for a channel change the probe has shown the locator did not take:
+    // move the receiver back to the old channel (BLE, always reachable), wait for the
+    // link to resume, then re-send the locator change once.  Returns true if the retry
+    // is confirmed.
+    //
+    // Only ever reached from ChannelMove.Verdict.LocatorStayed.  Calling it on silence
+    // alone is the defect ADR-0011's amendment exists to remove.
     private suspend fun recoverLocatorChannel(
         stagedLocatorConfig: LocatorConfig,
         oldChannel: Int,
         service: BluetoothService,
     ): Boolean {
+        val askedAtMs = System.currentTimeMillis()
         service.changeReceiverConfig(
             ReceiverConfig(channel = oldChannel, deviceName = _remoteReceiverConfig.value.deviceName)
         )
-        // Wait for the link to come back on the old channel.
+        // Wait for the link to come back on the old channel — on EVIDENCE that a frame
+        // was admitted after we asked, not merely on two readings that say `oldChannel`.
+        // Both of those readings are updated only by a relayed PreLaunchData, so after a
+        // move whose confirmation never arrived they were BOTH still reading the old
+        // channel: this test passed on its first 100 ms poll having verified nothing,
+        // and the retry then went out to a channel with nothing on it.
         var relinked = false
         for (i in 1..50) {
             delay(100)
             if (_remoteReceiverConfig.value.channel == oldChannel &&
-                _remoteLocatorConfig.value.loraChannel == oldChannel) {
+                _remoteLocatorConfig.value.loraChannel == oldChannel &&
+                lastConnectedFrameMs > askedAtMs) {
                 relinked = true
                 break
             }
@@ -2822,6 +2973,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         if (service.changeLocatorConfig(stagedLocatorConfig) != true)
             return false
         _locatorConfigMessageState.value = LocatorMessageState.Sent
+        // The retry is a fresh transmission, so it earns a fresh receipt.
+        channelMoveReceiptMs = 0L
         return waitForLocatorConfig(stagedLocatorConfig)
     }
 

@@ -381,7 +381,7 @@ class BluetoothService : Service() {
      *
      *  The receiver answers with a stream of [MsgType.LocatorSearchResult]: one per
      *  channel as it finishes, then a terminator. It refuses while the locator is
-     *  armed or flying — a whole-band run is ~77 s of deafness. */
+     *  armed or flying — a whole-band run is up to ~90 s of deafness. */
     fun requestLocatorSearch(channels: List<Int>, targetLocatorId: Long = 0L): Boolean {
         val payload = ByteArray(Protocol.LOCATOR_SEARCH_REQUEST_PAYLOAD_SIZE)
         val listed = channels.take(Protocol.LOCATOR_SEARCH_MAX_CHANNELS)

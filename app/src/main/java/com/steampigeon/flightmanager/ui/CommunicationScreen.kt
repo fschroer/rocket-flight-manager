@@ -134,6 +134,7 @@ fun CommunicationScreen(
     val locatorSearch by viewModel.locatorSearch.collectAsState()
     val knownLocators by viewModel.knownLocators.collectAsState()
     val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
+    val channelMoveBannerDismissed by viewModel.channelMoveBannerDismissed.collectAsState()
 
     // Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
     // channel watchdog uses for "the locator has gone quiet". Deliberately not the
@@ -268,10 +269,13 @@ fun CommunicationScreen(
             }
 
             // Progress for a locator channel move. The ADR-0011 cycle waits for
-            // PreLaunchData to resume on the new channel and may revert and retry once,
-            // so this runs for several seconds with the link legitimately down —
-            // silence there reads as a hang.
-            pendingChannelMove?.let { channel ->
+            // PreLaunchData to resume on the new channel, then probes both channels
+            // (~2.8 s) and may revert and retry once, so this runs for several seconds
+            // with the link legitimately down — silence there reads as a hang.
+            // Dismiss hides the MESSAGE, not the staged channel: that channel is
+            // what the ADR-0029 search looks on after a failed move, and it used to
+            // be thrown away by the act of clearing the error describing it.
+            pendingChannelMove?.takeIf { !channelMoveBannerDismissed }?.let { channel ->
                 val (text, color) = when (locatorConfigMessageState) {
                     LocatorMessageState.SendRequested,
                     LocatorMessageState.Sent ->
@@ -294,7 +298,7 @@ fun CommunicationScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(text = it, color = color, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { viewModel.clearPendingChannelMove() }) {
+                        TextButton(onClick = { viewModel.dismissChannelMoveBanner() }) {
                             Text(stringResource(R.string.dismiss))
                         }
                     }
