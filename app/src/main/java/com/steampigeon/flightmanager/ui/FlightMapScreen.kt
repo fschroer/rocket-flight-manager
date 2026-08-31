@@ -12,7 +12,6 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.os.Vibrator
 import android.os.VibrationEffect
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
@@ -609,7 +608,7 @@ fun HomeScreen(
     navController: NavHostController,
     viewModel: RocketViewModel = viewModel(),
     permissionsState: MultiplePermissionsState,
-    textToSpeech: TextToSpeech?,
+    announcer: Announcer,
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
     modifier: Modifier
@@ -733,7 +732,7 @@ fun HomeScreen(
         locatorConfig = locatorConfig,
         locatorLatLng = locatorLatLng,
         viewModel = viewModel,
-        textToSpeech = textToSpeech,
+        announcer = announcer,
     )
 
     if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
@@ -813,7 +812,7 @@ fun HomeScreen(
                         distanceToLocator = distanceToLocator,
                         viewModel = viewModel,
                         scaffoldSize = scaffoldSize,
-                        textToSpeech = textToSpeech,
+                        announcer = announcer,
                         flightPath = flightPath,
                         onMenuClick = { scope.launch { drawerState.apply { if (isClosed) open() else close() } } },
                         modifier = modifier
@@ -839,7 +838,7 @@ private fun FlightSpeechAnnouncer(
     locatorConfig: LocatorConfig,
     locatorLatLng: LatLng,
     viewModel: RocketViewModel,
-    textToSpeech: TextToSpeech?,
+    announcer: Announcer,
 ) {
     var previousAGL by remember { mutableIntStateOf(0) }
     var apogeeSpoken by remember { mutableStateOf(false) }
@@ -883,11 +882,8 @@ private fun FlightSpeechAnnouncer(
             // Still worth saying once, if the blackout dead-reckoning below hasn't
             // already — this is the number the user walks toward.
             if (!landingSpoken) {
-                textToSpeech?.speak(
-                    "Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
-                        ?: ", location unknown."}",
-                    TextToSpeech.QUEUE_FLUSH, null, null
-                )
+                announcer.flush("Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
+                        ?: ", location unknown."}")
             }
             // Reset all announcement guards for the next flight
             previousAGL = 0
@@ -920,35 +916,32 @@ private fun FlightSpeechAnnouncer(
             noseoverTime = System.currentTimeMillis()
             if (!apogeeSpoken) {
                 apogeeSpoken = true
-                textToSpeech?.speak(
-                    "Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters.",
-                    TextToSpeech.QUEUE_ADD, null, null
-                )
+                announcer.add("Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters.")
             }
         }
         if (rocketState.flightState >= FlightStates.DroguePrimaryEvent && !droguePrimaryState) {
             droguePrimaryState = true
             if (locatorConfig.deploymentChannel1Mode == DeployMode.DroguePrimary && rocketState.channel1Fired ||
                 locatorConfig.deploymentChannel2Mode == DeployMode.DroguePrimary && rocketState.channel2Fired)
-                textToSpeech?.speak("Drogue charge.", TextToSpeech.QUEUE_ADD, null, null)
+                announcer.add("Drogue charge.")
         }
         if (rocketState.flightState >= FlightStates.DrogueBackupEvent && !drogueBackupState) {
             drogueBackupState = true
             if (locatorConfig.deploymentChannel1Mode == DeployMode.DrogueBackup && rocketState.channel1Fired ||
                 locatorConfig.deploymentChannel2Mode == DeployMode.DrogueBackup && rocketState.channel2Fired)
-                textToSpeech?.speak("Drogue backup charge.", TextToSpeech.QUEUE_ADD, null, null)
+                announcer.add("Drogue backup charge.")
         }
         if (rocketState.flightState >= FlightStates.MainPrimaryEvent && !mainPrimaryState) {
             mainPrimaryState = true
             if (locatorConfig.deploymentChannel1Mode == DeployMode.MainPrimary && rocketState.channel1Fired ||
                 locatorConfig.deploymentChannel2Mode == DeployMode.MainPrimary && rocketState.channel2Fired)
-                textToSpeech?.speak("Main charge.", TextToSpeech.QUEUE_ADD, null, null)
+                announcer.add("Main charge.")
         }
         if (rocketState.flightState >= FlightStates.MainBackupEvent && !mainBackupState) {
             mainBackupState = true
             if (locatorConfig.deploymentChannel1Mode == DeployMode.MainBackup && rocketState.channel1Fired ||
                 locatorConfig.deploymentChannel2Mode == DeployMode.MainBackup && rocketState.channel2Fired)
-                textToSpeech?.speak("Main backup charge.", TextToSpeech.QUEUE_ADD, null, null)
+                announcer.add("Main backup charge.")
         }
     }
 
@@ -970,10 +963,10 @@ private fun FlightSpeechAnnouncer(
         // speaking through a snooze would make the control useless.
         if (padAlert != PadAlertState.Alerting) return@LaunchedEffect
         // QUEUE_FLUSH: this outranks whatever routine callout is mid-sentence.
-        textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_FLUSH, null, null)
+        announcer.flush(padAlertSpeech)
         while (true) {
             delay(padAlertRepeatMillis)
-            textToSpeech?.speak(padAlertSpeech, TextToSpeech.QUEUE_ADD, null, null)
+            announcer.add(padAlertSpeech)
         }
     }
 
@@ -1039,7 +1032,7 @@ private fun FlightSpeechAnnouncer(
                 linkEverLive = true
                 if (linkLostSpoken) {
                     linkLostSpoken = false
-                    textToSpeech?.speak("Telemetry restored.", TextToSpeech.QUEUE_ADD, null, null)
+                    announcer.add("Telemetry restored.")
                 }
             } else if (linkEverLive && !linkLostSpoken) {
                 linkLostSpoken = true
@@ -1047,11 +1040,8 @@ private fun FlightSpeechAnnouncer(
                 // the pad or after landing it is just the number already on screen.
                 val airborne = state.flightState > FlightStates.WaitingLaunch &&
                         state.flightState < FlightStates.Landed
-                textToSpeech?.speak(
-                    if (airborne && fromLaunch != null) "Telemetry lost. Last known$fromLaunch"
-                    else "Telemetry lost.",
-                    TextToSpeech.QUEUE_FLUSH, null, null
-                )
+                announcer.flush(if (airborne && fromLaunch != null) "Telemetry lost. Last known$fromLaunch"
+                    else "Telemetry lost.")
             }
 
             // GPS health, reported only while the link is live: with no messages
@@ -1060,10 +1050,7 @@ private fun FlightSpeechAnnouncer(
             if (linkLive) {
                 val gpsOk = state.gpsStatus == SensorHealth.Ok
                 if (gpsOkLast != null && gpsOk != gpsOkLast) {
-                    textToSpeech?.speak(
-                        if (gpsOk) "GPS fix restored." else "GPS fix lost.",
-                        TextToSpeech.QUEUE_ADD, null, null
-                    )
+                    announcer.add(if (gpsOk) "GPS fix restored." else "GPS fix lost.")
                 }
                 gpsOkLast = gpsOk
             }
@@ -1073,7 +1060,7 @@ private fun FlightSpeechAnnouncer(
                 val roundedAGL = (state.altitudeAboveGroundLevel / 100).toInt() * 100
                 if (roundedAGL > previousAGL) {
                     if (state.velocity > minimumSpokenAGLVelocity)
-                        textToSpeech?.speak("$roundedAGL meters.", TextToSpeech.QUEUE_ADD, null, null)
+                        announcer.add("$roundedAGL meters.")
                     previousAGL = roundedAGL
                 }
             }
@@ -1088,11 +1075,8 @@ private fun FlightSpeechAnnouncer(
                     landedThroughBlackout(agl, descentRate, messageAge) -> {
                         landingSpoken = true
                         flightConcluded = true
-                        textToSpeech?.speak(
-                            "Landing." + (fromLaunch?.let { " Last known$it" }
-                                ?: " Location unknown."),
-                            TextToSpeech.QUEUE_FLUSH, null, null
-                        )
+                        announcer.flush("Landing." + (fromLaunch?.let { " Last known$it" }
+                                ?: " Location unknown."))
                     }
                     // Everything below needs a live link: altitude and descent rate out of a
                     // stale packet describe where the rocket was, not where it is.
@@ -1100,19 +1084,13 @@ private fun FlightSpeechAnnouncer(
                     landingImminent(agl, descentRate) -> {
                         landingSpoken = true
                         flightConcluded = true
-                        textToSpeech?.speak(
-                            "Landing${fromLaunch ?: ", location unknown."}",
-                            TextToSpeech.QUEUE_FLUSH, null, null
-                        )
+                        announcer.flush("Landing${fromLaunch ?: ", location unknown."}")
                     }
                     descentRate >= freefallDescentRate &&
                             now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
                         lastDescentWarningTime = now
-                        textToSpeech?.speak(
-                            "Descent warning, ${descentRate.toInt()} meters per second" +
-                                    (fromLaunch ?: ""),
-                            TextToSpeech.QUEUE_FLUSH, null, null
-                        )
+                        announcer.flush("Descent warning, ${descentRate.toInt()} meters per second" +
+                                    (fromLaunch ?: ""))
                     }
                 }
             }
@@ -1132,12 +1110,12 @@ private fun FlightSpeechAnnouncer(
             if (!flightConcluded && state.flightState.isAirborne()) {
                 if (state.flightState >= FlightStates.DroguePrimaryEvent && !drogueDeploySpoken && state.drogueDeployDetected) {
                     drogueDeploySpoken = true
-                    textToSpeech?.speak("Drogue deployed.", TextToSpeech.QUEUE_ADD, null, null)
+                    announcer.add("Drogue deployed.")
                 }
                 if (state.flightState >= FlightStates.MainPrimaryEvent && !mainDeploySpoken && state.mainDeployDetected) {
                     mainDeploySpoken = true
                     drogueDeploySpoken = true
-                    textToSpeech?.speak("Main deployed.", TextToSpeech.QUEUE_ADD, null, null)
+                    announcer.add("Main deployed.")
                 }
             }
         }
@@ -1177,6 +1155,9 @@ private fun AppDrawerContent(
             add(DrawerItem(R.string.receiver_settings, R.drawable.radio, NavDestination.ReceiverSettings))
         add(DrawerItem(R.string.application_settings, R.drawable.settings_applications, NavDestination.AppSettings))
         add(DrawerItem(R.string.download_map, R.drawable.navigation, NavDestination.DownloadMap))
+        // Ungated: the logs are files on the phone, so they are readable with the
+        // receiver switched off and out of range — which is where they are read.
+        add(DrawerItem(R.string.app_flight_logs, R.drawable.flight_log, NavDestination.AppFlightLogs))
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
     }
@@ -1226,7 +1207,7 @@ private fun MapWithOverlays(
     distanceToLocator: Int,
     viewModel: RocketViewModel,
     scaffoldSize: IntSize,
-    textToSpeech: TextToSpeech?,
+    announcer: Announcer,
     flightPath: List<PathPoint>,
     onMenuClick: () -> Unit,
     modifier: Modifier,
@@ -1531,7 +1512,7 @@ private fun MapWithOverlays(
                     onRescan = onRescan,
                     onSnoozePadAlert = onSnoozePadAlert,
                     onFindLocator = onFindLocator,
-                    textToSpeech = textToSpeech,
+                    announcer = announcer,
                     locatorConnected = locatorConnected,
                     actionsExpanded = actionsExpanded,
                     onActionsExpandedChange = { actionsExpanded = it },
@@ -1656,7 +1637,7 @@ private fun MapWithOverlays(
                 locatorConfig = locatorConfig,
                 viewModel = viewModel,
                 scaffoldSize = scaffoldSize,
-                textToSpeech = textToSpeech,
+                announcer = announcer,
                 modifier = modifier,
             )
         }
@@ -2156,7 +2137,7 @@ private fun MapControlsColumn(
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
     onFindLocator: () -> Unit,
-    textToSpeech: TextToSpeech?,
+    announcer: Announcer,
     locatorConnected: Boolean = true,
     actionsExpanded: Boolean,
     onActionsExpandedChange: (Boolean) -> Unit,
@@ -2210,7 +2191,7 @@ private fun MapControlsColumn(
         else
             stringResource(R.string.armed_state_disarmed)
         LaunchedEffect(armedState) {
-            textToSpeech?.speak(armedStateText, TextToSpeech.QUEUE_FLUSH, null, null)
+            announcer.flush(armedStateText)
             armCommandPending = false   // acknowledgment received
         }
         // Continuous blink animation — applied only while a command is pending.
@@ -2599,7 +2580,7 @@ fun LocatorStats(
     locatorConfig: LocatorConfig,
     viewModel: RocketViewModel,
     scaffoldSize: IntSize,
-    textToSpeech: TextToSpeech?,
+    announcer: Announcer,
     modifier: Modifier
 ) {
     var columnWidth by remember { mutableStateOf(0) }
@@ -2637,10 +2618,7 @@ fun LocatorStats(
                 // is exactly when someone wants to hear state and altitude without
                 // looking, so this cannot be gated on arm state either (#36).
                 if (isInFlight(armedState, rocketState))
-                    textToSpeech?.speak(
-                        "${locatorConfig.deviceName}, ${rocketState.flightState}, ${rocketState.altitudeAboveGroundLevel} meters",
-                        TextToSpeech.QUEUE_FLUSH, null, null
-                    )
+                    announcer.flush("${locatorConfig.deviceName}, ${rocketState.flightState}, ${rocketState.altitudeAboveGroundLevel} meters")
             }
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->

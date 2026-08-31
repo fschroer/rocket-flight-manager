@@ -58,6 +58,8 @@ import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.ui.Announcer
+import com.steampigeon.flightmanager.ui.AppFlightLogsScreen
 import com.steampigeon.flightmanager.ui.AppSettingsScreen
 import com.steampigeon.flightmanager.ui.DeploymentTestScreen
 import com.steampigeon.flightmanager.ui.DevicePickerDialog
@@ -85,6 +87,7 @@ enum class NavDestination(@StringRes val title: Int) {
     FlightProfiles(title = R.string.flight_profiles),
     Export(title = R.string.export),
     DownloadMap(title = R.string.download_map),
+    AppFlightLogs(title = R.string.app_flight_logs),
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +163,16 @@ fun RocketApp(
     var textToSpeech: TextToSpeech? by remember { mutableStateOf(null) }
     val voiceName by viewModel.voiceName.collectAsState()
     val voiceEnabled by viewModel.voiceEnabled.collectAsState()
+
+    // Every flight callout speaks through this rather than through the engine
+    // directly, so the App Flight Log holds what was said and when.  Rebuilt with
+    // the engine: it closes over the instance, and a stale one would speak into a
+    // shut-down engine after a voice change.  AppSettingsScreen keeps the raw
+    // TextToSpeech — it enumerates voices and previews them, which is not a flight
+    // announcement and does not belong in a flight log.
+    val announcer = remember(textToSpeech) {
+        Announcer(textToSpeech, viewModel::logAnnouncement)
+    }
 
     DisposableEffect(Unit) {
         onDispose { textToSpeech?.shutdown() }
@@ -357,7 +370,7 @@ fun RocketApp(
             composable(route = NavDestination.Start.name) {
                 viewModel.updateFlightProfileMetadataMessageState(LocatorMessageState.Idle)
                 HomeScreen(
-                    navController, viewModel, permissionsState, textToSpeech,
+                    navController, viewModel, permissionsState, announcer,
                     onRescan = { btManager?.startScan() },
                     // Must be the SAME constant the button label renders. These were
                     // separately authored literals once (label 5, payload 15), so one
@@ -397,6 +410,10 @@ fun RocketApp(
             }
             composable(route = NavDestination.DownloadMap.name) {
                 DownloadMapScreen(modifier)
+            }
+            composable(route = NavDestination.AppFlightLogs.name) {
+                AppFlightLogsScreen(viewModel,
+                    onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
         }
     }

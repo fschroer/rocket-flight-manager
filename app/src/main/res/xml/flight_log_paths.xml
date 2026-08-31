@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Grants the share sheet read access to app flight logs, and to nothing else.
+
+    files-path with an explicit subdirectory rather than the whole of filesDir: the
+    same directory holds flight_path.csv, the DataStore preferences and the known-
+    locator list, and a share of one log must not hand the receiving app a URI it
+    could walk sideways from.
+-->
+<paths>
+    <files-path name="flight_logs" path="flight_logs/" />
+</paths>

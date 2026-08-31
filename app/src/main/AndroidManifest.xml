@@ -71,6 +71,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Hands app flight logs to the share sheet.  App-private storage cannot be
+             read by another app through a file:// URI on any Android since 7, and the
+             share sheet IS the export mechanism, so this provider is what makes
+             "transfer the log to a PC" work at all: Bluetooth to a paired laptop,
+             Quick Share, Drive, or mail, with nothing installed at the far end.
+             grantUriPermissions with no exported access means a recipient gets one
+             URI, for as long as the intent lives. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/flight_log_paths" />
+        </provider>
         <!-- Google Maps geo.API_KEY meta-data removed with the Google Maps SDK (the map is
              MapLibre now). play-services-location is still used for fused location, and
              brings its own gms.version meta-data via manifest merge. -->

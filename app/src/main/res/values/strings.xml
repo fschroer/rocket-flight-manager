@@ -167,4 +167,20 @@
     <string name="survey_cancelled">Scan stopped so your command could reach the locator. Scan again when you are ready.</string>
     <string name="survey_failed">No response from the receiver. If its firmware predates channel scanning, update it — otherwise try again.</string>
     <string name="survey_caveat">Measured where the receiver is. A channel that is quiet here may be busier at altitude.</string>
+    <!-- App Flight Logs (records what the phone saw, not what the locator archived) -->
+    <string name="app_flight_logs">App Flight Logs</string>
+    <string name="flight_log_recording">Recording a flight now</string>
+    <string name="flight_log_empty">No flight logs yet. One is recorded automatically when the app sees a rocket leave the pad, starting two seconds before launch detection. Nothing is recorded for a flight the app was not already receiving telemetry for.</string>
+    <string name="flight_log_row_summary">%1$s • %2$s</string>
+    <string name="flight_log_size">%1$s kB</string>
+    <string name="flight_log_close">Close</string>
+    <string name="flight_log_view">View</string>
+    <string name="flight_log_share">Share</string>
+    <string name="flight_log_delete">Delete</string>
+    <string name="flight_log_delete_title">Delete this log?</string>
+    <string name="flight_log_delete_body">%1$s will be removed from the phone. Anything already shared or saved elsewhere is unaffected.</string>
+    <string name="flight_log_share_title">Send flight log</string>
+    <string name="flight_log_share_failed">Could not prepare the log for sharing.</string>
+    <string name="flight_log_truncated">Showing the first %1$d of %2$d rows. Share or save the log to read all of it.</string>
+    <string name="flight_log_open_warning">This log is still being written. It can be shared now; more rows will follow.</string>
 </resources>

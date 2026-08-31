@@ -1,0 +1,30 @@
+<!-- App Flight Logs: a sheet with ruled lines, the record rather than the map or
+     the link. Distinct from u_turn_right.xml (Flight Profiles), which is the
+     locator's own archive of the flight; this is what the phone wrote down.
+     Hand-computed on a 24 grid: page 5..19 wide, 3..21 tall with a folded corner
+     from (14,3) to (19,8), and three rules at y=12, 15, 18. Icon() tints the whole
+     drawable, so the colour here is a placeholder. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M6,3 L14,3 L19,8 L19,21 L6,21 Z"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineJoin="round"/>
+  <path
+      android:pathData="M14,3 L14,8 L19,8"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.8"
+      android:strokeLineJoin="round"/>
+  <path
+      android:pathData="M9,12 L16,12 M9,15 L16,15 M9,18 L13,18"
+      android:fillColor="#00000000"
+      android:strokeColor="#5f6368"
+      android:strokeWidth="1.6"
+      android:strokeLineCap="round"/>
+</vector>

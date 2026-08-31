@@ -39,6 +39,15 @@ import com.steampigeon.flightmanager.data.FlightEventIndex
 import com.steampigeon.flightmanager.data.FlightEvents as FlightEventsData
 import com.steampigeon.flightmanager.data.FlightProfileMetadata
 import com.steampigeon.flightmanager.data.FlightSample
+import com.steampigeon.flightmanager.data.FlightLog
+import com.steampigeon.flightmanager.data.FlightLogContents
+import com.steampigeon.flightmanager.data.FlightLogFile
+import com.steampigeon.flightmanager.data.FlightLogRecord
+import com.steampigeon.flightmanager.data.FlightLogRecorder
+import com.steampigeon.flightmanager.data.FlightLogStore
+import com.steampigeon.flightmanager.data.LogCloseReason
+import com.steampigeon.flightmanager.data.LogEvent
+import com.steampigeon.flightmanager.data.LogSource
 import com.steampigeon.flightmanager.data.RocketState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -166,6 +175,10 @@ val Context.userPreferencesDataStore: DataStore<UserPreferences> by dataStore(
 class RocketViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
+        // Before the service goes: an open log is closed and flushed here or not at
+        // all, and "the app stopped" is itself the answer to why a log ends where it
+        // does.
+        closeFlightLog(LogCloseReason.AppStopped)
         stopService()
     }
 
@@ -1801,6 +1814,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         loadFlightPath()
+        startFlightLogWatchers()
+        refreshFlightLogs()
     }
 
     /**
@@ -1866,6 +1881,298 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun repeatsLastPathPoint(msg: TelemetryParsed): Boolean =
         repeatsFix(_flightPath.value.lastOrNull(), msg.latitude, msg.longitude, msg.agl)
+
+    // -- App flight log (App Flight Logs screen) ------------------------------
+    //
+    // Distinct from the flight PATH above and from the locator's downloadable
+    // archive.  The path is where the rocket went; the archive is what the locator
+    // measured at 20 Hz.  This is what the PHONE saw -- the same 1 Hz frames plus
+    // the receiver's RSSI/SNR/noise-floor reading of each one, plus what the app
+    // decided and said out loud about them.  None of that survives the flight
+    // anywhere else.
+
+    val flightLogStore = FlightLogStore(application)
+    private val flightLogRecorder = FlightLogRecorder(flightLogStore.sink())
+
+    private val _flightLogs = MutableStateFlow<List<FlightLogFile>>(emptyList())
+    val flightLogs: StateFlow<List<FlightLogFile>> = _flightLogs.asStateFlow()
+
+    // The file currently open, or null.  A boolean would have been enough for the
+    // banner and not enough for the list: a log still being written can be shared,
+    // and saying so on the wrong row would be worse than not saying it.
+    private val _flightLogRecordingName = MutableStateFlow<String?>(null)
+    val flightLogRecordingName: StateFlow<String?> = _flightLogRecordingName.asStateFlow()
+
+    // Last values written as events, so each is reported on its edge rather than on
+    // every frame that repeats it.  A 1 Hz stream would otherwise carry
+    // "link quality: Normal" once a second and bury the transition that matters.
+    private var loggedFlightState: FlightStates? = null
+    private var loggedLinkQuality: LinkQuality.Verdict? = null
+    private var loggedLandingThisFlight = false
+
+    fun refreshFlightLogs() {
+        viewModelScope.launch { _flightLogs.value = flightLogStore.list() }
+    }
+
+    fun deleteFlightLog(name: String) {
+        viewModelScope.launch {
+            flightLogStore.delete(name)
+            _flightLogs.value = flightLogStore.list()
+        }
+    }
+
+    fun readFlightLog(name: String): FlightLogContents = flightLogStore.read(name)
+
+    /**
+     * Records something the app said aloud.  Wired to [Announcer], which calls this
+     * only when speech actually reached the engine.
+     */
+    fun logAnnouncement(text: String) = logFlightEvent(LogEvent.Announcement, text)
+
+    private fun logFlightEvent(
+        event: LogEvent,
+        detail: String = "",
+        timeMs: Long = System.currentTimeMillis(),
+    ) {
+        flightLogRecorder.offer(FlightLogRecord.Event(timeMs, event, detail))
+    }
+
+    /**
+     * Opens a log for a launch just detected.
+     *
+     * Named for the locator that flew, taken from its own broadcast name: the file
+     * has to identify the airframe months later, and a name held anywhere else can
+     * be a locator the app is no longer connected to.
+     */
+    private fun openFlightLog(timeMs: Long) {
+        val locatorName = _remoteLocatorConfig.value.deviceName
+        val header = buildString {
+            append("Steam Pigeon app flight log")
+            append("; locator=").append(locatorName.ifEmpty { "unknown" })
+            append("; locator_id=").append(_connectedLocatorId.value ?: 0L)
+            append("; receiver=").append(_remoteReceiverConfig.value.deviceName)
+            append("; receiver_channel=").append(_remoteReceiverConfig.value.channel)
+            append("; app_version=").append(
+                getApplication<Application>()
+                    .getString(com.steampigeon.flightmanager.R.string.git_version)
+            )
+        }
+        loggedLandingThisFlight = false
+        if (flightLogRecorder.onLaunch(timeMs, locatorName, header)) {
+            _flightLogRecordingName.value = FlightLog.fileName(locatorName, timeMs, ZoneId.systemDefault())
+            refreshFlightLogs()
+        }
+    }
+
+    private fun closeFlightLog(
+        reason: LogCloseReason,
+        timeMs: Long = System.currentTimeMillis(),
+    ) {
+        if (!flightLogRecorder.isRecording) return
+        flightLogRecorder.close(timeMs, reason)
+        _flightLogRecordingName.value = null
+        refreshFlightLogs()
+    }
+
+    /**
+     * The signals that end a log, watched once for the life of the ViewModel.
+     *
+     * Started from [init] rather than from collectInboundMessageData, which cancels
+     * and restarts its collectors on every Activity recreation -- a theme switch
+     * would otherwise drop these for as long as it takes to rebind, which is time
+     * enough for a locator to be disarmed.
+     *
+     * Every close is edge-triggered on a value that was previously something else.
+     * Level-triggering the disarm would close a log the instant it opened on the
+     * disarmed flights ADR-0021 exists to allow.
+     */
+    private fun startFlightLogWatchers() {
+        // The BLE link, which no longer ends a log but still explains a gap in one.
+        viewModelScope.launch {
+            var wasReady = BluetoothManagerRepository.bluetoothConnectionState.value ==
+                    BluetoothConnectionState.Ready
+            BluetoothManagerRepository.bluetoothConnectionState.collect { state ->
+                val ready = state == BluetoothConnectionState.Ready
+                if (ready != wasReady) {
+                    logFlightEvent(LogEvent.ConnectionChanged, state.name)
+                    wasReady = ready
+                }
+            }
+        }
+        viewModelScope.launch {
+            var wasArmed = BluetoothManagerRepository.armedState.value
+            BluetoothManagerRepository.armedState.collect { armed ->
+                if (armed != wasArmed) {
+                    logFlightEvent(LogEvent.ArmedStateChanged, if (armed) "armed" else "disarmed")
+                    // Disarming is how a flight is signed off at the pad, and the
+                    // rows after it are a locator sitting in a box.
+                    if (!armed) closeFlightLog(LogCloseReason.Disarmed)
+                }
+                wasArmed = armed
+            }
+        }
+        viewModelScope.launch {
+            var last = _remoteReceiverConfig.value.channel
+            _remoteReceiverConfig.collect { cfg ->
+                if (cfg.channel != last) {
+                    logFlightEvent(LogEvent.ReceiverChannelChanged, "$last -> ${cfg.channel}")
+                    // Past this point the rows describe a different piece of sky.
+                    closeFlightLog(LogCloseReason.ReceiverChannelChanged)
+                    flightLogRecorder.discardPreRoll()
+                    last = cfg.channel
+                }
+            }
+        }
+        // Tracks the last locator actually CONNECTED, not the last value of the flow.
+        //
+        // The flow goes null on a dropped BLE link as well as on a deliberate
+        // switch, and those must not be treated alike: a dropout mid-recovery is
+        // the case this log exists to capture, and ending the file on one would
+        // discard the evidence of the thing being investigated.  A release is
+        // therefore ignored, a reconnect to the same locator resumes the same file,
+        // and only a DIFFERENT locator ends it -- which is the only transition
+        // after which the rows would describe another airframe.
+        viewModelScope.launch {
+            var lastConnected = _connectedLocatorId.value
+            _connectedLocatorId.collect { id ->
+                if (id == null) return@collect
+                if (lastConnected != null && id != lastConnected) {
+                    logFlightEvent(LogEvent.LocatorChanged, "$lastConnected -> $id")
+                    closeFlightLog(LogCloseReason.LocatorChanged)
+                    // Whatever is buffered belongs to the locator being let go of.
+                    flightLogRecorder.discardPreRoll()
+                }
+                lastConnected = id
+            }
+        }
+    }
+
+    /**
+     * Logs a pre-launch frame.  Called only for the connected locator: a bystander's
+     * broadcasts are not this rocket's flight, and mixing them in would put two
+     * airframes in one file with nothing to tell them apart.
+     */
+    private fun logPrelaunchFrame(
+        msg: PrelaunchParsed,
+        timeMs: Long,
+        verdict: LinkQuality.Verdict,
+    ) {
+        noteLinkQuality(verdict, timeMs)
+        flightLogRecorder.offer(
+            FlightLogRecord.Sample(
+                timestampMs = timeMs,
+                source = LogSource.Prelaunch,
+                latitude = msg.latitude,
+                longitude = msg.longitude,
+                aglM = msg.agl,
+                accel = msg.accel,
+                gyro = msg.gyro,
+                satellites = msg.satellites,
+                haccM = msg.hacc,
+                rssi = msg.rssi,
+                snr = msg.snr,
+                noiseFloor = msg.noiseFloor,
+                badFrames = msg.badFrames,
+                linkQuality = verdict,
+                armed = msg.armed,
+                deployArmedMask = msg.deployStatus,
+                padAlert = msg.padAlert,
+                locatorBatteryMv = msg.locatorBatteryMv,
+                receiverBatteryMv = msg.receiverBatteryMv,
+                receiverChannel = msg.receiverChannel,
+                locatorId = msg.locatorId,
+            )
+        )
+    }
+
+    /** Logs a telemetry frame, and the state transitions it carries. */
+    private fun logTelemetryFrame(
+        msg: TelemetryParsed,
+        timeMs: Long,
+        verdict: LinkQuality.Verdict,
+    ) {
+        noteLinkQuality(verdict, timeMs)
+        if (loggedFlightState != msg.flightState) {
+            logFlightEvent(
+                LogEvent.FlightStateChanged,
+                "${loggedFlightState?.name ?: "unknown"} -> ${msg.flightState.name}",
+                timeMs,
+            )
+            loggedFlightState = msg.flightState
+        }
+        // Landing is an EVENT, not a close.  The walk-in to find the rocket is when
+        // link quality matters most and is precisely the window nobody can watch, so
+        // the log runs on until the locator is disarmed or something else ends it.
+        if (!loggedLandingThisFlight && msg.flightState == FlightStates.Landed) {
+            loggedLandingThisFlight = true
+            logFlightEvent(LogEvent.LandingDetected, "locator reported Landed", timeMs)
+        }
+        val firedMask = (if (msg.deploymentCh1Stats.and(4) == 4) 1 else 0) or
+                (if (msg.deploymentCh2Stats.and(4) == 4) 2 else 0) or
+                (if (msg.deploymentCh3Stats.and(4) == 4) 4 else 0) or
+                (if (msg.deploymentCh4Stats.and(4) == 4) 8 else 0)
+        val armedMask = (if (msg.deploymentCh1Stats.and(32) == 32) 1 else 0) or
+                (if (msg.deploymentCh2Stats.and(32) == 32) 2 else 0) or
+                (if (msg.deploymentCh3Stats.and(32) == 32) 4 else 0) or
+                (if (msg.deploymentCh4Stats.and(32) == 32) 8 else 0)
+        flightLogRecorder.offer(
+            FlightLogRecord.Sample(
+                timestampMs = timeMs,
+                source = LogSource.Telemetry,
+                flightState = msg.flightState,
+                latitude = msg.latitude,
+                longitude = msg.longitude,
+                aglM = msg.agl,
+                velNed = msg.velNed,
+                attitude = msg.attitude,
+                satellites = msg.satellites,
+                haccM = msg.hacc,
+                rssi = msg.rssi,
+                snr = msg.snr,
+                noiseFloor = msg.noiseFloor,
+                badFrames = msg.badFrames,
+                linkQuality = verdict,
+                armed = msg.armed,
+                deployArmedMask = armedMask,
+                deployFiredMask = firedMask,
+                drogueDetected = msg.physicalDeploymentStats.and(1) == 1,
+                mainDetected = msg.physicalDeploymentStats.and(2) == 2,
+                locatorId = msg.locatorId,
+            )
+        )
+    }
+
+    /**
+     * Logs a ReceiverInfo poll.
+     *
+     * Worth a row precisely because it arrives when nothing else does: it is the
+     * receiver measuring the channel with the locator silent (ADR-0019), so it is
+     * the only evidence of what a dropout looked like from this end.  A gap in the
+     * telemetry rows with these still ticking through it says the channel was quiet;
+     * a gap with a raised noise floor says something else was on it.
+     */
+    private fun logReceiverInfoFrame(msg: ReceiverInfoParsed, timeMs: Long) {
+        flightLogRecorder.offer(
+            FlightLogRecord.Sample(
+                timestampMs = timeMs,
+                source = LogSource.ReceiverInfo,
+                noiseFloor = msg.noiseFloor,
+                badFrames = msg.badFrames,
+                receiverChannel = msg.channel,
+            )
+        )
+    }
+
+    private fun noteLinkQuality(verdict: LinkQuality.Verdict, timeMs: Long) {
+        if (loggedLinkQuality == verdict) return
+        logFlightEvent(
+            LogEvent.LinkQualityChanged,
+            "${loggedLinkQuality?.name ?: "unknown"} -> ${verdict.name}",
+            timeMs,
+        )
+        loggedLinkQuality = verdict
+    }
+
 
     fun startFlightPathRecording() { _isFlightPathRecording.value = true }
     fun stopFlightPathRecording() { _isFlightPathRecording.value = false }
@@ -2218,6 +2525,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     noseAxis = parsed.msg.noseAxis,
                                 )
                             }
+                            logPrelaunchFrame(parsed.msg, currentTime, verdict)
                             } // end recognized-locator gate
                             // Receiver metadata (channel/name) is the user's own receiver,
                             // not the locator — reflect it regardless of recognition so the
@@ -2318,6 +2626,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 // the archived source would draw the old record and none of
                                 // the flight now in the air.  The download itself is kept.
                                 _showArchivedPath.value = false
+                                // Opened BEFORE this frame is logged, so the frame that
+                                // proved the launch lands after the launch marker rather
+                                // than in the pre-roll ahead of it.
+                                openFlightLog(currentTime)
                             }
                             // Whether this fix is drawn is decided against what was
                             // known BEFORE it arrived, so the fixes that end the
@@ -2350,6 +2662,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             _previousFlightState = newFlightState
                             flightStateObserved = true
+                            logTelemetryFrame(parsed.msg, currentTime, verdict)
                             } // end recognized-locator gate
                         }
                         is ParsedMessage.DeploymentTest -> {
@@ -2366,6 +2679,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
                         is ParsedMessage.ReceiverInfo -> {
+                            logReceiverInfoFrame(parsed.msg, currentTime)
                             _remoteReceiverConfig.update { currentState ->
                                 currentState.copy(
                                     channel    = parsed.msg.channel,
