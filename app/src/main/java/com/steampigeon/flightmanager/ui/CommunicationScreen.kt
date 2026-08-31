@@ -64,6 +64,7 @@ import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.KnownLocator
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
+import com.steampigeon.flightmanager.data.ChannelMove
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.ChannelOccupancy
@@ -135,6 +136,7 @@ fun CommunicationScreen(
     val knownLocators by viewModel.knownLocators.collectAsState()
     val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
     val channelMoveBannerDismissed by viewModel.channelMoveBannerDismissed.collectAsState()
+    val channelMoveOutcome by viewModel.channelMoveOutcome.collectAsState()
 
     // Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
     // channel watchdog uses for "the locator has gone quiet". Deliberately not the
@@ -287,9 +289,15 @@ fun CommunicationScreen(
                     LocatorMessageState.SendFailure ->
                         stringResource(R.string.channel_move_failed) to
                                 MaterialTheme.colorScheme.error
+                    // Two different endings share this state and leave the hardware
+                    // in opposite places — see channelMoveOutcome.
                     LocatorMessageState.NotAcknowledged ->
-                        stringResource(R.string.channel_move_not_acknowledged, channel) to
-                                MaterialTheme.colorScheme.error
+                        if (channelMoveOutcome == ChannelMove.Verdict.NoEvidence)
+                            stringResource(R.string.channel_move_unresolved, channel) to
+                                    MaterialTheme.colorScheme.error
+                        else
+                            stringResource(R.string.channel_move_not_acknowledged, channel) to
+                                    MaterialTheme.colorScheme.error
                     LocatorMessageState.Idle -> null to MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 text?.let {

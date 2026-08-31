@@ -1136,9 +1136,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissChannelMoveBanner() { _channelMoveBannerDismissed.value = true }
 
+    // How an unconfirmed move ended, so the failure message can say something true.
+    // Both failure paths land on NotAcknowledged, but they leave the hardware in
+    // opposite states: after a LocatorStayed verdict the receiver has been put back
+    // and both devices are on the old channel, while after NoEvidence the receiver is
+    // on the NEW channel and where the locator is, is exactly what nobody knows.  One
+    // sentence cannot describe both, and the one that shipped described only the first.
+    private val _channelMoveOutcome = MutableStateFlow<ChannelMove.Verdict?>(null)
+    val channelMoveOutcome: StateFlow<ChannelMove.Verdict?> = _channelMoveOutcome.asStateFlow()
+
     fun moveLocatorToChannel(service: BluetoothService?, channel: Int) {
         _pendingChannelMove.value = channel
         _channelMoveBannerDismissed.value = false
+        _channelMoveOutcome.value = null
         channelMoveReceiptMs = 0L
         channelMoveLocatorId = _connectedLocatorId.value
         val target = _remoteLocatorConfig.value.copy(loraChannel = channel)
@@ -2349,7 +2359,21 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // move in flight says "your locator change is on air".  A
                             // recovery revert reports the OLD channel and correctly
                             // does not re-base anything.
-                            if (parsed.msg.channel == _pendingChannelMove.value)
+                            //
+                            // LATCHED — only the FIRST match re-bases, and this is
+                            // load-bearing.  ReceiverInfo is not only the unsolicited
+                            // receipt: `channelWatchJob` polls for one every 2 s once
+                            // the locator has been silent for 5 s, which is precisely
+                            // the state an unconfirmed move is in.  Every reply carries
+                            // the new channel and so matched this test, each one pushed
+                            // the confirm deadline out by another 5 s, and 2 s < 5 s
+                            // meant the window NEVER closed: the banner sat on "Moving
+                            // to channel N…" forever, the probe never ran, and the
+                            // receiver was left on the new channel with the locator on
+                            // the old one.  That is a lost locator, and it is the bug
+                            // the bench found on 2026-08-30.
+                            if (channelMoveReceiptMs == 0L &&
+                                parsed.msg.channel == _pendingChannelMove.value)
                                 channelMoveReceiptMs = System.currentTimeMillis()
                             // The only channel measurement that does not need a
                             // locator. This is what separates "the locator is off"
@@ -2859,6 +2883,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // its confirmation.  See ADR-0011.
     private suspend fun waitForLocatorConfig(stagedLocatorConfig: LocatorConfig): Boolean {
         val started = System.currentTimeMillis()
+        // Absolute ceiling, independent of any re-base.  Belt and braces after the
+        // repeated-receipt hang: a wait that can be extended must also be one that
+        // cannot be extended forever, whatever future code starts feeding it.
+        val hardDeadline = started + 2 * CONFIG_CONFIRM_WINDOW_MS
         var deadline = started + CONFIG_CONFIRM_WINDOW_MS
         while (System.currentTimeMillis() < deadline) {
             delay(100)
@@ -2868,7 +2896,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 return false
             val receipt = channelMoveReceiptMs
             if (receipt > started)
-                deadline = maxOf(deadline, receipt + CONFIG_CONFIRM_WINDOW_MS)
+                deadline = minOf(maxOf(deadline, receipt + CONFIG_CONFIRM_WINDOW_MS), hardDeadline)
         }
         return false
     }
@@ -2884,7 +2912,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         service: BluetoothService,
     ): Boolean {
         val newChannel = stagedLocatorConfig.loraChannel
-        return when (probeChannelMove(newChannel, oldChannel, service)) {
+        val verdict = probeChannelMove(newChannel, oldChannel, service)
+        _channelMoveOutcome.value = verdict
+        return when (verdict) {
             // The move worked; only the confirmation was late.  Nothing to do, and
             // in particular nothing to revert.
             ChannelMove.Verdict.Confirmed -> true
