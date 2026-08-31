@@ -3707,11 +3707,28 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
  * True when an incoming fix repeats the one [last] already holds, and so adds
  * nothing to the recorded path.
  *
- * In flight the locator transmits at ~5 Hz while its position/altitude payload
- * refreshes at ~1 Hz, so roughly five consecutive frames carry one fix
- * bit-for-bit.  Recording all five stored a path five times larger than the
- * information in it, rewrote the whole CSV five times a second, and made the map
- * rebuild the curtain from five times the points.
+ * **What this does NOT defend against, despite what it used to say here.**  The
+ * original rationale had the locator transmitting at ~5 Hz against a ~1 Hz payload
+ * refresh, so that four frames in five repeated a fix bit-for-bit.  That is wrong:
+ * the locator transmits exactly **once per second**.  `main.c`'s 20 Hz superloop
+ * wraps `rocket_service_count` at `SAMPLES_PER_SECOND`, and `Factory.cpp`'s
+ * `case 2` is the only branch that reaches the radio — one frame per second,
+ * pre-launch or telemetry, armed or not.  There is no 5x stream and there never
+ * was one.
+ *
+ * The 5x duplication in `flight_path.csv` that this was written for was a
+ * **coroutine leak**, not the wire (`c8e6dc3`): `collectInboundMessageData` runs
+ * from `onServiceConnected`, which fires again on every Activity recreation, and
+ * nothing cancelled the previous collectors.  Four theme toggles left four live
+ * collectors on one ViewModel, each handling every packet.  That is what produced
+ * bit-identical repeats — *the same payload handled N times*, which is also why
+ * they matched exactly.
+ *
+ * So this is **defense in depth against a packet being handled more than once**,
+ * and it is kept on those terms.  It also catches the genuine 1 Hz case where the
+ * GPS fix has not advanced between two transmits, the two being asynchronous — but
+ * that is the rarer of the two, because the test includes baro-derived altitude and
+ * two independent frames a second apart almost never agree on it bit-for-bit.
  *
  * Dropping the repeats loses nothing.  A repeated vertex adds no shape to a
  * polyline, and the point that is kept carries the timestamp of when the fix was
@@ -3784,13 +3801,23 @@ internal fun FlightStates.isAirborne() =
  * clear the recorded path and its altitude curtain.
  *
  * Any grounded → airborne transition, rather than the WaitingLaunch → Launched
- * edge specifically.  Note what this is *not*: the narrower rule was not defeated
- * by losing a packet or two, because the locator reports Launched for the whole
- * boost — several packets at 5 Hz — and any one of them fires the reset.  It
- * takes losing that entire window, which is a bad-but-possible way for boost to
- * go.  This is hardening for that case; the flight path surviving into the next
- * flight in ordinary use was a symptom of the recognition gate dropping all
- * telemetry (see restoreProvisionalRecognition), not of this rule.
+ * edge specifically.
+ *
+ * This used to be described as hardening for a rare case, on the grounds that the
+ * locator reports Launched for the whole boost at 5 Hz so any one of several
+ * packets would fire the reset.  **The locator transmits at 1 Hz** — see
+ * [repeatsFix] for where that number comes from — which makes the margin about
+ * five times thinner than that claimed.  Boost on a typical flight is a few
+ * seconds, so the Launched window is only a **few frames**, and on a short one it
+ * can be a single frame.  Losing it is ordinary, not exotic: the first ascent
+ * state the app actually hears is quite often Burnout, and the narrow rule would
+ * miss that flight entirely and draw the previous track under it for the whole
+ * flight.
+ *
+ * So the widened rule is routine insurance rather than belt-and-braces.  What it
+ * is still *not* is the fix for the flight path surviving into the next flight in
+ * ordinary use — that was the recognition gate dropping all telemetry (see
+ * restoreProvisionalRecognition), not this rule.
  */
 internal fun startsNewFlight(previous: FlightStates, current: FlightStates) =
     previous.isGrounded() && current.isAirborne()

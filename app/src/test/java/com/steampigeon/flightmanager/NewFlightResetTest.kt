@@ -11,11 +11,12 @@ import org.junit.Test
  * cleared for a new flight.
  *
  * The rule is any grounded -> airborne transition rather than the
- * WaitingLaunch -> Launched edge specifically. The narrower rule was not fragile
- * to losing a packet or two — the locator reports Launched for the whole boost,
- * several packets at 5 Hz, and any one of them fires the reset — but it does
- * need that entire window to survive, and a missed reset leaves the previous
- * flight's track drawn under the new one for the whole flight.
+ * WaitingLaunch -> Launched edge specifically. The narrower rule needs the whole
+ * Launched window to survive, and at the locator's actual 1 Hz that window is only
+ * a few frames — one, on a short boost — so losing it is ordinary rather than
+ * exotic. (An earlier version of this comment said 5 Hz and called the loss a
+ * bad-but-possible case; see `startsNewFlight`.) A missed reset leaves the
+ * previous flight's track drawn under the new one for the whole flight.
  */
 class NewFlightResetTest {
 

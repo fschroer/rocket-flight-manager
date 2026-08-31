@@ -9,11 +9,12 @@ import org.junit.Test
 /**
  * Recording-time de-duplication of the flight path.
  *
- * In flight the locator transmits at ~5 Hz while its position/altitude payload
- * refreshes at ~1 Hz, so about five consecutive frames repeat one fix. The
- * guard's job is to drop exactly those repeats and nothing else — the risk on
- * the other side is silently swallowing real slow movement, which is what a
- * descent under canopy looks like.
+ * The locator transmits at 1 Hz, so this is NOT dropping four frames in five —
+ * that rationale was wrong, and `repeatsFix`'s KDoc records where the number
+ * actually comes from. What it drops is the same payload handled more than once,
+ * the shape a leaked collector produces. The guard's job is to drop exactly those
+ * repeats and nothing else — the risk on the other side is silently swallowing
+ * real slow movement, which is what a descent under canopy looks like.
  */
 class PathDedupTest {
 
