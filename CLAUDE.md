@@ -20,6 +20,18 @@ All cross-system documentation is centralized at **`C:\STM32_Projects\Locator\do
 (Absolute paths assume the standard local layout; on a fresh clone elsewhere, open the
 Locator repo to read its `docs/`.)
 
+## The `/sp-*` commands
+
+`.claude/commands/` here holds **pointers only**. The definitions live in
+`C:\STM32_Projects\Locator\.claude\commands\` and must not be copied — they encode
+rules the project learned the hard way, and two copies that can drift apart is the
+problem the pointers exist to avoid. `sp-commit` and `sp-handoff` act on the Locator
+repo's own files and should be run from there.
+
+**`sp-docs` Gate 2 covers `app/src/main/res/values/strings.xml`.** A string is a claim
+about the hardware, and changing behaviour under one silently makes it a lie — three
+shipped that way in a single change before the gate said so.
+
 ## App-specific load-bearing points
 
 - **Wire format is hand-synced across three places** — this app's `app/src/test/.../WireLayoutTest.kt`
