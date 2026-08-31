@@ -1814,8 +1814,6 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         loadFlightPath()
-        startFlightLogWatchers()
-        refreshFlightLogs()
     }
 
     /**
@@ -1909,6 +1907,25 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private var loggedFlightState: FlightStates? = null
     private var loggedLinkQuality: LinkQuality.Verdict? = null
     private var loggedLandingThisFlight = false
+
+    /**
+     * MUST stay below [flightLogStore] and [flightLogRecorder], and this is not a
+     * style preference.
+     *
+     * Kotlin runs property initializers and `init` blocks in **declaration order**,
+     * so an `init` placed above them calls these methods against nulls.  These two
+     * calls first went in the flight-path `init` seventy lines up, which crashed the
+     * app on launch with an NPE inside `refreshFlightLogs` — and neither the compiler
+     * nor the suite could see it: the forward reference is through a method call
+     * rather than a direct read, and no unit test constructs an AndroidViewModel.
+     *
+     * Keep the block here, beside what it depends on, rather than merging it into the
+     * one above.
+     */
+    init {
+        startFlightLogWatchers()
+        refreshFlightLogs()
+    }
 
     fun refreshFlightLogs() {
         viewModelScope.launch { _flightLogs.value = flightLogStore.list() }
