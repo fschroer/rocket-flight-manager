@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
@@ -79,10 +80,18 @@ fun LocatorPasswordDialog(
                     singleLine = true,
                     isError = error,
                     label = { Text(stringResource(R.string.password)) },
-                    // Enter submits, exactly as Connect does. A correct password closes the
-                    // dialog (taking the keyboard with it); a wrong one leaves both up so
-                    // the retry is a straight retype.
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardOptions = KeyboardOptions(
+                        // Tell the IME this is a password, so it offers no completions and
+                        // learns nothing. Left as prose, accepting a suggestion appends a
+                        // trailing space, and a password that hashes to a different key is
+                        // indistinguishable here from a wrong one.
+                        keyboardType = KeyboardType.Password,
+                        autoCorrectEnabled = false,
+                        // Enter submits, exactly as Connect does. A correct password closes
+                        // the dialog (taking the keyboard with it); a wrong one leaves both
+                        // up so the retry is a straight retype.
+                        imeAction = ImeAction.Done,
+                    ),
                     keyboardActions = KeyboardActions(onDone = { onSubmit(password) }),
                     visualTransformation =
                         if (visible) VisualTransformation.None
