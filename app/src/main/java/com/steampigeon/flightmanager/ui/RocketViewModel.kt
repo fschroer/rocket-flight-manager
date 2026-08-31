@@ -2912,7 +2912,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         service: BluetoothService,
     ): Boolean {
         val newChannel = stagedLocatorConfig.loraChannel
-        val verdict = probeChannelMove(newChannel, oldChannel, service)
+        var verdict = probeChannelMove(newChannel, oldChannel, service)
+        // A dwell that hears nothing is not proof of absence — ADR-0029 says it
+        // plainly: zero frames proves nothing, because one 1.4 s dwell can still
+        // miss a 1 Hz burst.  NoEvidence is the branch with the least margin (it
+        // ends with the receiver on a channel nothing has been heard on), so it is
+        // the one worth paying another 2.8 s to avoid entering by accident.
+        if (verdict == ChannelMove.Verdict.NoEvidence)
+            verdict = probeChannelMove(newChannel, oldChannel, service)
         _channelMoveOutcome.value = verdict
         return when (verdict) {
             // The move worked; only the confirmation was late.  Nothing to do, and
@@ -3005,7 +3012,31 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _locatorConfigMessageState.value = LocatorMessageState.Sent
         // The retry is a fresh transmission, so it earns a fresh receipt.
         channelMoveReceiptMs = 0L
-        return waitForLocatorConfig(stagedLocatorConfig)
+        if (waitForLocatorConfig(stagedLocatorConfig))
+            return true
+
+        // The retry's forward is a single unacknowledged LoRa frame on the channel
+        // the user is trying to LEAVE, and the receiver follows it whether or not the
+        // locator hears it.  So losing it reproduces the original split one layer
+        // down — and until 2026-08-30 this returned here, leaving the receiver on the
+        // new channel with the locator on the old one and nothing looking again.
+        // Bench-found at roughly one run in eight (#20).
+        //
+        // Look once more.  This is bounded: the probe cannot recurse, and there is no
+        // second retry — the only new action is putting the receiver back where the
+        // evidence says the locator is.  The invariant being bought is that a FAILED
+        // move never ends with the receiver on a channel the probe did not confirm.
+        val after = probeChannelMove(stagedLocatorConfig.loraChannel, oldChannel, service)
+        _channelMoveOutcome.value = after
+        if (after == ChannelMove.Verdict.Confirmed)
+            return true   // the retry landed after all; only its confirmation was late
+        if (after == ChannelMove.Verdict.LocatorStayed) {
+            // Heard on the old channel again, so end there with it rather than split.
+            service.changeReceiverConfig(
+                ReceiverConfig(channel = oldChannel, deviceName = _remoteReceiverConfig.value.deviceName)
+            )
+        }
+        return false
     }
 
     /**
