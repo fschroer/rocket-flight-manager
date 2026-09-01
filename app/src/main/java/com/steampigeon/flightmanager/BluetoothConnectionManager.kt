@@ -94,6 +94,24 @@ class BluetoothManager(private val appContext: Context) {
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
         private const val DATA_TIMEOUT_MS         = 10_000L  // phantom-connection watchdog
         private const val MAX_MISSED_HEALTH_PROBES = 3       // probes before declaring phantom
+
+        // ── Outbound write queue ──────────────────────────────────────────────
+        /** Ceiling on queued-but-unsent writes. A link that has stopped accepting
+         *  them must not grow this without bound; past the ceiling the newest
+         *  write is refused, which is at least reported to the caller. */
+        private const val MAX_QUEUED_WRITES       = 32
+        /** How long to wait for [BluetoothGattCallback.onCharacteristicWrite]
+         *  before assuming the callback is never coming. Android BLE stacks do drop
+         *  them, and without this a single lost callback would wedge the queue for
+         *  the life of the connection — strictly worse than the unserialized writes
+         *  this replaces. Generous: a write is normally acknowledged within a
+         *  connection interval or two. */
+        private const val WRITE_TIMEOUT_MS        = 2_000L
+        /** Backoff before re-offering a write the stack refused outright. One
+         *  connection interval is the natural unit; the stack is telling us it is
+         *  busy with something this class does not own. */
+        private const val WRITE_RETRY_DELAY_MS    = 20L
+        private const val MAX_WRITE_RETRIES       = 5
     }
 
     // -------------------------------------------------------------------------
@@ -122,6 +140,33 @@ class BluetoothManager(private val appContext: Context) {
     // systemBtManager.getConnectedDevices(), which only covers the GATT server
     // role and misses client connections initiated by this app.
     private val activeGattHandles = mutableMapOf<String, BluetoothGatt>()
+
+    // Outbound writes, in the order they were handed to [sendData], one on the air
+    // at a time.
+    //
+    // Android permits exactly ONE outstanding GATT operation per connection. A
+    // write issued while another is still in flight is not queued by the stack —
+    // it is refused on the spot, returning ERROR_GATT_WRITE_REQUEST_BUSY on API 33+
+    // and false below it. Without this queue that refusal reached the caller as a
+    // send failure, and the app reported it as a fault of the DEVICE: pressing
+    // "Search N channels" while the 2 s ReceiverInfo poll happened to have a write
+    // outstanding produced "No response from the receiver" instantly, with nothing
+    // ever transmitted. The poll only runs while the locator is silent — which is
+    // the state a search exists for — so the collision was concentrated precisely
+    // where it was most confusing, and pressing the button again worked.
+    //
+    // Everything below is guarded by [writeLock]; the GATT call itself is made
+    // outside it, so a binder call never happens with the lock held.
+    private val writeLock = Any()
+    private val writeQueue = ArrayDeque<ByteArray>()
+    private var writeInFlight = false
+    private var writeRetries = 0
+    // Identifies the write the timeout job below is watching. A callback that
+    // arrives before the job is even armed would otherwise leave a watchdog running
+    // against a write that has already completed, and it would go on to drop
+    // whichever write happened to be in flight when it fired.
+    private var writeSeq = 0L
+    private var writeWatchdogJob: Job? = null
 
     // The handle for the currently intended target device.
     private var bluetoothGatt: BluetoothGatt? = null
@@ -311,6 +356,7 @@ class BluetoothManager(private val appContext: Context) {
         closeAllExceptTarget("")   // "" matches nothing → closes every handle
         bluetoothGatt = null
         rxCharacteristic = null
+        clearWriteQueue()
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -417,11 +463,15 @@ class BluetoothManager(private val appContext: Context) {
             if (characteristic.uuid == txCharUuid) onDataReceived?.invoke(value)
         }
 
+        // The signal that releases the next queued write. Until this arrived the
+        // stack refuses anything else on this connection, which is the whole reason
+        // [writeQueue] exists — this callback is what advances it.
         override fun onCharacteristicWrite(
             gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int
         ) {
-            if (status != BluetoothGatt.GATT_SUCCESS)
-                Log.e(tag, "Write to RX char failed: $status")
+            if (characteristic.uuid == rxCharUuid) onWriteComplete(status)
+            else if (status != BluetoothGatt.GATT_SUCCESS)
+                Log.e(tag, "Write to ${characteristic.uuid} failed: $status")
         }
     }
 
@@ -468,22 +518,153 @@ class BluetoothManager(private val appContext: Context) {
     // Outbound data
     // -------------------------------------------------------------------------
 
+    /**
+     * Hand [data] to the receiver.
+     *
+     * Returns whether the write was ACCEPTED FOR TRANSMISSION, not whether it has
+     * been transmitted — the two cannot be the same thing on a link that carries
+     * one operation at a time. Callers already treat the result this way: it maps
+     * to [com.steampigeon.flightmanager.data.LocatorMessageState.Sent], and every
+     * flow that needs to know a message actually landed confirms it by reading
+     * something back (ADR-0011's recognition cycle, the search's own terminator).
+     *
+     * False now means only what it says: there is no connection to write to, or the
+     * queue is full because the link has stopped draining. It no longer means "the
+     * stack was momentarily busy", which is a condition the caller could do nothing
+     * useful with and which the queue below absorbs.
+     */
     fun sendData(data: ByteArray): Boolean {
-        val gatt   = bluetoothGatt ?: run { Log.e(tag, "sendData: not connected"); return false }
-        val rxChar = rxCharacteristic ?: run { Log.e(tag, "sendData: RX char not ready"); return false }
+        if (bluetoothGatt == null) { Log.e(tag, "sendData: not connected"); return false }
+        if (rxCharacteristic == null) { Log.e(tag, "sendData: RX char not ready"); return false }
         val maxPayload = negotiatedMtu - 3
-        return if (data.size <= maxPayload) {
-            writeCharacteristic(gatt, rxChar, data)
-        } else {
+        // Fragments are enqueued individually and so go out in order, each waiting
+        // for the previous one's acknowledgment. Written back to back as they were,
+        // every chunk after the first hit the one-operation limit and was refused —
+        // a fragmented message could not have arrived intact.
+        if (data.size > maxPayload)
             Log.w(tag, "Fragmenting ${data.size} bytes into ${maxPayload}-byte chunks")
+        // All of it or none of it. Enqueuing fragment by fragment and stopping when
+        // the queue filled would put the first half of a message on the wire and
+        // drop the rest, which reaches the receiver as a malformed frame rather than
+        // as the absence of one.
+        val chunks = (data.size + maxPayload - 1) / maxPayload
+        synchronized(writeLock) {
+            if (writeQueue.size + chunks > MAX_QUEUED_WRITES) {
+                Log.e(tag, "Write queue full (${writeQueue.size}/$MAX_QUEUED_WRITES) — " +
+                        "dropping ${data.size} bytes")
+                return false
+            }
             var offset = 0
-            var success = true
-            while (offset < data.size && success) {
+            while (offset < data.size) {
                 val end = minOf(offset + maxPayload, data.size)
-                success = writeCharacteristic(gatt, rxChar, data.copyOfRange(offset, end))
+                writeQueue.addLast(data.copyOfRange(offset, end))
                 offset = end
             }
-            success
+        }
+        pumpWrites()
+        return true
+    }
+
+    /**
+     * Issue the head of the queue if nothing is outstanding.
+     *
+     * Called from [sendData] on whatever thread the caller is on, and from the
+     * write callback on the GATT callback thread. The in-flight flag is claimed
+     * under the lock, so only one of them can be issuing at a time.
+     */
+    private fun pumpWrites() {
+        val chunk: ByteArray
+        val seq: Long
+        synchronized(writeLock) {
+            if (writeInFlight) return
+            chunk = writeQueue.firstOrNull() ?: return
+            writeInFlight = true
+            seq = ++writeSeq
+        }
+        val gatt = bluetoothGatt
+        val rxChar = rxCharacteristic
+        if (gatt == null || rxChar == null) {
+            // The connection went away underneath the queue. Its contents were
+            // addressed to a link that no longer exists; carrying them into the
+            // next one is the late-delivery hazard ADR-0011 documents.
+            Log.w(tag, "Write pump: connection gone — discarding queued writes")
+            clearWriteQueue()
+            return
+        }
+        // Armed BEFORE the write, so a callback that beats us back cannot find an
+        // unarmed watchdog and leave the queue unguarded.
+        armWriteWatchdog(seq)
+        if (writeCharacteristic(gatt, rxChar, chunk)) {
+            synchronized(writeLock) { writeRetries = 0 }
+            return
+        }
+        // Refused with nothing of ours outstanding: something outside this class
+        // owns the stack for the moment. Keep the write and re-offer it rather than
+        // reporting a failure the caller cannot act on.
+        val giveUp = synchronized(writeLock) {
+            writeWatchdogJob?.cancel()
+            writeInFlight = false
+            if (++writeRetries > MAX_WRITE_RETRIES) {
+                writeQueue.removeFirstOrNull()
+                writeRetries = 0
+                true
+            } else false
+        }
+        if (giveUp)
+            Log.e(tag, "Write refused $MAX_WRITE_RETRIES times — dropping ${chunk.size} bytes")
+        scope.launch { delay(WRITE_RETRY_DELAY_MS); pumpWrites() }
+    }
+
+    /** Completion — success or failure, both of which retire the write. A write the
+     *  peripheral rejected is not re-offered: the stack delivered it and got an
+     *  error back, so repeating it would only produce the same error. */
+    private fun onWriteComplete(status: Int) {
+        if (status != BluetoothGatt.GATT_SUCCESS)
+            Log.e(tag, "Write to RX char failed: $status")
+        synchronized(writeLock) {
+            // Nothing outstanding means this callback belongs to a write already
+            // retired by the watchdog, or to one discarded with the connection.
+            // Retiring the head on the strength of it would drop a queued message
+            // that has not been sent at all.
+            if (!writeInFlight) return
+            writeWatchdogJob?.cancel()
+            writeQueue.removeFirstOrNull()
+            writeInFlight = false
+            writeRetries = 0
+        }
+        pumpWrites()
+    }
+
+    private fun armWriteWatchdog(seq: Long) = synchronized(writeLock) {
+        writeWatchdogJob?.cancel()
+        writeWatchdogJob = scope.launch {
+            delay(WRITE_TIMEOUT_MS)
+            val dropped = synchronized(writeLock) {
+                // Someone else's write by now — this job is stale and has nothing
+                // to say about it.
+                if (!writeInFlight || writeSeq != seq) return@launch
+                val head = writeQueue.removeFirstOrNull()
+                writeInFlight = false
+                writeRetries = 0
+                head
+            }
+            Log.e(tag, "No write acknowledgment in ${WRITE_TIMEOUT_MS}ms — " +
+                    "dropping ${dropped?.size ?: 0} bytes and continuing")
+            pumpWrites()
+        }
+    }
+
+    /** Drop everything outstanding. Called when the link goes away: a queued write
+     *  belongs to the connection it was made on, and delivering it across a
+     *  reconnect would fire it out of the flow that queued it. */
+    private fun clearWriteQueue() {
+        synchronized(writeLock) {
+            writeWatchdogJob?.cancel()
+            if (writeQueue.isNotEmpty())
+                Log.w(tag, "Discarding ${writeQueue.size} queued write(s)")
+            writeQueue.clear()
+            writeInFlight = false
+            writeRetries = 0
         }
     }
 
@@ -531,6 +712,7 @@ class BluetoothManager(private val appContext: Context) {
         if (bluetoothGatt?.device?.address == device?.address) {
             bluetoothGatt = null
             rxCharacteristic = null
+            clearWriteQueue()
         }
 
         // If the disconnecting device is no longer the selected receiver (the user
