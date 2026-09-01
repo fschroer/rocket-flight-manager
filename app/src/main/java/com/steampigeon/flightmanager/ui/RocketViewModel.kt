@@ -2477,6 +2477,22 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     // is what makes it usable for ageing the fields
                                     // only this message carries.
                                     lastPreLaunchDataTime = currentTime,
+                                    // Back on the pad.  PreLaunchData is sent only by
+                                    // a disarmed locator whose flight state is
+                                    // WaitingLaunch, so its arrival is the locator
+                                    // saying so — and it is the ONLY thing that ever
+                                    // says so, because flight state rides in
+                                    // TelemetryData alone.
+                                    //
+                                    // Without this the field latched at Landed for the
+                                    // life of the process: the panel kept the in-flight
+                                    // layout (isInFlight is true for any state but
+                                    // WaitingLaunch) long after the locator had been
+                                    // disarmed or power-cycled, showing flight rows
+                                    // over a rocket sitting in its box, and never
+                                    // showing the pad rows that PreLaunchData had
+                                    // resumed filling.
+                                    flightState = FlightStates.WaitingLaunch,
                                     latitude = parsed.msg.latitude,
                                     longitude = parsed.msg.longitude,
                                     rawLatitude = parsed.msg.rawLatitude,

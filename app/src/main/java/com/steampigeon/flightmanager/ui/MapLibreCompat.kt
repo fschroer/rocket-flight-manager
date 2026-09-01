@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -484,10 +486,39 @@ fun MapLibreMapView(
         },
     )
 
-    // Push dynamic content into the style layers whenever it changes.
-    LaunchedEffect(styleReady, rocketLatLng, markerState, accuracyRadiusM, flightPath) {
+    // Marker and accuracy ring: two small features, rewritten on every fix.
+    LaunchedEffect(styleReady, rocketLatLng, markerState, accuracyRadiusM) {
         val style = mapRef?.style?.takeIf { styleReady && it.isFullyLoaded } ?: return@LaunchedEffect
-        updateContentLayers(style, rocketLatLng, markerState, accuracyRadiusM, flightPath)
+        updateMarkerLayers(style, rocketLatLng, markerState, accuracyRadiusM)
+    }
+
+    // Flight path, curtain and second markers: keyed on the PATH ALONE, and
+    // built off the main thread.
+    //
+    // These three sources used to be rebuilt and re-uploaded from the same effect
+    // as the marker above, so every telemetry fix re-tiled the whole track even
+    // though the track had not changed. That is the common case rather than a
+    // corner: the locator keeps transmitting at 1 Hz after landing, and an
+    // archived record — up to CURTAIN_MAX_QUADS extruded quads, and never
+    // changing at all — was re-serialized and re-tiled once a second for as long
+    // as the map was on screen. Re-tiling that much geometry does not finish
+    // inside a second, so the curtain a pan or zoom asked for was invalidated
+    // before it was ready and simply never drew, leaving the flat orange ground
+    // line and the far cheaper cyan markers behind — the "collapses to 2D" the
+    // map showed after being moved, which then cleared on returning to the screen
+    // because a fresh style got one uncontested build.
+    //
+    // Building on Dispatchers.Default matters for the same reason: at 20k quads
+    // the geometry pass and its GeoJSON serialization are tens of milliseconds of
+    // main-thread work, and they were landing on the same thread as MapLibre's
+    // gesture handling.
+    LaunchedEffect(styleReady, flightPath) {
+        if (!styleReady) return@LaunchedEffect
+        val geometry = withContext(Dispatchers.Default) { buildPathGeometry(flightPath) }
+        // Re-read the style after the hop: it may have been torn down while the
+        // geometry was being built.
+        val style = mapRef?.style?.takeIf { it.isFullyLoaded } ?: return@LaunchedEffect
+        updatePathLayers(style, geometry)
     }
 
     // Feed the app's fused-location fixes into the my-location component. Skip the 0,0
@@ -643,13 +674,47 @@ private fun addRocketIcons(context: Context, style: Style) {
     style.addImage(IMG_ROCKET_STALE, sprite(COLOR_RED))
 }
 
-/** Updates source geometry + freshness colors each frame the inputs change. */
-private fun updateContentLayers(
+/**
+ * The three flight-path sources' geometry, built together and applied together.
+ *
+ * Carried as one object rather than built source by source so the whole
+ * expensive pass happens in a single hop off the main thread — see the effect
+ * that calls it.
+ */
+internal class PathGeometry(
+    val track: LineString,
+    val curtain: FeatureCollection,
+    val ticks: FeatureCollection,
+)
+
+/**
+ * Builds every piece of flight-path geometry: the ground track, the altitude
+ * curtain standing on it, and the one-second markers.
+ *
+ * Pure, and safe to call off the main thread — nothing here touches the map.
+ */
+internal fun buildPathGeometry(flightPath: List<PathPoint>) = PathGeometry(
+    track = if (flightPath.size >= 2)
+        LineString.fromLngLats(flightPath.map { Point.fromLngLat(it.longitude, it.latitude) })
+    else
+        LineString.fromLngLats(emptyList()),
+    curtain = altitudeCurtain(flightPath),
+    ticks = secondMarkers(flightPath),
+)
+
+/** Uploads prebuilt path geometry to its three sources. */
+private fun updatePathLayers(style: Style, geometry: PathGeometry) {
+    (style.getSourceAs<GeoJsonSource>(SRC_PATH))?.setGeoJson(geometry.track)
+    (style.getSourceAs<GeoJsonSource>(SRC_PATH_CURTAIN))?.setGeoJson(geometry.curtain)
+    (style.getSourceAs<GeoJsonSource>(SRC_PATH_TICKS))?.setGeoJson(geometry.ticks)
+}
+
+/** Updates the rocket marker and its accuracy ring — position and freshness color. */
+private fun updateMarkerLayers(
     style: Style,
     rocketLatLng: LatLng,
     markerState: RocketMarkerState,
     accuracyRadiusM: Double,
-    flightPath: List<PathPoint>,
 ) {
     // The accuracy ring is colored from the same state as the marker: its radius
     // comes from hAcc, which latches along with lat/lon, so a green ring around a
@@ -667,15 +732,6 @@ private fun updateContentLayers(
     )
     (style.getLayer(LYR_ACCURACY_FILL) as? FillLayer)?.setProperties(PropertyFactory.fillColor(color))
     (style.getLayer(LYR_ACCURACY_LINE) as? LineLayer)?.setProperties(PropertyFactory.lineColor(color))
-
-    // Flight path: the ground track, plus the altitude curtain standing on it.
-    val pathGeo = if (flightPath.size >= 2)
-        LineString.fromLngLats(flightPath.map { Point.fromLngLat(it.longitude, it.latitude) })
-    else
-        LineString.fromLngLats(emptyList())
-    (style.getSourceAs<GeoJsonSource>(SRC_PATH))?.setGeoJson(pathGeo)
-    (style.getSourceAs<GeoJsonSource>(SRC_PATH_CURTAIN))?.setGeoJson(altitudeCurtain(flightPath))
-    (style.getSourceAs<GeoJsonSource>(SRC_PATH_TICKS))?.setGeoJson(secondMarkers(flightPath))
 
     // Rocket marker
     (style.getSourceAs<GeoJsonSource>(SRC_ROCKET))?.setGeoJson(
