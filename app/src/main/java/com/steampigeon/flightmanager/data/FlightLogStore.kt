@@ -30,14 +30,27 @@ class FlightLogStore(private val context: Context) {
     /**
      * Every stored log, newest first.
      *
-     * Ordered by the timestamp in the name rather than by file mtime: mtime moves
-     * when a log is appended to, so an old flight still open during a long recovery
-     * would sort above a newer one that had already closed.
+     * Ordered by the capture time parsed out of the name, and NOT by file mtime: mtime
+     * moves when a log is appended to, so an old flight still open during a long
+     * recovery would sort above a newer one that had already closed.
+     *
+     * **It was `sortedByDescending { it.name }` until 2026-09-01, which is not the same
+     * thing.** The name is `<locator>_<date>_<time>`, so sorting the whole string is
+     * locator-major and only chronological *within* one airframe: `Twist_Lock_5` from
+     * yesterday listed above `Kestrel` from today. The comment here claimed ordering by
+     * the timestamp all along — the code was what disagreed. Found on the iOS port, where
+     * the same sort was mirrored faithfully and then showed itself with two locators on
+     * the screen at once.
+     *
+     * It matters for the question this screen exists to answer: which of these six was
+     * the flight after lunch.
      */
     fun list(): List<FlightLogFile> =
-        (dir.listFiles { f -> f.isFile && f.name.endsWith(FlightLog.FILE_EXTENSION) } ?: emptyArray())
-            .map { FlightLogFile(it.name, it.length(), it.lastModified()) }
-            .sortedByDescending { it.name }
+        ordered(
+            (dir.listFiles { f -> f.isFile && f.name.endsWith(FlightLog.FILE_EXTENSION) }
+                ?: emptyArray())
+                .map { FlightLogFile(it.name, it.length(), it.lastModified()) }
+        )
 
     /**
      * A log's rows for on-screen viewing, capped at [maxRows].
@@ -181,6 +194,23 @@ class FlightLogStore(private val context: Context) {
         private const val TAG = "FlightLogStore"
         const val DIR_NAME = "flight_logs"
         const val MAX_VIEW_ROWS = 5_000
+
+        /**
+         * Newest first, by capture time; anything whose name does not parse sorts last.
+         *
+         * Pure and lifted out of [list] so the ordering can be tested without a
+         * `Context` — this is the part that was wrong for four days while the directory
+         * listing around it was fine, which is the usual argument for separating the two.
+         *
+         * A log with an unparseable name did not come from this app's recorder. It still
+         * has to land somewhere deterministic rather than interleaving with real dates,
+         * so it goes to the end, ordered by name for stability.
+         */
+        fun ordered(files: List<FlightLogFile>): List<FlightLogFile> =
+            files.sortedWith(
+                compareByDescending<FlightLogFile> { it.captureKey ?: "" }
+                    .thenByDescending { it.name }
+            )
     }
 }
 
@@ -204,13 +234,31 @@ data class FlightLogFile(
             .substringBeforeLast('_')          // date
             .ifEmpty { FlightLog.UNNAMED_LOCATOR }
 
-    /** `YYYY-MM-DD HH:MM:SS`, or the raw name if it does not parse. */
-    val capturedAt: String
+    /**
+     * The `YYYY-MM-DD_HHmmss` half of the name, or null when it does not parse.
+     *
+     * The sort key for [FlightLogStore.ordered], and deliberately NOT [capturedAt]: that
+     * one falls back to the raw stem so the screen always has something to show, and a
+     * stem beginning with a letter sorts ABOVE every real date in a descending order —
+     * so reusing it would put unparseable files first, which is the opposite of what the
+     * fallback is for. Fixed-width and zero-padded, so lexicographic order is
+     * chronological order and no date parsing is needed to sort.
+     */
+    val captureKey: String?
         get() {
             val stem = name.substringBeforeLast(FlightLog.FILE_EXTENSION)
             val time = stem.substringAfterLast('_')
             val date = stem.substringBeforeLast('_').substringAfterLast('_')
-            if (date.length != 10 || time.length != 6) return stem
+            if (date.length != 10 || time.length != 6) return null
+            return "${date}_$time"
+        }
+
+    /** `YYYY-MM-DD HH:MM:SS`, or the raw name if it does not parse. */
+    val capturedAt: String
+        get() {
+            val key = captureKey ?: return name.substringBeforeLast(FlightLog.FILE_EXTENSION)
+            val date = key.substringBefore('_')
+            val time = key.substringAfter('_')
             return "$date ${time.substring(0, 2)}:${time.substring(2, 4)}:${time.substring(4, 6)}"
         }
 }
