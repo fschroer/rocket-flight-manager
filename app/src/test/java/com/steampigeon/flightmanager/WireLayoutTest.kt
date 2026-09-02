@@ -7,6 +7,7 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorConfigWire
+import com.steampigeon.flightmanager.data.MsgType
 import com.steampigeon.flightmanager.data.NoseAxis
 import com.steampigeon.flightmanager.data.Protocol
 import org.junit.Assert.assertEquals
@@ -115,6 +116,15 @@ class WireLayoutTest {
             Protocol.LOCATOR_SEARCH_RESULT_PAYLOAD_SIZE,
             1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 4 + Protocol.DEVICE_NAME_LENGTH,
         )
+
+    // ChannelSurveyCancelRequest: C++ sizeof 6 — header only, no payload. Its own
+    // message type rather than a flag on ChannelSurveyRequest, and the value is what
+    // makes that safe: the receiver derives payload length from msg_type alone, with
+    // no length field on the wire, so growing the header-only survey request would
+    // desync a receiver predating the change on the ORDINARY scan too. Pinned here
+    // because that reasoning is only sound while this stays payload-free.
+    @Test fun channelSurveyCancelMessageTypeValue() =
+        assertEquals(25.toUByte(), MsgType.ChannelSurveyCancelRequest.value)
 
     // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────
     // Every command carries target_locator_id right after the header. The locator

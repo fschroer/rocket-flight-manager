@@ -83,7 +83,7 @@
     <string name="link_interference">Interference detected. Try another channel.</string>
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
-    <string name="survey_scanning">Scanning… (about 7 seconds)</string>
+    <string name="survey_scanning">Scanning… (about 8 seconds)</string>
     <string name="survey_home_in_use_own">Your channel (%1$d) carries your locator, as expected.</string>
     <string name="survey_home_in_use_other">Your channel (%1$d) has a locator on it and none is connected — someone else is using it.</string>
     <string name="survey_channel_occupied">Channel %1$d has another locator on it — not offered.</string>
@@ -162,9 +162,24 @@
     <string name="survey_home_rank">Your channel (%1$d) ranks %2$d quietest.</string>
     <string name="survey_uniform_floor">Every channel reads the same raised level — a transmitter close to the receiver, usually your own locator, spilling across the whole band. It does not favor any channel, so these are all equally good. Move the receiver away from powered locators for a sharper reading.</string>
     <string name="survey_all_hot">Every channel reads loud, which usually means a transmitter is very close to the receiver — check for another powered locator nearby. Move it away and scan again for a true reading. The channels below are still the least affected, and should be clean once it is moved.</string>
-    <string name="survey_refused_armed">The locator is armed. Scanning would stop telemetry for about a second, and the channel cannot be changed while armed. Disarm first.</string>
+    <!-- "about a second" until 2026-09-02, which was the coarse pass alone: the confirm
+         phase dwells 1.4 s on each of five candidates, so the real cost is ~7.8 s. The
+         number is the whole reason the sweep is worth stopping, and it now reads the
+         same here, on survey_scanning, and in the manual. -->
+    <string name="survey_refused_armed">The locator is armed. Scanning would stop telemetry for about eight seconds, and the channel cannot be changed while armed. Disarm first.</string>
     <string name="survey_refused_busy">The receiver is busy — a flight data transfer, or a command still on its way to the locator. Try again in a moment.</string>
+    <!-- Its own button rather than a share of search_cancel. The two stop different
+         things for different reasons (a 90-second hunt across the band, and an
+         8-second sweep whose whole cost is the deafness), and a shared string is a
+         standing invitation to reword one of them and silently change the other. -->
+    <string name="survey_cancel">Stop</string>
+    <!-- The receiver reports one Cancelled for all three causes and cannot say which,
+         so the app supplies the reason it is sure of. This one is the firmware giving
+         way to a queued command; survey_cancelled_by_user is the operator's own Stop.
+         Splitting them rather than hedging as search_cancelled does: here the app
+         genuinely knows, because it is the party that sent the cancel. -->
     <string name="survey_cancelled">Scan stopped so your command could reach the locator. Scan again when you are ready.</string>
+    <string name="survey_cancelled_by_user">Scan stopped. The receiver is back on your channel and listening.</string>
     <string name="survey_failed">No response from the receiver. If its firmware predates channel scanning, update it — otherwise try again.</string>
     <string name="survey_caveat">Measured where the receiver is. A channel that is quiet here may be busier at altitude.</string>
     <!-- App Flight Logs (records what the phone saw, not what the locator archived) -->

@@ -902,6 +902,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     private var surveyTimeoutJob: Job? = null
 
+    // Set when the app sends a cancel, cleared when the response lands or a new
+    // sweep starts. Exists only to word the outcome truthfully: the receiver
+    // reports one Cancelled for all three causes, and this is the one the user
+    // caused. See ChannelSurvey.Status.CancelledByUser.
+    private var surveyCancelRequested = false
+
     /** Ask the receiver to sweep. The receiver independently refuses while armed;
      *  this only avoids sending a request we already know it will reject.
      *
@@ -913,6 +919,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun requestChannelSurvey(service: BluetoothService?) {
         if (_surveyInProgress.value) return
         _channelSurvey.value = null
+        surveyCancelRequested = false
         surveyTimeoutJob?.cancel()
         if (service?.requestChannelSurvey() != true) {
             _surveyInProgress.value = false
@@ -923,9 +930,39 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         surveyTimeoutJob = viewModelScope.launch {
             delay(SURVEY_TIMEOUT_MS)
             if (_surveyInProgress.value) {
+                // A cancel that was never answered is a receiver that stopped
+                // answering, not a cancel that worked — report the silence.
+                surveyCancelRequested = false
                 _surveyInProgress.value = false
                 _channelSurvey.value = surveyFailed()
             }
+        }
+    }
+
+    /**
+     * Ask the receiver to stop sweeping.
+     *
+     * The point is the radio, not the button: a sweep leaves the home channel for
+     * the best part of eight seconds, and the reason to stop one is almost always
+     * that the locator is live and its telemetry is wanted back now. The receiver
+     * restores the channel and re-arms RX as it ends the sweep, so it is listening
+     * again within a poll instead of at the end of the confirm phase.
+     *
+     * Settles through the response like a normal ending rather than a local guess —
+     * the same contract as [cancelLocatorSearch] — because the sweep is still
+     * running until the receiver says otherwise, and clearing the UI early would
+     * claim the deafness was over while it had a second or more left to run.
+     */
+    fun cancelChannelSurvey(service: BluetoothService?) {
+        if (!_surveyInProgress.value) return
+        surveyCancelRequested = true
+        if (service?.cancelChannelSurvey() != true) {
+            // The request never went out, so no response is coming and the timeout
+            // would be the only way out. Settle now, honestly: nothing was stopped.
+            surveyTimeoutJob?.cancel()
+            surveyCancelRequested = false
+            _surveyInProgress.value = false
+            _channelSurvey.value = surveyFailed()
         }
     }
 
@@ -2784,10 +2821,31 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             versionInfoStale.value = false
                         }
                         is ParsedMessage.ChannelSurvey -> {
+                            // A cancel is answered even when the receiver had nothing to
+                            // cancel — deliberately, so the app never waits on silence.
+                            // That makes a stray response possible: tap Stop just as the
+                            // sweep finishes and the receiver queues its Ok, then answers
+                            // the cancel with a Cancelled that describes nothing. Landing
+                            // it would replace a good ranking with "Scan stopped".
+                            //
+                            // Gated on a sweep being outstanding rather than on the status
+                            // alone, because the second response is only meaningless when
+                            // the first has already been consumed.
+                            val cancelled = parsed.msg.status == ChannelSurveyData.Status.Cancelled
+                            if (cancelled && !_surveyInProgress.value) return@collect
                             surveyTimeoutJob?.cancel()
                             _surveyInProgress.value = false
+                            // Only when the app asked, and only over a Cancelled: a
+                            // sweep cancelled for a queued command while the user
+                            // happened to be pressing Stop is still that first thing,
+                            // and the receiver's own reason outranks ours.
+                            val status =
+                                if (cancelled && surveyCancelRequested)
+                                    ChannelSurveyData.Status.CancelledByUser
+                                else parsed.msg.status
+                            surveyCancelRequested = false
                             _channelSurvey.value = ChannelSurveyData.analyze(
-                                parsed.msg.status, parsed.msg.levels, parsed.msg.homeChannel,
+                                status, parsed.msg.levels, parsed.msg.homeChannel,
                                 parsed.msg.confirmed, parsed.msg.confirmedFrames,
                                 parsed.msg.confirmedLocatorIds,
                             )

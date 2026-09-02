@@ -4,6 +4,7 @@ import com.steampigeon.flightmanager.data.ChannelSurvey
 import com.steampigeon.flightmanager.data.ChannelSurvey.Status
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -195,7 +196,13 @@ class ChannelSurveyTest {
 
     @Test
     fun `refusal produces no ranking`() {
-        for (s in listOf(Status.RefusedArmed, Status.RefusedBusy, Status.Unknown)) {
+        for (s in listOf(
+            Status.RefusedArmed, Status.RefusedBusy, Status.Unknown,
+            // Both cancels measured nothing worth ranking either. The operator's own
+            // Stop lands mid-sweep by definition, so whatever levels arrive alongside
+            // it describe a partial band and must not be presented as a survey.
+            Status.Cancelled, Status.CancelledByUser,
+        )) {
             val r = ChannelSurvey.analyze(s, List(64) { -120 }, homeChannel = 3, confirmedChannels = listOf(1))
             assertTrue(r.ranked.isEmpty())
             assertTrue(r.suggestions.isEmpty())
@@ -380,5 +387,18 @@ class ChannelSurveyTest {
         // simply never sends it.
         assertEquals(Status.Cancelled, Status.fromByte(3))
         assertEquals(Status.Unknown, Status.fromByte(99))
+    }
+
+    @Test
+    fun `CancelledByUser never comes off the wire`() {
+        // The receiver has one Cancelled and no way to say which of its three causes
+        // fired; the app substitutes this one because it is the party that sent the
+        // cancel. If a future firmware ever does distinguish them, this is the test
+        // that has to be revisited deliberately rather than a byte quietly acquiring
+        // a second meaning — 4 decoding to CancelledByUser would make the "the user
+        // pressed Stop" wording reachable for a sweep the user never touched.
+        for (b in 0..255) {
+            assertNotEquals(Status.CancelledByUser, Status.fromByte(b))
+        }
     }
 }

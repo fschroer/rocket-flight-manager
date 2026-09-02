@@ -468,7 +468,13 @@ enum class MsgType(val value: UByte) {
     ChannelSurvey(21u),         // Response from the receiver with per-channel occupancy.
     PadAlertSnoozeRequest(22u), // App→locator: suppress the prepped-and-disarmed alert for N minutes (#37).
     LocatorSearchRequest(23u),  // Request from the app to the receiver to listen on named channels (no locator involved).
-    LocatorSearchResult(24u);   // Streamed response: one per channel searched, plus a terminator.
+    LocatorSearchResult(24u),   // Streamed response: one per channel searched, plus a terminator.
+    // Stops a sweep in progress. Its own message rather than a flag on
+    // ChannelSurveyRequest: that request is header-only on the wire and the
+    // receiver sizes payloads from msg_type alone, so growing it would desync a
+    // receiver predating the change on the ordinary scan too. See the firmware's
+    // MessageProtocol.hpp, which carries the same note.
+    ChannelSurveyCancelRequest(25u);
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

@@ -19,8 +19,9 @@ package com.steampigeon.flightmanager.data
  */
 object ChannelSurvey {
 
-    /** Mirrors the firmware's `ChannelSurveyStatus`. */
-    enum class Status { Ok, RefusedArmed, RefusedBusy, Cancelled, Unknown;
+    /** Mirrors the firmware's `ChannelSurveyStatus`, plus one value the wire never
+     *  carries — see [CancelledByUser]. */
+    enum class Status { Ok, RefusedArmed, RefusedBusy, Cancelled, CancelledByUser, Unknown;
         companion object {
             fun fromByte(v: Int) = when (v) {
                 0 -> Ok
@@ -30,6 +31,15 @@ object ChannelSurvey {
                 // value in a byte that already existed, so no size changed; a receiver
                 // predating it simply never sends 3.
                 3 -> Cancelled
+                // Deliberately not reachable from a byte. The receiver reports one
+                // Cancelled for all three causes — a queued operator command, a
+                // receiver channel change, and the operator's own Stop — because the
+                // status byte cannot distinguish them and the firmware only says which
+                // on its console. The app is the one party that KNOWS when it asked,
+                // so it substitutes [CancelledByUser] itself rather than guessing from
+                // the wire. Worth the extra value: the shared wording ("Scan stopped so
+                // your command could reach the locator") is a specific claim about the
+                // hardware, and it is false for a Stop the user pressed.
                 else -> Unknown
             }
         }

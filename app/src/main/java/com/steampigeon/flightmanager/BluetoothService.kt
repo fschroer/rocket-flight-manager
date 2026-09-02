@@ -372,6 +372,14 @@ class BluetoothService : Service() {
     fun requestChannelSurvey(): Boolean =
         sendMessage(MsgType.ChannelSurveyRequest, null)
 
+    /** Stop a sweep in progress, so the receiver is back on the home channel and
+     *  listening within a poll rather than at the end of the ~8 s sweep.
+     *
+     *  Answered with a Cancelled status even when nothing was running, so the app
+     *  never waits on silence — the same contract as [cancelLocatorSearch]. */
+    fun cancelChannelSurvey(): Boolean =
+        sendMessage(MsgType.ChannelSurveyCancelRequest, null)
+
     /** Ask the receiver to listen for locators on [channels], or on the whole band
      *  when [channels] is empty.
      *
@@ -434,6 +442,9 @@ class BluetoothService : Service() {
         msgType == MsgType.ReceiverCfgChgRequest ||
                 msgType == MsgType.ReceiverInfoRequest ||
                 msgType == MsgType.ChannelSurveyRequest ||
+                // Stopping a sweep must work in exactly the states starting one
+                // does, and a survey is run precisely when nothing is connected.
+                msgType == MsgType.ChannelSurveyCancelRequest ||
                 // Same reasoning, and more load-bearing: a search is started
                 // precisely when no locator is connected, so gating it on a
                 // connection would disable it in the only state it is for.

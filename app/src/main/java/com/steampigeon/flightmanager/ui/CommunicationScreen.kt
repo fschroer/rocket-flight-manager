@@ -437,6 +437,7 @@ fun CommunicationScreen(
                             !surveyInProgress && locatorSearch?.running != true &&
                             !locatorArmedOrFlying,
                     onScan = { viewModel.requestChannelSurvey(service) },
+                    onCancel = { viewModel.cancelChannelSurvey(service) },
                     locatorConnected = locatorConnected,
                     canPick = if (locatorConnected)
                         locatorConfigMessageState == LocatorMessageState.Idle
@@ -748,6 +749,7 @@ internal fun ChannelSurveySection(
     // identity from the air, so it labels and nothing more.
     knownLocators: Map<Long, KnownLocator>,
     onScan: () -> Unit,
+    onCancel: () -> Unit,
     onPick: (Int) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -762,6 +764,17 @@ internal fun ChannelSurveySection(
                         if (inProgress) R.string.survey_scanning else R.string.survey_scan
                     )
                 )
+            }
+            // Only while a sweep is running, and a TextButton like the search's, so the
+            // filled Scan button stays the section's title. The sweep is only ~8 s, but
+            // the reason to stop one is that the locator is live and its telemetry is
+            // wanted back — waiting out the confirm phase is exactly what the user
+            // cannot afford in that moment. Stops the RECEIVER, not just the wait: the
+            // request ends the sweep and restores the home channel.
+            if (inProgress) {
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.survey_cancel))
+                }
             }
             // This section's button is its title, so the help hangs off the button.
             // What a pick does depends on whether a locator is connected — moving the
@@ -795,6 +808,15 @@ internal fun ChannelSurveySection(
             // Not an error: the scan gave way to something the user asked for.
             survey.status == ChannelSurvey.Status.Cancelled -> ChannelNote(
                 stringResource(R.string.survey_cancelled),
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            // Nor is this one, and it is the case the user is least surprised by —
+            // they pressed Stop. Worth its own wording all the same: what they want
+            // to know is whether the receiver is listening again, which is the whole
+            // reason to have stopped it.
+            survey.status == ChannelSurvey.Status.CancelledByUser -> ChannelNote(
+                stringResource(R.string.survey_cancelled_by_user),
                 MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
