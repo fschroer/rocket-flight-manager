@@ -32,6 +32,13 @@ repo's own files and should be run from there.
 about the hardware, and changing behaviour under one silently makes it a lie — three
 shipped that way in a single change before the gate said so.
 
+**`sp-docs` Gate 3 covers `steam-pigeon-ios/docs/UI_PARITY.md`** — the one doc that does
+NOT live in `Locator\docs\`, and so the one Gates 1 and 2 never look at. A change that
+makes the two apps differ is recorded there or it is invisible: that file's rule is that
+silence reads as parity. A whole new Android screen went unrecorded on 2026-08-31 while
+both other gates passed honestly. `Scripts/sp-status.sh` now prints how many app commits
+have touched `ui/` since that file last changed.
+
 ## App-specific load-bearing points
 
 - **Wire format is hand-synced across three places** — this app's `app/src/test/.../WireLayoutTest.kt`
