@@ -229,10 +229,22 @@ data class FlightLogFile(
      * rebuilt whenever it did not.
      */
     val locatorName: String
-        get() = name.substringBeforeLast(FlightLog.FILE_EXTENSION)
-            .substringBeforeLast('_')          // time
-            .substringBeforeLast('_')          // date
-            .ifEmpty { FlightLog.UNNAMED_LOCATOR }
+        get() {
+            // Derived from [captureKey] rather than re-parsed, so the two can never
+            // disagree about where the name ends and the stamp begins.
+            //
+            // The previous version stripped two '_'-delimited fields off the end and
+            // fell back on an empty result. That fallback was unreachable for the case
+            // it was written for: substringBeforeLast returns the WHOLE string when the
+            // delimiter is absent, so "whatever.csv" passed through both calls untouched
+            // and was reported as a locator named "whatever" — a guess presented as
+            // fact, on the one screen whose job is to say which airframe flew.
+            val key = captureKey ?: return FlightLog.UNNAMED_LOCATOR
+            return name.substringBeforeLast(FlightLog.FILE_EXTENSION)
+                .removeSuffix(key)
+                .trimEnd('_')
+                .ifEmpty { FlightLog.UNNAMED_LOCATOR }
+        }
 
     /**
      * The `YYYY-MM-DD_HHmmss` half of the name, or null when it does not parse.
