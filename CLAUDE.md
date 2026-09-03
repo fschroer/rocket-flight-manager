@@ -52,6 +52,23 @@ have touched `ui/` since that file last changed.
   (`BuildConfig.MAPBOX_TOKEN`); never commit a `sk.` secret token. `gradle.properties` is
   tracked — keep it clean. Scan `git diff --cached` for `sk.`/`pk.`/`AIza` before committing.
 
+## The pre-commit hook
+
+`.githooks/pre-commit` runs `:app:testDebugUnitTest` before any commit that stages a
+`.kt`/`.java`/`.gradle.kts` change, and refuses the commit if the suite is red. It is
+tracked rather than living in `.git/hooks/`, so **each clone installs it once**:
+
+```
+git config core.hooksPath .githooks
+```
+
+It skips instantly for docs-only commits — a hook that taxes every commit gets bypassed
+by reflex. `git commit --no-verify` is the deliberate escape.
+
+**A green hook is not "verified".** Nothing in the suite constructs `RocketViewModel`, so
+an init-order fault that kills the app on launch passes it cleanly — that is exactly how
+`069986f` shipped. ViewModel construction still needs an install-and-launch on the Pixel.
+
 ## Build / run
 
 Toolchains are not on PATH; see the CLI build recipe in memory, or Android Studio.

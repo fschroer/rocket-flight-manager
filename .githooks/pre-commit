@@ -1,0 +1,83 @@
+#!/usr/bin/env sh
+# pre-commit — run the Android unit suite before a commit that touches code.
+#
+# WHY THIS EXISTS. Twice in two days something reached a commit in this repo
+# without `testDebugUnitTest` having been run against it: a startup crash
+# (069986f), and a test file committed already failing (4333932, fixed in
+# 3ce181c). `sp-commit` mandates the build-and-test step; it is the *running* of
+# it that slipped both times, and a step that depends on being remembered is not
+# a gate.
+#
+# TRACKED, not in .git/hooks. That directory is not versioned, so a hook there
+# would not survive a clone and would never reach the Mac. Install it once per
+# clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# BYPASS is `git commit --no-verify`, and it is legitimate — an intentional
+# work-in-progress commit on a branch does not owe anyone a green suite. What it
+# is not is a way past a red suite on main.
+#
+# WHAT THIS DOES NOT CATCH, stated so a green hook is never mistaken for
+# "verified": nothing in the suite constructs RocketViewModel (it needs an
+# Application and there is no Robolectric), so an initialisation-order fault
+# that kills the app on launch passes this hook cleanly. That is exactly how
+# 069986f shipped. Anything touching ViewModel construction still needs an
+# install-and-launch on a device.
+#
+# It also tests the WORKING TREE, not the staged tree. Isolating the index means
+# stashing, and a stash inside a hook can lose work when the hook dies partway.
+# The failure this guards against is "the tests were never run", which the
+# working tree catches; a staged/unstaged divergence is a different and rarer
+# problem, and paying for it with a stash is the wrong trade here.
+
+set -e
+
+# --- Only pay the cost when something compilable changed ---------------------
+#
+# A docs-only commit must not wait ~20 s. A hook that taxes every commit is a
+# hook that gets bypassed by reflex, and then it guards nothing.
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if ! printf '%s\n' "$STAGED" | grep -qE '\.(kt|java)$|\.gradle\.kts$|gradle\.properties$|libs\.versions\.toml$'; then
+  exit 0
+fi
+
+# --- Find a JDK --------------------------------------------------------------
+#
+# Neither machine has one on PATH; both ship it inside Android Studio.
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/java" ]; then
+  for cand in \
+    "/c/Program Files/Android/Android Studio/jbr" \
+    "/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+  do
+    if [ -x "$cand/bin/java" ]; then
+      JAVA_HOME="$cand"
+      export JAVA_HOME
+      break
+    fi
+  done
+fi
+
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/java" ]; then
+  # Refuses rather than warns. A warning that lets an unverified code commit
+  # through is the same outcome as having no hook, arrived at more slowly.
+  echo "pre-commit: no JDK found (looked in JAVA_HOME and Android Studio)." >&2
+  echo "            Set JAVA_HOME, or bypass with: git commit --no-verify" >&2
+  exit 1
+fi
+
+# --- Run the suite -----------------------------------------------------------
+echo "pre-commit: running :app:testDebugUnitTest (working tree)..."
+
+# --quiet still prints test failures and the report path; a passing run is then
+# two lines rather than fifty, which is what makes the output worth reading.
+if ./gradlew --quiet :app:testDebugUnitTest --console=plain; then
+  echo "pre-commit: suite green."
+  exit 0
+fi
+
+echo "" >&2
+echo "pre-commit: TESTS FAILED — commit refused." >&2
+echo "            Report: app/build/reports/tests/testDebugUnitTest/index.html" >&2
+echo "            Deliberate WIP commit? git commit --no-verify" >&2
+exit 1
