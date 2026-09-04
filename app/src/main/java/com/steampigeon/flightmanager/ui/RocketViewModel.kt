@@ -1487,9 +1487,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // from the NEW locator is admitted, so a locator that is never admitted
         // leaves it wrong indefinitely.
         //
-        // iOS clears this on a BLE link drop too, in clearLiveReadouts. This app has
-        // no equivalent — a disconnect leaves the whole readout standing — so the gap
-        // is closed here only for the deliberate release. See ADR-0011.
+        // iOS clears this on a BLE link drop too, in clearLiveReadouts, and so does
+        // this app: [releaseLocatorOnLinkLoss] is the equivalent, and it landed in
+        // this same commit. Both ways of losing a connection are covered, which is
+        // what makes the locator half of the readout match across the platforms —
+        // only the RECEIVER half diverges, because `_remoteReceiverConfig` is seeded
+        // from and saved to user preferences where iOS's `receiverInfo` is not. See
+        // ADR-0011 and `steam-pigeon-ios/docs/UI_PARITY.md`'s divergence table.
         _remoteLocatorConfig.value = LocatorConfig()
         quietestNoiseFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
         quietestPolledFloor = LinkQuality.NOISE_FLOOR_UNKNOWN
