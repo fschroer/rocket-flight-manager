@@ -151,6 +151,7 @@ import com.steampigeon.flightmanager.NavDestination
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.DeploymentCharges
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.LocatorConfig
@@ -921,26 +922,22 @@ private fun FlightSpeechAnnouncer(
         }
         if (rocketState.flightState >= FlightStates.DroguePrimaryEvent && !droguePrimaryState) {
             droguePrimaryState = true
-            if (locatorConfig.deploymentChannel1Mode == DeployMode.DroguePrimary && rocketState.channel1Fired ||
-                locatorConfig.deploymentChannel2Mode == DeployMode.DroguePrimary && rocketState.channel2Fired)
+            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.DroguePrimary))
                 announcer.add("Drogue charge.")
         }
         if (rocketState.flightState >= FlightStates.DrogueBackupEvent && !drogueBackupState) {
             drogueBackupState = true
-            if (locatorConfig.deploymentChannel1Mode == DeployMode.DrogueBackup && rocketState.channel1Fired ||
-                locatorConfig.deploymentChannel2Mode == DeployMode.DrogueBackup && rocketState.channel2Fired)
+            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.DrogueBackup))
                 announcer.add("Drogue backup charge.")
         }
         if (rocketState.flightState >= FlightStates.MainPrimaryEvent && !mainPrimaryState) {
             mainPrimaryState = true
-            if (locatorConfig.deploymentChannel1Mode == DeployMode.MainPrimary && rocketState.channel1Fired ||
-                locatorConfig.deploymentChannel2Mode == DeployMode.MainPrimary && rocketState.channel2Fired)
+            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.MainPrimary))
                 announcer.add("Main charge.")
         }
         if (rocketState.flightState >= FlightStates.MainBackupEvent && !mainBackupState) {
             mainBackupState = true
-            if (locatorConfig.deploymentChannel1Mode == DeployMode.MainBackup && rocketState.channel1Fired ||
-                locatorConfig.deploymentChannel2Mode == DeployMode.MainBackup && rocketState.channel2Fired)
+            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.MainBackup))
                 announcer.add("Main backup charge.")
         }
     }
