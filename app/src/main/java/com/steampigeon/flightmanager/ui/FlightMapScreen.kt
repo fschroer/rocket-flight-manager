@@ -844,10 +844,12 @@ private fun FlightSpeechAnnouncer(
     var previousAGL by remember { mutableIntStateOf(0) }
     var apogeeSpoken by remember { mutableStateOf(false) }
     var launchedState by remember { mutableStateOf(false) }
-    var droguePrimaryState by remember { mutableStateOf(false) }
-    var drogueBackupState by remember { mutableStateOf(false) }
-    var mainPrimaryState by remember { mutableStateOf(false) }
-    var mainBackupState by remember { mutableStateOf(false) }
+    // One latch per charge, held in DeploymentCharges.Latch rather than in four
+    // booleans here, because the rule it enforces is not obvious and could not be
+    // tested while it lived in this composable.  See its KDoc: the flight state is
+    // a floor, not a trigger, and a charge can fire long after the state that
+    // gates its callout has gone by.
+    val chargeCallouts = remember { DeploymentCharges.Latch() }
     var drogueDeploySpoken by remember { mutableStateOf(false) }
     var mainDeploySpoken by remember { mutableStateOf(false) }
     var landingSpoken by remember { mutableStateOf(false) }
@@ -890,10 +892,7 @@ private fun FlightSpeechAnnouncer(
             previousAGL = 0
             launchedState = false
             apogeeSpoken = false
-            droguePrimaryState = false
-            drogueBackupState = false
-            mainPrimaryState = false
-            mainBackupState = false
+            chargeCallouts.reset()
             drogueDeploySpoken = false
             mainDeploySpoken = false
             landingSpoken = false
@@ -920,25 +919,17 @@ private fun FlightSpeechAnnouncer(
                 announcer.add("Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters.")
             }
         }
-        if (rocketState.flightState >= FlightStates.DroguePrimaryEvent && !droguePrimaryState) {
-            droguePrimaryState = true
-            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.DroguePrimary))
-                announcer.add("Drogue charge.")
-        }
-        if (rocketState.flightState >= FlightStates.DrogueBackupEvent && !drogueBackupState) {
-            drogueBackupState = true
-            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.DrogueBackup))
-                announcer.add("Drogue backup charge.")
-        }
-        if (rocketState.flightState >= FlightStates.MainPrimaryEvent && !mainPrimaryState) {
-            mainPrimaryState = true
-            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.MainPrimary))
-                announcer.add("Main charge.")
-        }
-        if (rocketState.flightState >= FlightStates.MainBackupEvent && !mainBackupState) {
-            mainBackupState = true
-            if (DeploymentCharges.fired(locatorConfig, rocketState, DeployMode.MainBackup))
-                announcer.add("Main backup charge.")
+        // Each stays pending until its charge actually fires, so a charge that
+        // fires after the flight state has moved past it is still announced.
+        for (mode in chargeCallouts.due(locatorConfig, rocketState)) {
+            when (mode) {
+                DeployMode.DroguePrimary -> "Drogue charge."
+                DeployMode.DrogueBackup -> "Drogue backup charge."
+                DeployMode.MainPrimary -> "Main charge."
+                DeployMode.MainBackup -> "Main backup charge."
+                // Not in DeploymentCharges.LADDER, so never returned by due().
+                DeployMode.Unused -> null
+            }?.let { announcer.add(it) }
         }
     }
 
