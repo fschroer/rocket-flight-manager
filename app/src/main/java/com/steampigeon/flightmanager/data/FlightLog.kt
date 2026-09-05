@@ -108,6 +108,68 @@ object FlightLog {
 
     private const val MAX_NAME_CHARS = 24
 
+    // ── Session header ───────────────────────────────────────────────────────
+
+    /**
+     * The `detail` of the [LogEvent.SessionOpened] row: everything about the file
+     * that is not a measurement.
+     *
+     * ## Why the batteries are here and not in a column
+     *
+     * `locator_batt_mv` and `receiver_batt_mv` are columns, but on an ARMED flight
+     * they are always blank, and that is structural rather than a fault. The
+     * locator sends `PreLaunchData` only while **disarmed and WaitingLaunch**
+     * (`Factory.cpp`: `send_telemetry = Armed || flight_state != WaitingLaunch`),
+     * the batteries ride only on that message, and a flight is armed before it
+     * launches — so the two-second pre-roll sits entirely inside the armed window
+     * and never contains a pre-launch frame. Confirmed on a real log,
+     * 2026-09-04: 341 telemetry rows, 285 receiver-info rows, zero pre-launch.
+     *
+     * The values are still *known* — the app heard them before arming — so they go
+     * in the header, where an armed flight can carry them too.
+     *
+     * ## The age is not optional
+     *
+     * [batteryAgeMs] is how long before the launch that reading arrived. Without
+     * it the number is a claim about an unknown moment: it could be from ten
+     * seconds before arming or from an hour before, and on a locator that has sat
+     * powered on the pad those are very different readings. Reported in seconds,
+     * and the whole battery clause reads `unknown` when nothing was ever heard —
+     * which is what an app started after arming genuinely knows.
+     */
+    fun sessionHeader(
+        locatorName: String,
+        locatorId: Long?,
+        receiverName: String,
+        receiverChannel: Int,
+        appVersion: String,
+        locatorBatteryMv: Int?,
+        receiverBatteryMv: Int?,
+        batteryAgeMs: Long?,
+    ): String = buildString {
+        append("Steam Pigeon app flight log")
+        append("; locator=").append(locatorName.ifEmpty { "unknown" })
+        append("; locator_id=").append(locatorId ?: 0L)
+        append("; receiver=").append(receiverName.ifEmpty { "unknown" })
+        append("; receiver_channel=").append(receiverChannel)
+        append("; app_version=").append(appVersion)
+        if (locatorBatteryMv != null && receiverBatteryMv != null) {
+            append("; locator_batt_mv=").append(locatorBatteryMv)
+            append("; receiver_batt_mv=").append(receiverBatteryMv)
+            // Negative would mean a reading stamped after the launch it precedes,
+            // which is a clock going backwards rather than a battery age.
+            append("; batt_age_s=").append(
+                if (batteryAgeMs == null || batteryAgeMs < 0) "unknown"
+                else String.format(LOCALE, "%.1f", batteryAgeMs / 1000.0)
+            )
+        } else {
+            // Said out loud rather than omitted: a missing clause reads as an
+            // older app that never wrote one, and this is a real fact about the
+            // flight — the app never heard the locator while it was disarmed.
+            append("; batteries=unknown (no pre-launch frame heard)")
+        }
+    }
+
     // ── Rendering ────────────────────────────────────────────────────────────
 
     /**

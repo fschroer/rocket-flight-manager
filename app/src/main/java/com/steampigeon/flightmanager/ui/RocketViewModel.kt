@@ -1945,6 +1945,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // Last values written as events, so each is reported on its edge rather than on
     // every frame that repeats it.  A 1 Hz stream would otherwise carry
     // "link quality: Normal" once a second and bury the transition that matters.
+    // The last battery readings heard, and when.
+    //
+    // Kept because they are otherwise LOST to every armed flight: the batteries
+    // ride only on PreLaunchData, which the locator stops sending the moment it is
+    // armed, and a flight is armed before it launches. See [FlightLog.sessionHeader].
+    private var lastPrelaunchLocatorBatteryMv: Int? = null
+    private var lastPrelaunchReceiverBatteryMv: Int? = null
+    private var lastPrelaunchBatteryTimeMs: Long? = null
+
     private var loggedFlightState: FlightStates? = null
     private var loggedLinkQuality: LinkQuality.Verdict? = null
     private var loggedLandingThisFlight = false
@@ -2004,17 +2013,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun openFlightLog(timeMs: Long) {
         val locatorName = _remoteLocatorConfig.value.deviceName
-        val header = buildString {
-            append("Steam Pigeon app flight log")
-            append("; locator=").append(locatorName.ifEmpty { "unknown" })
-            append("; locator_id=").append(_connectedLocatorId.value ?: 0L)
-            append("; receiver=").append(_remoteReceiverConfig.value.deviceName)
-            append("; receiver_channel=").append(_remoteReceiverConfig.value.channel)
-            append("; app_version=").append(
-                getApplication<Application>()
-                    .getString(com.steampigeon.flightmanager.R.string.git_version)
-            )
-        }
+        val header = FlightLog.sessionHeader(
+            locatorName = locatorName,
+            locatorId = _connectedLocatorId.value,
+            receiverName = _remoteReceiverConfig.value.deviceName,
+            receiverChannel = _remoteReceiverConfig.value.channel,
+            appVersion = getApplication<Application>()
+                .getString(com.steampigeon.flightmanager.R.string.git_version),
+            locatorBatteryMv = lastPrelaunchLocatorBatteryMv,
+            receiverBatteryMv = lastPrelaunchReceiverBatteryMv,
+            batteryAgeMs = lastPrelaunchBatteryTimeMs?.let { timeMs - it },
+        )
         loggedLandingThisFlight = false
         if (flightLogRecorder.onLaunch(timeMs, locatorName, header)) {
             _flightLogRecordingName.value = FlightLog.fileName(locatorName, timeMs, ZoneId.systemDefault())
@@ -2116,6 +2125,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         verdict: LinkQuality.Verdict,
     ) {
         noteLinkQuality(verdict, timeMs)
+        // Remembered even when nothing is recording: this is the ONLY message that
+        // carries them, and by the time a log opens it has long stopped arriving.
+        lastPrelaunchLocatorBatteryMv = msg.locatorBatteryMv
+        lastPrelaunchReceiverBatteryMv = msg.receiverBatteryMv
+        lastPrelaunchBatteryTimeMs = timeMs
         flightLogRecorder.offer(
             FlightLogRecord.Sample(
                 timestampMs = timeMs,
