@@ -38,6 +38,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -95,12 +97,26 @@ import kotlinx.coroutines.delay
  * picks as well, which meant tapping "Point receiver" appeared to do nothing and
  * left the real action in a different section of the screen.
  *
- * **Two devices, two Update buttons, deliberately.** The receiver's channel and
- * the locator's channel are different messages with different acknowledgment paths
- * (the receiver echoes over BLE; the locator is confirmed by inference through
- * [ADR-0011](docs/adr/0011)'s recognition cycle). One button over both would have
- * to hide that difference, and the difference is exactly what a user needs to see
- * when one of them does not take.
+ * **One channel field, and a chain deciding who it commands.** The receiver's
+ * channel and the locator's channel are different messages with different
+ * acknowledgment paths (the receiver echoes over BLE; the locator is confirmed by
+ * inference through [ADR-0011](docs/adr/0011)'s recognition cycle), and this screen
+ * carried a separate field and Update button for each so that the difference could
+ * not be hidden. The difference is real; two fields were the wrong way to show it.
+ * They hold the same number in every case where nothing is broken, so "change the
+ * channel" began with picking between two identical numbers.
+ *
+ * The chain shows the same difference in one control: closed, Update sends the
+ * locator move and the button tracks the locator's message state; open, it points
+ * the receiver and tracks the receiver's. Open by default, because the direction
+ * that touches the rocket should be the one you ask for.
+ *
+ * **Acting anywhere clears what the other controls left behind.** A scan's ranking,
+ * a search's hits and a channel move's outcome are all answers that were true when
+ * they appeared and expire on nobody's clock, so they accumulated above the control
+ * being used and were indistinguishable from fresh results. Pressing something is
+ * the moment the user has moved on — see `RocketViewModel.clearResidue`, including
+ * what it deliberately does NOT clear.
  */
 /** Width of the trailing Connect / Connected slot on a search hit row. Wide enough
  *  for either label plus a Button's content padding, so both start at the same x and
@@ -137,6 +153,7 @@ fun CommunicationScreen(
     val channelMoveBannerChannel by viewModel.channelMoveBannerChannel.collectAsState()
     val channelMoveResult by viewModel.channelMoveResult.collectAsState()
     val channelMoveOutcome by viewModel.channelMoveOutcome.collectAsState()
+    val pendingChannelMove by viewModel.pendingChannelMove.collectAsState()
 
     // Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
     // channel watchdog uses for "the locator has gone quiet". Deliberately not the
@@ -184,7 +201,11 @@ fun CommunicationScreen(
     // fields of the same struct, and a shared dirty flag would let a name staged
     // over there light up the Update button over here with nothing to send.
     var stagedReceiverChannel by remember { mutableIntStateOf(remoteReceiverConfig.channel) }
-    var stagedLocatorChannel by remember { mutableIntStateOf(remoteLocatorConfig.loraChannel) }
+    // Whether Update moves the connected locator too, rather than only pointing the
+    // receiver. Off on every visit: it decides which device a single button commands,
+    // and a toggle that quietly persisted would make one press mean two different
+    // things on two consecutive visits to the same screen.
+    var chainLocator by remember { mutableStateOf(false) }
     // "The user typed here" is tracked, not derived. Deriving it from
     // staged != remote reads correctly and behaves backwards: the sync below runs
     // BECAUSE the device value changed, which is the moment the two are guaranteed
@@ -193,9 +214,6 @@ fun CommunicationScreen(
     // composed before the locator's config had arrived, seeded 0, and then refused
     // every update on the grounds that 0 was an edit in progress.
     var receiverChannelEdited by remember { mutableStateOf(false) }
-    var locatorChannelEdited by remember { mutableStateOf(false) }
-    val receiverChannelChanged = stagedReceiverChannel != remoteReceiverConfig.channel
-    val locatorChannelChanged = stagedLocatorChannel != remoteLocatorConfig.loraChannel
 
     // Follow the device while the user has not typed anything, so a late-arriving
     // config or a channel changed from elsewhere shows up immediately — but never
@@ -203,9 +221,16 @@ fun CommunicationScreen(
     LaunchedEffect(remoteReceiverConfig.channel) {
         if (!receiverChannelEdited) stagedReceiverChannel = remoteReceiverConfig.channel
     }
-    LaunchedEffect(remoteLocatorConfig.loraChannel) {
-        if (!locatorChannelEdited) stagedLocatorChannel = remoteLocatorConfig.loraChannel
-    }
+    // One field now, so one sync — and the receiver's channel is the one to follow in
+    // both modes. A chained move ends with the receiver ON the locator's new channel
+    // (ADR-0011 invariant 1), so tracking the receiver tracks a successful move too;
+    // and toggling the chain then never changes the number on screen, only what
+    // Update will do with it.
+    //
+    // A chain with nothing on the end of it is not a state worth keeping. Reset on
+    // disconnect rather than merely disabled, so reconnecting does not silently
+    // re-arm a locator move set up before the link dropped.
+    LaunchedEffect(locatorConnected) { if (!locatorConnected) chainLocator = false }
 
     LaunchedEffect(Unit) {
         // Re-entering is the user asking to see conflicts again, so a dismissal from
@@ -347,6 +372,65 @@ fun CommunicationScreen(
                 }
             }
 
+            // ── Are the two devices together? ───────────────────────
+            // The standing answer to the question the screen exists for, where the
+            // banner above is the transient one. It outlives a dismissal deliberately:
+            // dismissChannelMoveBanner clears the banner and its result and does NOT
+            // touch channelMoveOutcome, so acting on the screen takes the event away
+            // and leaves the state.
+            //
+            // **It cannot be built from the two channel numbers, and that is not an
+            // implementation detail.** `remoteLocatorConfig.loraChannel` is assigned
+            // from `PreLaunchData.receiverChannel` — the receiver's own stamp on the
+            // frame it relayed — precisely because a received broadcast PROVES the two
+            // share a channel. Comparing it against `remoteReceiverConfig.channel`
+            // would be a green light structurally incapable of turning red, which is
+            // worse than no indicator at all. That is also why the pair of fields this
+            // screen used to have never showed a split either: the case where they
+            // differ is the case where nothing is arriving to populate one of them.
+            //
+            // So each colour is tied to something the app can actually prove:
+            //
+            // GREEN — a broadcast from the connected locator is arriving. Hearing it
+            // IS sharing a channel; there is nothing further to check.
+            //
+            // RED — the move's verdict was NoEvidence or NotChecked. Those are the two
+            // endings where the receiver followed and where the locator went is exactly
+            // what nobody knows (see channelMoveOutcome). LocatorStayed is deliberately
+            // NOT red: there the receiver was put back and both devices are on the old
+            // channel together, so silence after it is a range problem, and colouring
+            // it red would blame the wrong thing. Confirmed is not red for the obvious
+            // reason.
+            //
+            // Nothing at all while a move is still running — the banner is already
+            // saying so, and the link is legitimately down for several seconds — and
+            // nothing when the locator is simply not being heard with no move behind
+            // it, which is the ordinary "where is my rocket" case that Find a locator
+            // answers. A red there would be a guess dressed as a measurement.
+            val moveInFlight = channelMoveBannerChannel != null && channelMoveResult == null
+            val locatorHeard = locatorConnected && hearingLocator
+            val whereaboutsUnknown =
+                channelMoveOutcome == ChannelMove.Verdict.NoEvidence ||
+                        channelMoveOutcome == ChannelMove.Verdict.NotChecked
+            if (!moveInFlight) {
+                when {
+                    locatorHeard -> ChannelAgreementNote(
+                        together = true,
+                        text = stringResource(
+                            R.string.channels_devices_together, remoteReceiverConfig.channel,
+                        ),
+                    )
+                    whereaboutsUnknown -> ChannelAgreementNote(
+                        together = false,
+                        text = stringResource(
+                            R.string.channels_devices_split,
+                            remoteReceiverConfig.channel,
+                            pendingChannelMove ?: channelMoveBannerChannel ?: 0,
+                        ),
+                    )
+                }
+            }
+
             // Said once, above both scans, because one condition disables both and
             // two identical notes read as two problems.
             if (locatorArmedOrFlying) {
@@ -368,6 +452,7 @@ fun CommunicationScreen(
                         !locatorArmedOrFlying,
                 onTargetChange = { searchTargetId = it },
                 onSearch = { channels ->
+                    viewModel.clearResidue(RocketViewModel.CommsControl.Search)
                     viewModel.startLocatorSearch(service, channels, searchTargetId ?: 0L)
                 },
                 onCancel = { viewModel.cancelLocatorSearch(service) },
@@ -375,6 +460,11 @@ fun CommunicationScreen(
                 connectedLocatorId = connectedLocatorId,
                 canConnect = receiverConfigMessageState == LocatorMessageState.Idle,
                 onPick = { channel ->
+                    // Everything except this section's own results and the conflict
+                    // prompt: the row being acted on is the point, and it is about to
+                    // report that the receiver is there, while the prompt is this
+                    // action's own recovery path. See CommsControl.SearchPick.
+                    viewModel.clearResidue(RocketViewModel.CommsControl.SearchPick)
                     // Receiver-only, always. The locator is already ON that channel —
                     // that is what the search just established — so moving it would be
                     // the one action guaranteed to lose it again.
@@ -436,13 +526,19 @@ fun CommunicationScreen(
                     enabled = bluetoothConnectionState == BluetoothConnectionState.Ready &&
                             !surveyInProgress && locatorSearch?.running != true &&
                             !locatorArmedOrFlying,
-                    onScan = { viewModel.requestChannelSurvey(service) },
+                    onScan = {
+                        viewModel.clearResidue(RocketViewModel.CommsControl.Survey)
+                        viewModel.requestChannelSurvey(service)
+                    },
                     onCancel = { viewModel.cancelChannelSurvey(service) },
                     locatorConnected = locatorConnected,
                     canPick = if (locatorConnected)
                         locatorConfigMessageState == LocatorMessageState.Idle
                     else receiverConfigMessageState == LocatorMessageState.Idle,
                     onPick = { channel ->
+                        // Before the move below, so a resolved banner from an earlier
+                        // one is gone and the new one is the only banner on screen.
+                        viewModel.clearResidue(RocketViewModel.CommsControl.Survey)
                         if (locatorConnected) {
                             // Move the whole system. "Find a clean channel" means the rocket
                             // goes there too — staging a receiver-only change would point the
@@ -467,32 +563,110 @@ fun CommunicationScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-            // No help on the heading. The two fields do different things to different
-            // devices, and one icon holding both paragraphs made the reader work out
-            // which applied to which — the question the icon was meant to answer. Each
-            // field carries its own instead.
+            // ── Channel ─────────────────────────────────────────────
+            // One field and a chain, where there were two fields and two Update
+            // buttons.
+            //
+            // The old split was not wrong about the hardware: the receiver's channel
+            // and the locator's are different messages with different acknowledgment
+            // paths, and one button averaging the two would hide the difference at
+            // exactly the moment a user needs to see it. It was wrong about the
+            // question. The two fields hold the SAME number in every case where
+            // nothing is broken — the receiver follows the locator — so a user who
+            // wanted to change "the channel" first had to work out which of two
+            // identical numbers to type into. The chain answers that before it is
+            // asked, and answers it in the safe direction: by default nothing that
+            // happens here touches the rocket.
+            //
+            // The difference the two buttons existed to show is still shown, and in a
+            // better place. The chain's own state IS the difference, and everything
+            // downstream of it — the label, the help, the occupancy note, the Update
+            // button's message state — is chosen from it. So a locator move that is
+            // never acknowledged still says so here, and a receiver change is still
+            // confirmed from the device's own read-back.
             Text(
                 text = stringResource(R.string.channels_manual_title),
                 style = MaterialTheme.typography.titleMedium,
             )
 
-            // ── Receiver channel ────────────────────────────────────────────────
+            // The chain means nothing with no locator connected — a locator-directed
+            // command (ADR-0020) has nothing to address — so the toggle can be set and
+            // still not be in force. Everything below reads this, never chainLocator.
+            val chained = chainLocator && locatorConnected
+            val channelMessageState =
+                if (chained) locatorConfigMessageState else receiverConfigMessageState
+            // Which device the staged number would be a change TO.
+            //
+            // Chained, the message is a LOCATOR channel change and nothing else
+            // (ADR-0011 invariant 1: exactly one message — the locator moves, and the
+            // receiver follows it after forwarding). So the comparison has to be
+            // against the locator's channel. Comparing against the receiver's would
+            // disable Update in the one case most worth having it: the two devices
+            // split by a move that failed, where the receiver is already sitting on
+            // the number you are looking at and the locator is not.
+            val channelChanged =
+                if (chained) stagedReceiverChannel != remoteLocatorConfig.loraChannel
+                else stagedReceiverChannel != remoteReceiverConfig.channel
+
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // weight(1f) so the field takes the row and leaves the icon its place;
-                // ConfigurationItemNumeric applies fillMaxWidth internally, which would
-                // otherwise push the icon off the end.
+                // weight(1f) so the field takes the row and leaves the icons their
+                // place; ConfigurationItemNumeric applies fillMaxWidth internally,
+                // which would otherwise push them off the end.
                 ConfigurationItemNumeric(
-                    configItemName = stringResource(R.string.channels_receiver_channel),
+                    // The label is a claim about what Update does, so it moves with
+                    // the chain. "Receiver channel" standing over a button that sends
+                    // a locator command is exactly the kind of quietly false string
+                    // this project has shipped before.
+                    configItemName = stringResource(
+                        if (chained) R.string.channels_both_channels
+                        else R.string.channels_receiver_channel
+                    ),
                     initialConfigValue = stagedReceiverChannel,
                     minValue = 0,
                     maxValue = 63,
-                    configMessageState = receiverConfigMessageState,
+                    configMessageState = channelMessageState,
                     modifier = Modifier.weight(1f)
                 ) { newConfigValue ->
                     stagedReceiverChannel = newConfigValue
                     receiverChannelEdited = true
                 }
-                SectionHelp(listOf(stringResource(R.string.channels_receiver_explainer)))
+                // Colour, not a different glyph. Link/LinkOff would say "broken"
+                // where the state being reported is "does this reach the locator
+                // too".
+                //
+                // The tint is set explicitly in both states, which also settles the
+                // no-locator case: disabled, it keeps the open-chain grey and simply
+                // does not respond, rather than fading to a third colour that would
+                // read as a third state.
+                IconButton(
+                    onClick = { chainLocator = !chainLocator },
+                    enabled = locatorConnected &&
+                            channelMessageState == LocatorMessageState.Idle,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Link,
+                        contentDescription = stringResource(
+                            if (chained) R.string.channels_chain_on
+                            else R.string.channels_chain_off
+                        ),
+                        modifier = Modifier.size(20.dp),
+                        tint = if (chained) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                }
+                // Two paragraphs: what Update does in the mode you are in now, and
+                // what the chain is for. The first is the string the locator field
+                // used to carry, because chained is precisely what that field did.
+                SectionHelp(
+                    listOf(
+                        stringResource(
+                            if (chained) R.string.channels_locator_explainer
+                            else R.string.channels_receiver_explainer
+                        ),
+                        stringResource(R.string.channels_chain_explainer),
+                    )
+                )
             }
             // What is known to be on the channel being typed. The scans already
             // gathered this; without it the manual field is the only control on this
@@ -502,87 +676,57 @@ fun CommunicationScreen(
             // pointing at, so with nothing staged there is nothing to describe — and
             // "Twist 0 is on channel 34" while sitting on 34, connected to Twist 0, is
             // just the status panel read back as though it were news.
-            if (receiverChannelChanged) {
+            if (channelChanged) {
                 ChannelOccupancy.occupantOf(
                     stagedReceiverChannel, channelSurvey, locatorSearch,
                     excludeLocatorId = connectedLocatorId,
                     labelOf = { id -> knownLocators[id]?.label?.takeIf { it.isNotEmpty() } },
                     unrecognizedLabel = stringResource(R.string.channels_occupant_unrecognized),
                 )?.let { who ->
+                    // Chained, this is a claim about a MOVE — it would put two
+                    // locators on one channel — and is an error. Receiver-only it is a
+                    // statement about where you are about to listen, which is very
+                    // often the whole point of listening there.
                     ChannelNote(
-                        stringResource(R.string.channels_occupant_note, stagedReceiverChannel, who),
-                        MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (chained)
+                            stringResource(
+                                R.string.channels_occupant_warning, stagedReceiverChannel, who,
+                            )
+                        else stringResource(
+                            R.string.channels_occupant_note, stagedReceiverChannel, who,
+                        ),
+                        if (chained) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             ApplyRow(
-                enabled = receiverChannelChanged &&
-                        receiverConfigMessageState == LocatorMessageState.Idle,
-                messageState = receiverConfigMessageState,
-                // Same call the two pick buttons make. It builds the message from the
-                // last read-back and changes only the channel — the receiver's name
-                // lives on Receiver Settings and rides in this same message, so sending
-                // a locally-staged copy of the whole struct would let this screen
-                // quietly revert a rename made over there.
+                enabled = channelChanged && channelMessageState == LocatorMessageState.Idle,
+                messageState = channelMessageState,
                 onApply = {
                     receiverChannelEdited = false
-                    viewModel.pointReceiverAtChannel(service, stagedReceiverChannel)
+                    // Before either send, so a resolved banner from an earlier move is
+                    // gone and the one a chained Update raises below is the only one
+                    // on screen.
+                    viewModel.clearResidue(RocketViewModel.CommsControl.ManualChannel)
+                    if (chained) {
+                        // The same call the survey's "Move here" makes, deliberately:
+                        // one mechanism with two entry points rather than a second
+                        // path to the same wire message. It carries the ADR-0011
+                        // confirm and revert-on-failure cycle, and lights the progress
+                        // banner above.
+                        viewModel.moveLocatorToChannel(service, stagedReceiverChannel)
+                    } else {
+                        // Same call the two pick buttons make. It builds the message
+                        // from the last read-back and changes only the channel — the
+                        // receiver's name lives on Receiver Settings and rides in this
+                        // same message, so sending a locally-staged copy of the whole
+                        // struct would let this screen quietly revert a rename made
+                        // over there.
+                        viewModel.pointReceiverAtChannel(service, stagedReceiverChannel)
+                    }
                 },
             )
-
-            // ── Locator channel ─────────────────────────────────────────────────
-            // Only offered when a locator is connected: this is a locator-directed
-            // command (ADR-0020), so with nothing connected there is no locator to
-            // address and the send would be refused anyway.
-            if (locatorConnected) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.channels_locator_channel),
-                        initialConfigValue = stagedLocatorChannel,
-                        minValue = 0,
-                        maxValue = 63,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = Modifier.weight(1f)
-                    ) { newConfigValue ->
-                        stagedLocatorChannel = newConfigValue
-                        locatorChannelEdited = true
-                    }
-                    SectionHelp(listOf(stringResource(R.string.channels_locator_explainer)))
-                }
-                // Gated on a staged change, because the warning is a claim about a
-                // MOVE. Ungated it fired on the channel the locator is already using,
-                // telling the user that staying put would collide with themselves —
-                // and it was right about the occupancy and wrong about everything else.
-                if (locatorChannelChanged) {
-                    ChannelOccupancy.occupantOf(
-                        stagedLocatorChannel, channelSurvey, locatorSearch,
-                        excludeLocatorId = connectedLocatorId,
-                        labelOf = { id -> knownLocators[id]?.label?.takeIf { it.isNotEmpty() } },
-                        unrecognizedLabel = stringResource(R.string.channels_occupant_unrecognized),
-                    )?.let { who ->
-                        ChannelNote(
-                            stringResource(
-                                R.string.channels_occupant_warning, stagedLocatorChannel, who,
-                            ),
-                            MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                ApplyRow(
-                    enabled = locatorChannelChanged &&
-                            locatorConfigMessageState == LocatorMessageState.Idle,
-                    messageState = locatorConfigMessageState,
-                    onApply = {
-                        locatorChannelEdited = false
-                        // The same call the survey's "Move here" makes, deliberately:
-                        // one mechanism with two entry points rather than a second path
-                        // to the same wire message. It carries the ADR-0011 confirm and
-                        // revert-on-failure cycle, and lights the progress banner above.
-                        viewModel.moveLocatorToChannel(service, stagedLocatorChannel)
-                    },
-                )
-            }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -708,6 +852,40 @@ private fun SectionHelp(help: List<String>) {
                 }
             }
         }
+    }
+}
+
+/**
+ * The channel-agreement status light: a filled dot and one sentence.
+ *
+ * A dot rather than colouring the sentence, because the two states have to be
+ * distinguishable at a glance from across a field, and coloured body text is not —
+ * this screen already carries grey notes and red warnings in the same size, so a
+ * third coloured sentence would read as one of those. The text stays in the normal
+ * foreground colour so it is legible in both themes; only the dot carries the
+ * verdict.
+ */
+@Composable
+private fun ChannelAgreementNote(together: Boolean, text: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Default.FiberManualRecord,
+            // Null, not a description of the colour: the sentence beside it already
+            // says which state this is, and "green dot" read aloud after it would be
+            // the same fact twice in a form that assumes the listener can see.
+            contentDescription = null,
+            modifier = Modifier.size(10.dp),
+            tint = if (together) StatusGreen else StatusRed,
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(start = 6.dp),
+        )
     }
 }
 
@@ -1062,8 +1240,20 @@ internal fun LocatorSearchSection(
             // Both searches side by side, because they are the same decision at two
             // scales — try the likely channels, or try everything — and stacking them
             // made the second read as a consequence of the first rather than an
-            // alternative to it. Widening only appears once a short run has completed;
-            // the help behind the section's "i" says so.
+            // alternative to it.
+            //
+            // BOTH are always offered, including before anything has been searched.
+            // The band sweep used to appear only after a short run finished, on the
+            // reasoning that widening is a response to a miss. It is also the right
+            // FIRST move when the user already knows the locator is not on any channel
+            // the app would try — a borrowed one, or one reconfigured elsewhere — and
+            // gating it made that user run a search they knew would fail in order to
+            // unlock the one they wanted. It became untenable once acting anywhere on
+            // the screen started clearing finished runs: the button would have come
+            // and gone with the results it was derived from (fschroer, 2026-09-04).
+            //
+            // Run.canWiden still governs the NOTE that explains a miss, which is a
+            // statement about a run that happened and has to stay tied to one.
             // FlowRow, not Row: side by side is the intent, but "Search 6 channels"
             // and "Search all 64 channels" together are within a few dp of a phone's
             // usable width at the default font scale, and past it at a larger one. A
@@ -1077,10 +1267,8 @@ internal fun LocatorSearchSection(
                 Button(onClick = { onSearch(candidates) }, enabled = enabled) {
                     Text(stringResource(R.string.search_start, candidates.size))
                 }
-                if (run?.canWiden == true) {
-                    Button(onClick = { onSearch(emptyList()) }, enabled = enabled) {
-                        Text(stringResource(R.string.search_widen))
-                    }
+                Button(onClick = { onSearch(emptyList()) }, enabled = enabled) {
+                    Text(stringResource(R.string.search_widen))
                 }
             }
         }

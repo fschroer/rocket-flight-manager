@@ -157,6 +157,31 @@ object LocatorSearch {
             get() = !running && status == Status.Done && !wholeBand
 
         /**
+         * This run with [hit] recorded — or unchanged, when that channel already has one.
+         *
+         * **One channel yields at most one hit per run, by the firmware's design.**
+         * The receiver holds a single hit slot, the first frame of a dwell fills it,
+         * and the dwell then ends early because nothing further can be learned about
+         * that channel (`ServiceLocatorSearch`). Each channel is reported exactly once
+         * and the slot is cleared before the next. A second hit on a channel already
+         * in this list is therefore not new information — it is the same dwell
+         * arriving twice.
+         *
+         * Enforced here rather than trusted, because the list is the one piece of
+         * accumulating state on the whole inbound path: everything else a search
+         * message touches is an assignment, which absorbs a repeat silently, so a
+         * duplicate would be visible ONLY here. Reported 2026-09-04 as one marginal
+         * false hit on channel 0 rendered as four rows, with the only live locator on
+         * 60 — four identical rows for a dwell that happened once.
+         *
+         * The first report wins. Two copies of one dwell carry the same reading, so
+         * there is nothing to choose between them; keeping the first also keeps the
+         * row from flickering under a late repeat.
+         */
+        fun withHit(hit: Hit): Run =
+            if (hits.any { it.channel == hit.channel }) this else copy(hits = hits + hit)
+
+        /**
          * Channels carrying a hit that is probably **not** where that locator is.
          *
          * One locator cannot be on two channels, but a search reports it on two when

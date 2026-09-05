@@ -3016,11 +3016,19 @@ private fun LinkQualityNote(text: String, color: Color, width: Dp) {
 
 // ── RSSI signal strength color ────────────────────────────────────────────────
 
+// The two ends of the status palette, named because more than one screen now
+// reports a good/bad verdict in colour and two copies of a hex value are two
+// things that can drift. Deliberately fixed rather than taken from the theme:
+// colorScheme has an `error` but no `ok`, and a green paired with the theme's
+// red would be two palettes in one row.
+internal val StatusGreen = Color(0xFF4CAF50)
+internal val StatusRed = Color(0xFFF44336)
+
 internal fun rssiColor(rssi: Int): Color = when {
-    rssi >= -80  -> Color(0xFF4CAF50)  // green  — excellent
+    rssi >= -80  -> StatusGreen        // excellent
     rssi >= -100 -> Color(0xFFFFC107)  // amber  — good
     rssi >= -110 -> Color(0xFFFF9800)  // orange — fair
-    else         -> Color(0xFFF44336)  // red    — poor
+    else         -> StatusRed          // poor
 }
 
 // ── SNR margin color ──────────────────────────────────────────────────────────

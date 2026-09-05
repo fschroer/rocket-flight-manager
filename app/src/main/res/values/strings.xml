@@ -98,8 +98,24 @@
     <string name="channels_manual_title">Set a channel by hand</string>
     <string name="channels_receiver_channel">Receiver channel</string>
     <string name="channels_receiver_explainer">Where the receiver listens. Point it at a channel a locator is already on — it does not move the locator. Picking a channel from a scan above applies straight away; typing one here needs Update.</string>
-    <string name="channels_locator_channel">Locator channel</string>
+    <!-- The field's label when the chain is closed. It reads as a claim about both
+         devices because that is what Update then does: the locator is moved and the
+         receiver follows it (ADR-0011 invariant 1). -->
+    <string name="channels_both_channels">Receiver + locator channel</string>
+    <!-- Content descriptions for the chain toggle. Named for what tapping WILL do,
+         which is the question a screen reader user has at the moment of the tap. -->
+    <string name="channels_chain_off">Chain the locator to this channel</string>
+    <string name="channels_chain_on">Locator chained — tap to move the receiver only</string>
+    <string name="channels_chain_explainer">The chain decides who Update moves. Open (grey), it points the receiver only. Closed, it moves the connected locator to this channel and the receiver follows it there. Greyed out with no locator connected, because there is then nothing to move.</string>
     <string name="channels_locator_explainer">Moves the connected locator, and the receiver follows it automatically. Use this when the channel is chosen for you; otherwise let the scan pick one.</string>
+    <!-- The channel-agreement indicator. Green states a fact the app can prove:
+         a received broadcast means the receiver and the locator are on one
+         channel, because hearing it is what sharing a channel MEANS. Red states
+         the one thing it can prove the other way — a move whose outcome was
+         NoEvidence or NotChecked, where the receiver followed and nobody knows
+         whether the locator did. -->
+    <string name="channels_devices_together">Receiver and locator are together on channel %1$d.</string>
+    <string name="channels_devices_split">Split: the receiver is on channel %1$d, and the locator never confirmed the move to %2$d — it may be on either. Use Find a locator to settle it.</string>
     <string name="channels_occupant_note">%2$s was last heard on channel %1$d.</string>
     <!-- A search heard a frame on this channel that carried no locator_id. The
          channel is occupied; nobody said who. Reads as the subject of the two
@@ -138,7 +154,7 @@
     <string name="search_none">Nothing found on those channels.</string>
     <string name="search_target_not_found">%1$s was not on those channels.</string>
     <string name="search_widen">Search all 64 channels</string>
-    <string name="search_widen_help">Search all 64 channels appears once a shorter search has finished. It sweeps the whole band — up to about 90 seconds, during which the receiver hears nothing, and less when it finds locators along the way, since it moves on as soon as a channel answers — and is worth it when the locator is not on any channel the app knows to try, or when you are looking for one it has never met.</string>
+    <string name="search_widen_help">Search all 64 channels sweeps the whole band — up to about 90 seconds, during which the receiver hears nothing, and less when it finds locators along the way, since it moves on as soon as a channel answers — and is worth it when the locator is not on any channel the app knows to try, or when you are looking for one it has never met.</string>
     <string name="search_none_band">Nothing found anywhere in the band. Check that the locator is powered on and within range.</string>
     <string name="search_cancelled">Search stopped. If you did not stop it, a command you sent to the locator did — the receiver has to be back on your channel to deliver it.</string>
     <string name="search_refused_armed">The locator is armed or in flight. Searching would leave the receiver deaf for up to a minute and a half, so it is refused until it lands and disarms.</string>

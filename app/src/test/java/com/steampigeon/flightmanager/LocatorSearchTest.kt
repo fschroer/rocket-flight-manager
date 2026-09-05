@@ -170,6 +170,46 @@ class LocatorSearchTest {
         status = LocatorSearch.Status.Done, wholeBand = true, hits = hits.toList(),
     )
 
+    @Test fun `a second hit on a channel already reported is dropped`() {
+        // Reported 2026-09-04: one marginal false hit on channel 0 shown as four
+        // identical rows, while the only live locator was on 60. A dwell happens once
+        // — the receiver holds a single hit slot, the first frame fills it and the
+        // dwell then ends early — so a repeat is the same dwell arriving twice, not a
+        // second locator.
+        val first = LocatorSearch.Hit(0, ours, "Prometheus", -104, -12, false)
+        val again = LocatorSearch.Hit(0, ours, "Prometheus", -104, -12, false)
+        val r = run().withHit(first).withHit(again).withHit(again)
+        assertEquals(listOf(first), r.hits)
+    }
+
+    @Test fun `the first report of a channel wins`() {
+        // Two copies of one dwell carry the same reading, so there is nothing to
+        // choose between them — but pinning it down keeps a late repeat from
+        // rewriting a row the user is already reading.
+        val first = LocatorSearch.Hit(0, ours, "Prometheus", -104, -12, false)
+        val louder = LocatorSearch.Hit(0, ours, "Prometheus", -55, 9, false)
+        assertEquals(listOf(first), run().withHit(first).withHit(louder).hits)
+    }
+
+    @Test fun `hits on different channels all survive`() {
+        // The dedupe is per channel and nothing else. A census finding two rockets is
+        // the answer the search exists to give.
+        val a = LocatorSearch.Hit(12, ours, "Prometheus", -70, 5, false)
+        val b = LocatorSearch.Hit(34, theirs, "Twist 0", -65, 7, false)
+        assertEquals(listOf(a, b), run().withHit(a).withHit(b).hits)
+    }
+
+    @Test fun `four duplicates of one false hit cannot masquerade as a real channel`() {
+        // The symptom exactly: without the dedupe these four share an id, so
+        // suspectChannels groups them, flags three of the four rows as likely false
+        // and leaves one reading as a genuine occupant of channel 0.
+        val hit = LocatorSearch.Hit(0, ours, "Prometheus", -104, -12, false)
+        var r = run()
+        repeat(4) { r = r.withHit(hit) }
+        assertEquals(1, r.hits.size)
+        assertTrue(r.suspectChannels.isEmpty())
+    }
+
     @Test fun `one locator on two channels flags all but the strongest`() {
         // The measured case: a locator on 57 also reported on 17, 8 MHz away, because
         // it was close enough to overload the front end.

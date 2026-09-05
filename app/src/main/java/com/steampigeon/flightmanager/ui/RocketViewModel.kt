@@ -1112,6 +1112,76 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         if (!_surveyInProgress.value) clearChannelSurvey()
     }
 
+    /** Which control on the Communication screen is about to act, so [clearResidue]
+     *  can spare that control's own results. */
+    enum class CommsControl {
+        Search,
+        /**
+         * Connect on a search hit, which is [Search] plus one exception: it leaves the
+         * conflicting-traffic prompt alone.
+         *
+         * The prompt is the documented recovery path for exactly this action. A
+         * receiver-only move opens the connection slot, and the locator being left
+         * goes on broadcasting on the old channel until the receiver retunes — one of
+         * those frames reclaims the connection and switches off the recognition cycle,
+         * so the locator on the NEW channel gets the passive treatment: a banner
+         * rather than a password prompt, and the banner's Connect is what raises the
+         * prompt (ADR-0011, "The channel being left keeps broadcasting into the slot
+         * the move just opened").
+         *
+         * Dismissing on that tap would be worse than useless, because
+         * [dismissConflict] REMEMBERS the id: connecting to a hit for the same locator
+         * the prompt is already naming would suppress the only route left to it for
+         * the rest of the visit.
+         */
+        SearchPick,
+        Survey,
+        ManualChannel,
+    }
+
+    /**
+     * Drop what the OTHER controls on the Communication screen left behind, because
+     * [control] is about to do something.
+     *
+     * The screen accumulates answers to questions that have since been overtaken: a
+     * scan's ranking, a search's hits, the outcome of a channel move, a conflict
+     * prompt. Each was true when it appeared and none of them expire on their own,
+     * so pressing anything left the previous answer sitting above the new one,
+     * indistinguishable from a fresh result. Acting is the moment the user has moved
+     * on, which is the only reliable signal the screen gets.
+     *
+     * **Never the acting control's own residue.** A pick acts *on* a search hit, and
+     * the row it acted on is the thing worth still seeing — it flips to "Connected"
+     * and reports where the receiver now is. Clearing a section from inside itself is
+     * that section's business (the survey's pick already does it) and not this
+     * function's.
+     *
+     * **Never a scan still running.** The same rule, and for the same reason, as
+     * [clearScansForNewVisit]: [onLocatorSearchResult] drops every message that
+     * arrives while the run is null, so wiping a run in flight orphans it — the
+     * receiver sweeps on, deaf, while the app ignores the stream and the terminator
+     * alike. The buttons are disabled while a scan runs, so this is belt and braces;
+     * it is here because that lesson cost a bench session once already.
+     *
+     * **Never a channel move still in flight.** The ADR-0011 cycle runs for several
+     * seconds with the link legitimately down, and the banner is the only thing
+     * saying so. An unresolved move is exactly `banner != null && result == null`,
+     * which is the condition under which the banner renders "in progress".
+     *
+     * The conflict prompt goes through [dismissConflict] rather than being cleared,
+     * because the conflicting locator is still broadcasting at 1 Hz: clearing the id
+     * alone puts the banner straight back on the next packet. That also makes the
+     * dismissal STICK for the rest of the visit, which is why [CommsControl.SearchPick]
+     * is exempt from it — see there.
+     */
+    fun clearResidue(control: CommsControl) {
+        val search = control == CommsControl.Search || control == CommsControl.SearchPick
+        if (!search && _locatorSearch.value?.running != true) clearLocatorSearch()
+        if (control != CommsControl.Survey && !_surveyInProgress.value) clearChannelSurvey()
+        if (_channelMoveResult.value != null) dismissChannelMoveBanner()
+        if (control != CommsControl.SearchPick) dismissConflict()
+    }
+
     fun clearLocatorSearch() {
         searchTimeoutJob?.cancel()
         _locatorSearch.value = null
@@ -1136,23 +1206,42 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun onLocatorSearchResult(msg: LocatorSearchParsed) {
         val run = _locatorSearch.value ?: return
+        // Every result, unconditionally. The stream is at most one message per 1.4 s
+        // dwell, so the cost is nil, and the one search fault seen so far — four rows
+        // for a dwell that happened once — could not be told from the outside: whether
+        // it was four frames or one frame counted four times is invisible in the UI
+        // and decides where the fix belongs. Logged before the dedupe below, so the
+        // trace still shows a repeat that the list no longer keeps.
+        val id = "%08X".format(msg.locatorId)
+        SpLog.d("LocatorSearch",
+            "result status=${msg.status} ch=${msg.channel} ${msg.searched}/${msg.total} " +
+                    "found=${msg.found} id=$id rssi=${msg.rssi} snr=${msg.snr}")
         if (msg.status == LocatorSearchData.Status.Progress) {
             armSearchTimeout()
-            _locatorSearch.value = run.copy(
+            val advanced = run.copy(
                 searched = msg.searched,
                 // Trust the receiver's denominator over the app's: the firmware
                 // dedupes and range-checks the list, so it may search fewer channels
                 // than were asked for.
                 total = if (msg.total > 0) msg.total else run.total,
-                hits = if (!msg.found) run.hits else run.hits + LocatorSearchData.Hit(
+            )
+            // One hit per channel per run — the invariant is the firmware's, and
+            // withHit is where the reasoning lives.
+            val updated = if (!msg.found) advanced else advanced.withHit(
+                LocatorSearchData.Hit(
                     channel = msg.channel,
                     locatorId = msg.locatorId,
                     deviceName = msg.deviceName,
                     rssi = msg.rssi,
                     snr = msg.snr,
                     armed = msg.armed,
-                ),
+                )
             )
+            if (msg.found && updated.hits.size == advanced.hits.size)
+                SpLog.d("LocatorSearch",
+                    "duplicate hit on channel ${msg.channel} dropped — " +
+                            "a dwell is reported once")
+            _locatorSearch.value = updated
             return
         }
         // Terminator: the run is over however it ended.
