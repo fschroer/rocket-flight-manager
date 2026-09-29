@@ -57,6 +57,7 @@ import com.steampigeon.flightmanager.data.FlightEventIndex
 import com.steampigeon.flightmanager.data.FlightEvents
 import com.steampigeon.flightmanager.data.FlightSample
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.SAMPLES_PER_PACKET
 import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -68,6 +69,10 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private const val TAG = "FlightProfiles"
+
+// The archive's nominal rate, for turning a truncated transfer's sample counts
+// into the approximate durations the partial-record warning quotes.
+private const val NOMINAL_SAMPLE_HZ = 20
 
 // ============================================================================
 //  Charting safety limits
@@ -596,6 +601,22 @@ fun FlightProfilesScreen(
                 Text(
                     text = "Receiving: ${progress.receivedCount} / ${progress.packetCount} packets",
                     fontSize = 11.sp,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
+
+            // Old locator firmware sent only the start of a long record and still
+            // let the transfer complete (#49).  Say so, or the chart silently ends
+            // partway down the descent and reads as the whole flight.
+            if (progress.truncated) {
+                Text(
+                    text = stringResource(
+                        R.string.flight_profile_truncated,
+                        (progress.packetCount * SAMPLES_PER_PACKET / NOMINAL_SAMPLE_HZ),
+                        (progress.totalSamples / NOMINAL_SAMPLE_HZ).toInt(),
+                    ),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }

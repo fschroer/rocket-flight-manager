@@ -130,6 +130,21 @@
     <string name="scans_blocked_armed">The locator is armed or in flight, so neither scan can run — either would leave the receiver deaf for up to a minute and a half. Disarm to scan.</string>
     <string name="status_searching">Searching…</string>
     <string name="status_scanning">Scanning…</string>
+    <!-- Shown where the locator's name goes while it is sending a flight record in
+         the background (#49). True only while the transfer is in flight: the
+         locator is silent because the app asked it for the record, not because it
+         is missing. A paused download shows nothing here — the locator is
+         broadcasting again, so its own name is shown. -->
+    <string name="status_downloading_record">Downloading %1$d%%</string>
+    <!-- The map's download control. Stopping DISCARDS what has arrived; pausing
+         is automatic and needs no control. -->
+    <string name="stop_record_download">Stop downloading record %1$d (%2$d%% received)</string>
+    <!-- Flight profile chart, when the locator sent only the start of the record:
+         firmware older than the #49 fix stopped every transfer at 256 packets
+         (about 102 s) and reported it complete. True only while
+         progress.truncated is set, which current firmware never does. Both
+         durations are approximate: the count of samples at the nominal 20 Hz. -->
+    <string name="flight_profile_truncated">Partial record: this locator\'s firmware sends only about the first %1$d s of a flight (of about %2$d s recorded). Update the locator to see the whole flight.</string>
     <!-- Locator search (#33 follow-up) -->
     <string name="search_title">Find a locator</string>
     <string name="search_explainer">Listens on the channels your locators were last seen on. Use this when a locator is powered up but nothing is coming through.</string>

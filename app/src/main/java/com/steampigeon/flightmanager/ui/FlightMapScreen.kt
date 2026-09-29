@@ -54,6 +54,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Menu
@@ -67,6 +68,7 @@ import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -717,6 +719,12 @@ fun HomeScreen(
     // the pre-launch message, so once the locator switches to telemetry they stop
     // being refreshed and this is the clock that says so.
     val preLaunchDataAge = System.currentTimeMillis() - rocketState.lastPreLaunchDataTime
+    // While a record downloads in the background the locator is silent BECAUSE
+    // the app asked it for the record (#49), so its silence must not read as a
+    // missing locator: the menu keeps the locator's screens, and opening one
+    // pauses the download.
+    val downloadingRecord =
+        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading
     val flightPath = viewModel.flightPath.collectAsState().value
     val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
     // Whether the locator's reported position is one we can quote a distance or a
@@ -765,7 +773,7 @@ fun HomeScreen(
                     AppDrawerContent(
                         bluetoothConnectionState = bluetoothConnectionState,
                         armedState = armedState,
-                        locatorActive = lastMessageAge < messageTimeout,
+                        locatorActive = lastMessageAge < messageTimeout || downloadingRecord,
                         onNavigate = { screen ->
                             scope.launch { drawerState.close() }
                             navController.navigate(screen.name)
@@ -1205,6 +1213,7 @@ private fun MapWithOverlays(
         // Downloaded archive record, if any, plus which track the map should draw.
         val archivedFlightPath = viewModel.archivedFlightPath.collectAsState().value
         val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
+        val backgroundDownload = viewModel.backgroundDownload.collectAsState().value
         // Password gating: only the connected locator may be armed from the app.
         val locatorConnected = viewModel.locatorConnected.collectAsState().value
         // Warn from LOW downward — one step below the UNRELIABLE threshold that
@@ -1252,6 +1261,10 @@ private fun MapWithOverlays(
         // locator is talking to us and telling us its own fix is not current, so
         // the lat/lon in those packets is latched rather than tracking the rocket.
         val markerState = when {
+            // Silent because it is sending us a record (#49), not lost: shown as
+            // degraded (last known position), not stale.
+            !rocketFresh && backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
+                RocketMarkerState.Degraded
             !rocketFresh -> RocketMarkerState.Stale
             rocketState.gpsStatus != SensorHealth.Ok -> RocketMarkerState.Degraded
             else -> RocketMarkerState.Live
@@ -1491,9 +1504,11 @@ private fun MapWithOverlays(
                     locatorArmedMessageState = locatorArmedMessageState,
                     // Search first: it is the longer of the two and the one whose
                     // silence a user is most likely to misread.
-                    scanInProgress = when {
+                    busyStatus = when {
                         locatorSearchRunning -> stringResource(R.string.status_searching)
                         surveyInProgress -> stringResource(R.string.status_scanning)
+                        backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
+                            stringResource(R.string.status_downloading_record, backgroundDownload.percent)
                         else -> null
                     },
                     onToggleArmed = { viewModel.updateArmedState() },
@@ -1601,6 +1616,31 @@ private fun MapWithOverlays(
                                 "Show live GPS path" else "Show archived (fused) path",
                             tint = if (showArchivedPath) Color(COLOR_ARCHIVED_ACTIVE)
                                    else Color.White.copy(alpha = 0.35f),
+                        )
+                    }
+                }
+                // A record still downloading in the background (#49): its progress
+                // as a ring around a stop control.  Stopping discards what has
+                // arrived and returns the locator to broadcasting; anything short
+                // of that only pauses it, and it resumes by itself.
+                if (backgroundDownload != null) {
+                    IconButton(
+                        onClick = { viewModel.stopBackgroundDownload() },
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            progress = { backgroundDownload.percent / 100f },
+                            modifier = Modifier.size(32.dp),
+                            color = if (backgroundDownload.phase == RocketViewModel.DownloadPhase.Downloading)
+                                Color(COLOR_ARCHIVED_ACTIVE) else Color.White.copy(alpha = 0.35f),
+                            strokeWidth = 3.dp,
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.stop_record_download,
+                                backgroundDownload.record, backgroundDownload.percent),
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
@@ -2120,7 +2160,9 @@ private fun MapControlsColumn(
     // What the receiver is doing instead of listening, or null when it is listening.
     // A scan is the app's OWN doing, so the silence it causes must not be reported as
     // a missing locator — see the name row below.
-    scanInProgress: String?,
+    // Something the app itself is doing that keeps the locator quiet — a locator
+    // search, a channel scan, a record download.  Shown in place of "No Locator".
+    busyStatus: String?,
     onToggleArmed: () -> Unit,
     onRescan: () -> Unit,
     onSnoozePadAlert: () -> Unit,
@@ -2310,8 +2352,10 @@ private fun MapControlsColumn(
                         // a queued command END the sweep so an operator's Arm is never
                         // silently delayed), so the panel was inviting the user to press
                         // Arm believing nothing could happen, and then it happens.
-                        // Reported from the bench 2026-08-30 running bench 4.
-                        scanInProgress != null -> scanInProgress
+                        // Reported from the bench 2026-08-30 running bench 4.  A
+                        // background record download (#49) is the same case: the
+                        // locator is silent because the app asked it for the record.
+                        busyStatus != null -> busyStatus
                         bluetoothConnectionState == BluetoothConnectionState.Ready -> "No Locator"
                         else -> ""
                     },

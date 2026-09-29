@@ -90,6 +90,23 @@ enum class NavDestination(@StringRes val title: Int) {
     AppFlightLogs(title = R.string.app_flight_logs),
 }
 
+/**
+ * Screens that send to, or need broadcasts from, the locator.  While one is
+ * open a background record download is paused (#49): its transfer keeps the
+ * locator silent, and these screens either need PreLaunchData (settings,
+ * deployment test) or send the locator somewhere else (the Flight Profiles
+ * list sends FlightMetadataRequest; Communication and Receiver Settings move
+ * channels).
+ */
+private val LINK_SCREENS = setOf(
+    NavDestination.LocatorSettings,
+    NavDestination.ReceiverSettings,
+    NavDestination.Communication,
+    NavDestination.DeploymentTest,
+    NavDestination.FlightProfiles,
+)
+private const val SCREEN_LINK_HOLD = "screen"
+
 // ---------------------------------------------------------------------------
 // Top app bar
 // ---------------------------------------------------------------------------
@@ -155,6 +172,15 @@ fun RocketApp(
         backStackEntry?.destination?.route ?: NavDestination.Start.name
     )
     val orientation = LocalConfiguration.current.orientation
+
+    // A background record download pauses while a screen that talks to the
+    // locator is open, and resumes once the user is off it (#49).  Keyed on the
+    // destination, not per screen, so a screen added to the set later cannot
+    // forget to release its hold.
+    LaunchedEffect(currentScreen) {
+        if (currentScreen in LINK_SCREENS) viewModel.holdLink(SCREEN_LINK_HOLD)
+        else viewModel.releaseLink(SCREEN_LINK_HOLD)
+    }
 
     // -----------------------------------------------------------------------
     // Text-to-speech

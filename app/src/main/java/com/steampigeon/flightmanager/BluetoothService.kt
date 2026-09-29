@@ -324,9 +324,12 @@ class BluetoothService : Service() {
      * Request flight data for one archive record.
      * The C++ FlightDataRequest struct carries a single `record` byte — the
      * old `packet` byte is gone now that the locator manages chunking internally.
+     *
+     * Packets already held for the same record on the same locator are kept and
+     * the new transfer resumes them (#49; FlightDataRepository.requestRecord).
      */
-    fun requestFlightProfileData(archivePosition: Int): Boolean {
-        FlightDataRepository.beginTransfer()
+    fun requestFlightProfileData(archivePosition: Int, locatorId: Long): Boolean {
+        FlightDataRepository.requestRecord(archivePosition, locatorId)
         return sendMessage(MsgType.FlightDataRequest, byteArrayOf(archivePosition.toByte()))
     }
 

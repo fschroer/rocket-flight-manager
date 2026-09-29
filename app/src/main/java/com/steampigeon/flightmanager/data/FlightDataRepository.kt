@@ -148,6 +148,17 @@ data class FlightTransferProgress(
     val complete:       Boolean = false,
     val failed:         Boolean = false,
     val noData:         Boolean = false,   // locator reported the record has no samples
+    /** Archive slot this transfer is for; −1 before any request. */
+    val record:         Int   = -1,
+    /**
+     * The locator sent only the start of the record: `packet_count × 8 <
+     * total_samples`.  Locator firmware predating #49 clamped every transfer to
+     * 256 packets (≈ 102 s) and still let it complete; current firmware plans
+     * the whole record into the budget and never sets this.
+     */
+    val truncated:      Boolean = false,
+    /** Packets carried over from an interrupted transfer of the same record. */
+    val resumed:        Boolean = false,
 )
 
 // ============================================================================
@@ -187,10 +198,35 @@ object FlightDataRepository {
     private var packetCount:  Int  = 0
     private var totalSamples: Long = 0L
 
-    // When true, all incoming packets are refused. Set by cancelTransfer() when
-    // the user navigates away mid-transfer; cleared by beginTransfer() so that
-    // a fresh requestFlightProfileData() call re-enables reception.
-    private var draining = false
+    // Which record the held packets belong to, and from which locator.  A
+    // transfer interrupted before it completes is kept rather than discarded,
+    // so re-requesting the same record resumes it (ADR-0009 amendment
+    // 2026-09-28, invariant 12; #49).
+    private var record:    Int  = -1
+    private var locatorId: Long = 0L
+
+    // requestRecord() found packets held for the same record: the next new
+    // transfer_id with the same packet_count and total_samples is adopted
+    // WITHOUT resetting, but only provisionally (resumeUnverified) until its
+    // content is confirmed to be the same flight.  packet_count and
+    // total_samples alone cannot confirm it: the locator plans every long
+    // record to ~2,048 samples, so two different flights in one slot can match
+    // on both.
+    private var resumePending    = false
+    private var resumeUnverified = false
+
+    // FlightEvents.flight_timestamp_s: the fallback identity check when the
+    // first packet of a resumed transfer is one we never held.
+    private var heldFlightTimestampS:    Long? = null
+    private var requestFlightTimestampS: Long? = null
+
+    // Transfer ids superseded by a later request or discarded.  Packets still
+    // in flight under one of these are ignored, so a late frame from an
+    // abandoned transfer cannot reset the one now in progress.  (This replaces
+    // the old `draining` flag, which could not tell an old transfer's late
+    // packets from the first packets of the next.)
+    private val retiredIds = ArrayDeque<Int>()
+    private const val RETIRED_ID_MEMORY = 8
 
     // received[i] = true once packet i has been decoded without error
     private val received = BooleanArray(MAX_PACKETS)
@@ -228,9 +264,91 @@ object FlightDataRepository {
     //  Public API
     // -------------------------------------------------------------------------
 
-    /** Reset all transfer state for a new record request. */
+    /** Reset everything, including which record is held.  Tests start here. */
     fun beginTransfer() {
-        draining     = false
+        resetBuffers()
+        record    = -1
+        locatorId = 0L
+        heldFlightTimestampS    = null
+        requestFlightTimestampS = null
+        resumePending    = false
+        resumeUnverified = false
+        retiredIds.clear()
+        _progress.value = FlightTransferProgress()
+        SpLog.d(TAG, "Transfer reset")
+    }
+
+    /**
+     * About to send a FlightDataRequest for [record] on [locatorId].
+     *
+     * Packets already held for that same record are kept, and the transfer the
+     * locator starts next is adopted as a resume of them (see [resumePending]).
+     * Anything else starts from nothing.  Either way the transfer in progress
+     * until now is retired, so its late packets are ignored.
+     */
+    fun requestRecord(record: Int, locatorId: Long) {
+        retire(transferId)
+        requestFlightTimestampS = null
+        val holdsThisRecord = record == this.record && locatorId == this.locatorId &&
+                packetCount > 0 && received.any { it }
+        if (holdsThisRecord) {
+            resumePending    = true
+            resumeUnverified = false
+            SpLog.d(TAG, "Request for record $record: holding " +
+                    "${received.count { it }}/$packetCount packets — will resume")
+            return
+        }
+        resetBuffers()
+        this.record    = record
+        this.locatorId = locatorId
+        heldFlightTimestampS = null
+        resumePending    = false
+        resumeUnverified = false
+        _progress.value = FlightTransferProgress(record = record)
+        SpLog.d(TAG, "Request for record $record: starting fresh")
+    }
+
+    /**
+     * Abandon the held record, partial or complete — the user chose another
+     * record or stopped the download.  Late packets of the discarded transfer
+     * are ignored.
+     */
+    fun discard() {
+        retire(transferId)
+        resetBuffers()
+        record    = -1
+        locatorId = 0L
+        heldFlightTimestampS    = null
+        requestFlightTimestampS = null
+        resumePending    = false
+        resumeUnverified = false
+        _progress.value = FlightTransferProgress()
+        SpLog.d(TAG, "Held record discarded")
+    }
+
+    /** The FlightEvents summary for [record] arrived (identity for resume). */
+    fun onFlightEvents(record: Int, flightTimestampS: Long) {
+        if (record != this.record) return
+        requestFlightTimestampS = flightTimestampS
+        if (!resumePending && !resumeUnverified && heldFlightTimestampS == null)
+            heldFlightTimestampS = flightTimestampS
+    }
+
+    /** Record and locator whose download is held but not finished, or null. */
+    fun incompleteDownload(): Pair<Int, Long>? {
+        val p = _progress.value
+        return if (record >= 0 && packetCount > 0 && !p.complete && !p.noData)
+            record to locatorId else null
+    }
+
+    private fun retire(id: Int) {
+        if (id == 0 || retiredIds.contains(id)) return
+        retiredIds.addLast(id)
+        while (retiredIds.size > RETIRED_ID_MEMORY) retiredIds.removeFirst()
+    }
+
+    /** Clear the packet buffers and the transfer header; keep record identity. */
+    private fun resetBuffers() {
         transferId   = 0
         packetCount  = 0
         totalSamples = 0L
@@ -242,21 +360,6 @@ object FlightDataRepository {
         duplicateCount       = 0
         missingLogged.fill(false)
         _samples.value = emptyList()
-        _progress.value = FlightTransferProgress()
-        SpLog.d(TAG, "Transfer reset")
-    }
-
-    /**
-     * Cancel the current transfer and refuse any further incoming packets for it.
-     * Use this when the user navigates away mid-transfer to prevent late-arriving
-     * LoRa packets from re-populating the repository after it has been cleared.
-     * The drain flag is cleared automatically by the next beginTransfer() call,
-     * which is triggered by requestFlightProfileData() in BluetoothService.
-     */
-    fun cancelTransfer() {
-        beginTransfer()
-        draining = true
-        SpLog.d(TAG, "Transfer canceled — draining stale packets")
     }
 
     /** Clear metadata (call before requesting new metadata). */
@@ -318,15 +421,18 @@ object FlightDataRepository {
         // packet_count == 0 is the locator's "no data for this record" marker.
         // There is nothing to ACK; surface it to the UI and stop here.
         if (rxPacketCount == 0) {
-            if (draining || rxTransferId.toInt() == 0) return null
-            if (rxTransferId.toInt() != transferId) {
-                beginTransfer()
-                transferId = rxTransferId.toInt()
+            val id = rxTransferId.toInt()
+            if (id == 0 || retiredIds.contains(id)) return null
+            if (id != transferId) {
+                retire(transferId)
+                resetBuffers()
+                resumePending    = false
+                resumeUnverified = false
+                transferId = id
             }
             packetCount = 0
-            _progress.value = _progress.value.copy(
-                transferId = transferId, packetCount = 0, totalSamples = 0L,
-                receivedCount = 0, complete = true, noData = true,
+            _progress.value = FlightTransferProgress(
+                record = record, transferId = transferId, complete = true, noData = true,
             )
             SpLog.d(TAG, "FlightData: empty-record marker for transfer $transferId")
             return null
@@ -340,13 +446,27 @@ object FlightDataRepository {
             return null
         }
 
+        val payloadBytes = frame.copyOfRange(o, frame.size)
+
+        if (resumeUnverified && !verifyResume(packetIndex, payloadBytes)) {
+            // A different flight now occupies the slot (or a different plan):
+            // start over under this transfer id rather than splice two flights.
+            val id = transferId; val pc = packetCount; val ts = totalSamples
+            resetBuffers()
+            transferId = id; packetCount = pc; totalSamples = ts
+            heldFlightTimestampS = requestFlightTimestampS
+            _progress.value = FlightTransferProgress(
+                record = record, transferId = id, packetCount = pc, totalSamples = ts,
+                truncated = ts > pc.toLong() * SAMPLES_PER_PACKET,
+            )
+        }
+
         if (received[packetIndex]) {
             duplicateCount++
             SpLog.d(TAG, "FlightData: duplicate packet $packetIndex — re-ACKing (duplicates=$duplicateCount)")
             return buildAck()
         }
 
-        val payloadBytes = frame.copyOfRange(o, frame.size)
         payloads[packetIndex] = payloadBytes
 
         val decoded = decodePayload(payloadBytes)
@@ -383,6 +503,11 @@ object FlightDataRepository {
 
         if (!acceptTransferHeader(rxTransferId.toInt(), rxPacketCount, rxTotalSamples))
             return null
+
+        // Until a resumed transfer is confirmed to be the same flight, a parity
+        // frame could recover a packet of the wrong one.  Its data packets will
+        // confirm or reset the resume; the parity is resent with the next burst.
+        if (resumeUnverified) return null
 
         if (groupIndex >= parityPayloads.size) {
             Log.w(TAG, "FlightDataParity: group_index $groupIndex out of range")
@@ -457,24 +582,68 @@ object FlightDataRepository {
         rxPacketCount:  Int,
         rxTotalSamples: Long,
     ): Boolean {
-        if (rxTransferId == 0) return false  // 0 is reserved
-        if (draining) return false           // user canceled — refuse stale packets
+        if (rxTransferId == 0) return false                 // 0 is reserved
+        if (retiredIds.contains(rxTransferId)) return false // late packet of an abandoned transfer
+        if (rxTransferId == transferId) return true
 
-        if (transferId == 0 || rxTransferId != transferId) {
-            // New or changed transfer — reset and adopt the new ID
-            if (rxTransferId != transferId && transferId != 0)
-                Log.w(TAG, "Transfer ID changed $transferId → $rxTransferId; resetting")
-            beginTransfer()
-            transferId   = rxTransferId
-            packetCount  = rxPacketCount.coerceAtMost(MAX_PACKETS)
-            totalSamples = rxTotalSamples
-            _progress.value = _progress.value.copy(
-                transferId   = transferId,
-                packetCount  = packetCount,
-                totalSamples = totalSamples,
-            )
+        val rxCount = rxPacketCount.coerceAtMost(MAX_PACKETS)
+
+        // Resume: the same record, re-requested, with the same geometry.  Keep
+        // every held packet and adopt the new id — provisionally, until
+        // verifyResume() confirms it is the same flight.
+        if (resumePending && rxCount == packetCount && rxTotalSamples == totalSamples) {
+            retire(transferId)
+            transferId       = rxTransferId
+            resumePending    = false
+            resumeUnverified = true
+            _progress.value = _progress.value.copy(transferId = transferId)
+            SpLog.d(TAG, "Transfer $transferId: resuming record $record " +
+                    "(${received.count { it }}/$packetCount held) — verifying")
+            return true
         }
+
+        // A new transfer — reset and adopt it.
+        if (transferId != 0)
+            Log.w(TAG, "Transfer ID changed $transferId → $rxTransferId; resetting")
+        retire(transferId)
+        resetBuffers()
+        resumePending    = false
+        resumeUnverified = false
+        heldFlightTimestampS = requestFlightTimestampS
+        transferId   = rxTransferId
+        packetCount  = rxCount
+        totalSamples = rxTotalSamples
+        _progress.value = FlightTransferProgress(
+            record       = record,
+            transferId   = transferId,
+            packetCount  = packetCount,
+            totalSamples = totalSamples,
+            truncated    = totalSamples > packetCount.toLong() * SAMPLES_PER_PACKET,
+        )
         return true
+    }
+
+    /**
+     * Is the transfer just adopted as a resume really the same flight?
+     *
+     * The locator's transfer plan is a pure function of the record, so the same
+     * flight produces byte-identical packets: if we already hold [packetIndex],
+     * compare it.  If we don't, fall back to the record's flight timestamp from
+     * FlightEvents.  Either way the answer is final for this transfer.
+     */
+    private fun verifyResume(packetIndex: Int, payload: ByteArray): Boolean {
+        val same = if (received[packetIndex])
+            payloads[packetIndex]?.contentEquals(payload) == true
+        else
+            requestFlightTimestampS != null && requestFlightTimestampS == heldFlightTimestampS
+        resumeUnverified = false
+        if (same) {
+            _progress.value = _progress.value.copy(resumed = true)
+            SpLog.d(TAG, "Transfer $transferId: resume confirmed on packet $packetIndex")
+        } else {
+            Log.w(TAG, "Transfer $transferId: record $record holds different data — starting over")
+        }
+        return same
     }
 
     /**

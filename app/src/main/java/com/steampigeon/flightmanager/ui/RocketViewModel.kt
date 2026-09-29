@@ -288,6 +288,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         const val METADATA_RETRY_INITIAL_MS = 3_000L
         const val METADATA_RETRY_MAX_MS     = 12_000L
 
+        // Background record download (#49).  The locator bursts 8 packets plus
+        // parity in ~4.95 s and waits for the ACK, so frames are never more than
+        // a few seconds apart while it is sending; 12 s of silence means the
+        // request was lost, the BLE link dropped or the locator timed out, and
+        // stays under the locator's own 15 s kDataActiveTimeoutMs.  "Fresh"
+        // PreLaunchData means the locator is broadcasting now (it sends ~1/s).
+        const val DOWNLOAD_CONTROLLER_TICK_MS = 1_000L
+        const val DOWNLOAD_STALL_MS           = 12_000L
+        const val DOWNLOAD_LOCATOR_FRESH_MS   = 3_000L
+
+        // Link-hold tag for an arm/disarm attempt (holdLink / releaseLink).  The
+        // link-using screens share one tag, held by AppNavigation per destination.
+        const val ARM_LINK_HOLD = "arm"
+
         // How long the locator's deployment-test countdown must go quiet before
         // the app concludes that no test is running.
         //
@@ -1870,10 +1884,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      *
      * This is a *snapshot*, deliberately not derived from
      * `FlightDataRepository.samples`.  That flow is the transfer assembly buffer:
-     * `beginTransfer()` empties it, and `clearFlightProfileData()` reaches it via
-     * `cancelTransfer()` when you navigate back from the chart.  Deriving from it
-     * meant the path was always empty by the time the map was on screen — the
-     * chart only survives the same trip because it is copied out too.
+     * requesting another record or discarding a download empties it.  (Until #49
+     * leaving the chart emptied it too, which is why this was snapshotted in the
+     * first place — the path was always empty by the time the map was on screen.)
+     * It is republished as each packet arrives, so a download finishing in the
+     * background grows the path on the map.
      *
      * So this outlives the chart on purpose.  The point of the feature is to load
      * a record and then go look at it on the map, which cannot work if leaving
@@ -1914,7 +1929,147 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // The archived path is NOT cleared here — see _archivedFlightPath. This
         // runs when you navigate back from the chart, which is exactly the moment
         // you would be heading to the map to look at the track.
-        FlightDataRepository.cancelTransfer()
+        //
+        // Nor is the transfer: leaving the chart pauses an unfinished download
+        // rather than discarding it (#49).  The held packets stay in
+        // FlightDataRepository, the map keeps its partial path, and
+        // runDownloadController finishes the record once the locator is free —
+        // or the chart resumes it if the user opens the same record again.
+    }
+
+    // ── Background completion and resume (#49, ADR-0009 invariant 13) ────────
+    //
+    // A record download no longer ends when the user leaves the chart.  It
+    // PAUSES whenever something else needs the locator (a screen that uses the
+    // link, arming) or the link drops, and RESUMES by itself once the locator is
+    // back in a state where the transfer can complete: phone connected, the same
+    // locator heard, disarmed and broadcasting PreLaunchData, and nothing else
+    // holding the link.  Resuming re-requests the same record; the repository
+    // keeps the packets it has and ACKs them, so the locator skips them.
+
+    enum class DownloadPhase { Downloading, Paused }
+
+    /** A record download the user is not watching on the chart. */
+    data class BackgroundDownload(
+        val record: Int,
+        val percent: Int,
+        val phase: DownloadPhase,
+    )
+
+    private val _backgroundDownload = MutableStateFlow<BackgroundDownload?>(null)
+    val backgroundDownload: StateFlow<BackgroundDownload?> = _backgroundDownload.asStateFlow()
+
+    // Screens that use the link while open (Flight Profiles, Locator/Receiver
+    // Settings, Communication, Deployment Test) hold it; while any hold is
+    // present the controller neither starts nor continues a background download.
+    private val linkHolds = MutableStateFlow<Set<String>>(emptySet())
+
+    fun holdLink(tag: String) {
+        linkHolds.update { it + tag }
+    }
+
+    fun releaseLink(tag: String) {
+        linkHolds.update { it - tag }
+    }
+
+    @Volatile private var lastTransferFrameMs = 0L
+    // The controller has asked the locator for the record and believes it is
+    // sending it.  Distinct from "packets arriving": a request can be lost.
+    private var downloadInFlight = false
+    private var downloadRequestedMs = 0L
+
+    // Set by the map's stop control; acted on by the controller, which holds the
+    // service the map screen does not.
+    @Volatile private var stopDownloadRequested = false
+
+    /** The user stopped the download from the map: discard it for good. */
+    fun stopBackgroundDownload() {
+        stopDownloadRequested = true
+        _backgroundDownload.value = null
+    }
+
+    private suspend fun runDownloadController(service: BluetoothService) {
+        while (true) {
+            delay(DOWNLOAD_CONTROLLER_TICK_MS)
+            val now = System.currentTimeMillis()
+            val onChart = _flightProfileDataDisplayState.value
+
+            if (stopDownloadRequested) {
+                stopDownloadRequested = false
+                if (!onChart) {
+                    SpLog.d(TAG, "Background download stopped by the user")
+                    FlightDataRepository.discard()
+                    // Return the locator to broadcasting; otherwise it stays
+                    // silent until its 15 s safety-net timeout.
+                    if (downloadInFlight) service.exitFlightProfileMode()
+                    downloadInFlight = false
+                    _backgroundDownload.value = null
+                    continue
+                }
+            }
+            val held = FlightDataRepository.incompleteDownload()
+            val progress = FlightDataRepository.progress.value
+
+            // Finished (or nothing to do).  A background download that just
+            // completed hands the locator back: while the chart is open that is
+            // the Flight Profiles screen's job when it closes.
+            if (held == null) {
+                if (downloadInFlight && !onChart && linkHolds.value.isEmpty()) {
+                    SpLog.d(TAG, "Background download of record ${progress.record} complete")
+                    service.exitFlightProfileMode()
+                }
+                downloadInFlight = false
+                _backgroundDownload.value = null
+                continue
+            }
+            val (record, locatorId) = held
+
+            // The chart is driving this transfer itself.
+            if (onChart) {
+                downloadInFlight = false
+                _backgroundDownload.value = null
+                continue
+            }
+
+            val state = _rocketState.value
+            val locatorFree =
+                BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Ready &&
+                _connectedLocatorId.value == locatorId &&
+                !BluetoothManagerRepository.armedState.value &&
+                now - state.lastPreLaunchDataTime < DOWNLOAD_LOCATOR_FRESH_MS
+            val linkHeld = linkHolds.value.isNotEmpty()
+
+            // Something else needs the link: hand it over.
+            if (linkHeld && downloadInFlight) {
+                SpLog.d(TAG, "Background download of record $record paused: link held by ${linkHolds.value}")
+                downloadInFlight = false
+                service.exitFlightProfileMode()
+            }
+
+            // A transfer that has gone quiet is not in flight any more: the
+            // request was lost, the BLE link dropped, or the locator timed out.
+            if (downloadInFlight &&
+                now - maxOf(lastTransferFrameMs, downloadRequestedMs) > DOWNLOAD_STALL_MS) {
+                SpLog.d(TAG, "Background download of record $record stalled — will retry")
+                downloadInFlight = false
+            }
+
+            if (!downloadInFlight && !linkHeld && locatorFree) {
+                SpLog.d(TAG, "Background download: requesting record $record (resume)")
+                if (service.requestFlightProfileData(record, locatorId)) {
+                    downloadInFlight = true
+                    downloadRequestedMs = now
+                }
+            }
+
+            val pct = if (progress.packetCount > 0)
+                (100 * progress.receivedCount / progress.packetCount) else 0
+            _backgroundDownload.value = BackgroundDownload(
+                record = record,
+                percent = pct,
+                phase = if (downloadInFlight) DownloadPhase.Downloading else DownloadPhase.Paused,
+            )
+        }
     }
 
     private val _flightPath = MutableStateFlow<List<PathPoint>>(emptyList())
@@ -2989,6 +3144,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         is ParsedMessage.FlightEvents -> {
+                            // The repository keys resume identity on the flight
+                            // timestamp (#49); it ignores other records itself.
+                            FlightDataRepository.onFlightEvents(parsed.msg.record, parsed.msg.flightTimestampS)
                             // Only adopt the summary for the record the user is
                             // actually viewing.  The locator repeats this frame,
                             // and a late one from a previously-selected record
@@ -2998,6 +3156,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         is ParsedMessage.FlightData -> {
+                            lastTransferFrameMs = currentTime
                             val ackFrame = FlightDataRepository.onFlightData(parsed.frame)
                             if (ackFrame != null) {
                                 service.sendFlightDataAck(ackFrame)
@@ -3017,6 +3176,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         }
 
                         is ParsedMessage.FlightDataParity -> {
+                            lastTransferFrameMs = currentTime
                             val ackFrame = FlightDataRepository.onFlightDataParity(parsed.frame)
                             if (ackFrame != null) {
                                 service.sendFlightDataAck(ackFrame)
@@ -3078,12 +3238,18 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // All six are canceled together on the next call.  The two that transmit
-        // matter as much as the packet collector: a leaked version loop is a
-        // redundant VersionRequest every few seconds forever, and a leaked channel
-        // watch is a redundant ReceiverInfoRequest every 2 s on top of it.
+        // Finishes an interrupted record download in the background and resumes
+        // it after an interruption (#49).  Transmits, so it lives and dies with
+        // the others.
+        val downloadJob = viewModelScope.launch { runDownloadController(service) }
+
+        // All seven are canceled together on the next call.  The ones that
+        // transmit matter as much as the packet collector: a leaked version loop
+        // is a redundant VersionRequest every few seconds forever, a leaked
+        // channel watch a redundant ReceiverInfoRequest every 2 s on top of it,
+        // and a leaked download controller a FlightDataRequest nobody asked for.
         inboundJobs = listOf(sendGateJob, packetJob, versionJob, connectionJob, linkLivenessJob,
-            channelWatchJob)
+            channelWatchJob, downloadJob)
     }
 
 /*
@@ -3313,20 +3479,34 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateArmedState() {
+        // The locator accepts ArmRequest only when Disarmed, so a background
+        // record download has to hand the link back first (#49): the hold makes
+        // the download controller send its DisarmRequest within one tick, and
+        // keeps it from re-requesting the record while the arm is in progress.
+        // Once armed, the armed state itself keeps the download paused.
+        holdLink(ARM_LINK_HOLD)
         viewModelScope.launch {
-            for (i in 1..50) {
-                delay(100)
-                if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.AckUpdated ||
-                    BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendFailure)
-                    break
+            try {
+                awaitArmAcknowledgement()
+            } finally {
+                releaseLink(ARM_LINK_HOLD)
             }
-            if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendRequested ||
-                BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.Sent) {
-                BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.NotAcknowledged)
-            }
-            delay(2000)
-            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.Idle)
         }
+    }
+
+    private suspend fun awaitArmAcknowledgement() {
+        for (i in 1..50) {
+            delay(100)
+            if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.AckUpdated ||
+                BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendFailure)
+                break
+        }
+        if (BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.SendRequested ||
+            BluetoothManagerRepository.locatorArmedMessageState.value == LocatorMessageState.Sent) {
+            BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.NotAcknowledged)
+        }
+        delay(2000)
+        BluetoothManagerRepository.updateLocatorArmedMessageState(LocatorMessageState.Idle)
     }
 
     fun updateReceiverConfigState(stagedReceiverConfig: ReceiverConfig) {
@@ -3610,7 +3790,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         _flightProfileDataDisplayState.value = true
         _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
         SpLog.d(TAG, "Requesting flight data for archive position ${_flightProfileArchivePosition.value}")
-        if (service.requestFlightProfileData(_flightProfileArchivePosition.value)) {
+        // The same record as a held, unfinished download resumes it; any other
+        // record replaces it (FlightDataRepository.requestRecord).
+        if (service.requestFlightProfileData(_flightProfileArchivePosition.value,
+                _connectedLocatorId.value ?: 0L)) {
             updateFlightProfileDataMessageState(LocatorMessageState.Sent)
         } else {
             updateFlightProfileDataMessageState(LocatorMessageState.SendFailure)
