@@ -106,7 +106,7 @@
          which is the question a screen reader user has at the moment of the tap. -->
     <string name="channels_chain_off">Chain the locator to this channel</string>
     <string name="channels_chain_on">Locator chained — tap to move the receiver only</string>
-    <string name="channels_chain_explainer">The chain decides who Update moves. Open (grey), it points the receiver only. Closed, it moves the connected locator to this channel and the receiver follows it there. Greyed out with no locator connected, because there is then nothing to move.</string>
+    <string name="channels_chain_explainer">The chain decides who Update moves. Open (gray), it points the receiver only. Closed, it moves the connected locator to this channel and the receiver follows it there. Grayed out with no locator connected, because there is then nothing to move.</string>
     <string name="channels_locator_explainer">Moves the connected locator, and the receiver follows it automatically. Use this when the channel is chosen for you; otherwise let the scan pick one.</string>
     <!-- The channel-agreement indicator. Green states a fact the app can prove:
          a received broadcast means the receiver and the locator are on one

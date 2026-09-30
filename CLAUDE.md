@@ -29,7 +29,7 @@ problem the pointers exist to avoid. `sp-commit` and `sp-handoff` act on the Loc
 repo's own files and should be run from there.
 
 **`sp-docs` Gate 2 covers `app/src/main/res/values/strings.xml`.** A string is a claim
-about the hardware, and changing behaviour under one silently makes it a lie — three
+about the hardware, and changing behavior under one silently makes it a lie — three
 shipped that way in a single change before the gate said so.
 
 **`sp-docs` Gate 3 covers `steam-pigeon-ios/docs/UI_PARITY.md`** — the one doc that does
@@ -73,3 +73,9 @@ an init-order fault that kills the app on launch passes it cleanly — that is e
 
 Toolchains are not on PATH; see the CLI build recipe in memory, or Android Studio.
 `C:\STM32_Projects\Locator\Scripts\sp-status.sh` reports commit/push state across all three repos.
+
+## Spelling
+
+US English in docs, UI strings, spoken and accessibility text, comments and commit messages
+(meter, color, center, gray, canceled, initialize). Never respell an identifier. The full rule
+is in `C:\STM32_Projects\Locator\CLAUDE.md` ("Spelling: US English").
