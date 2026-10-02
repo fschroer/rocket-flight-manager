@@ -31,6 +31,7 @@ import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentTestParsed
+import com.steampigeon.flightmanager.data.BackgroundDownloadController
 import com.steampigeon.flightmanager.data.FlightDataRepository
 import com.steampigeon.flightmanager.data.DeployChannelStats
 import com.steampigeon.flightmanager.data.FlightEventIndex
@@ -288,14 +289,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         const val METADATA_RETRY_INITIAL_MS = 3_000L
         const val METADATA_RETRY_MAX_MS     = 12_000L
 
-        // Background record download (#49).  The locator bursts 8 packets plus
-        // parity in ~4.95 s and waits for the ACK, so frames are never more than
-        // a few seconds apart while it is sending; 12 s of silence means the
-        // request was lost, the BLE link dropped or the locator timed out, and
-        // stays under the locator's own 15 s kDataActiveTimeoutMs.  "Fresh"
+        // Background record download (#49).  The timing rules (sending window,
+        // stall, hand-back retry) live in BackgroundDownloadController.  "Fresh"
         // PreLaunchData means the locator is broadcasting now (it sends ~1/s).
         const val DOWNLOAD_CONTROLLER_TICK_MS = 1_000L
-        const val DOWNLOAD_STALL_MS           = 12_000L
         const val DOWNLOAD_LOCATOR_FRESH_MS   = 3_000L
 
         // Link-hold tag for an arm/disarm attempt (holdLink / releaseLink).  The
@@ -1973,13 +1970,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     @Volatile private var lastTransferFrameMs = 0L
-    // The controller has asked the locator for the record and believes it is
-    // sending it.  Distinct from "packets arriving": a request can be lost.
-    private var downloadInFlight = false
-    private var downloadRequestedMs = 0L
 
-    // Set by the map's stop control; acted on by the controller, which holds the
-    // service the map screen does not.
+    // The decisions live in a plain class so they can be unit-tested
+    // (BackgroundDownloadControllerTest); this ViewModel only gathers the inputs
+    // and carries out the actions.
+    private val downloadController = BackgroundDownloadController()
+
+    // Set by the map's stop control; acted on by the controller loop, which
+    // holds the service the map screen does not.
     @Volatile private var stopDownloadRequested = false
 
     /** The user stopped the download from the map: discard it for good. */
@@ -1999,76 +1997,50 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 if (!onChart) {
                     SpLog.d(TAG, "Background download stopped by the user")
                     FlightDataRepository.discard()
-                    // Return the locator to broadcasting; otherwise it stays
-                    // silent until its 15 s safety-net timeout.
-                    if (downloadInFlight) service.exitFlightProfileMode()
-                    downloadInFlight = false
-                    _backgroundDownload.value = null
-                    continue
+                    downloadController.stop(now, lastTransferFrameMs)
                 }
             }
+
             val held = FlightDataRepository.incompleteDownload()
             val progress = FlightDataRepository.progress.value
+            val state = _rocketState.value
+            val broadcasting = now - state.lastPreLaunchDataTime < DOWNLOAD_LOCATOR_FRESH_MS
+            val out = downloadController.tick(BackgroundDownloadController.Inputs(
+                nowMs = now,
+                onChart = onChart,
+                held = held,
+                percent = if (progress.packetCount > 0)
+                    100 * progress.receivedCount / progress.packetCount else 0,
+                linkHeld = linkHolds.value.isNotEmpty(),
+                locatorFree = held != null &&
+                    BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Ready &&
+                    _connectedLocatorId.value == held.second &&
+                    !BluetoothManagerRepository.armedState.value &&
+                    broadcasting,
+                locatorBroadcasting = broadcasting,
+                lastTransferFrameMs = lastTransferFrameMs,
+            ))
 
-            // Finished (or nothing to do).  A background download that just
-            // completed hands the locator back: while the chart is open that is
-            // the Flight Profiles screen's job when it closes.
-            if (held == null) {
-                if (downloadInFlight && !onChart && linkHolds.value.isEmpty()) {
-                    SpLog.d(TAG, "Background download of record ${progress.record} complete")
+            for (action in out.actions) when (action) {
+                is BackgroundDownloadController.Action.RequestRecord -> {
+                    SpLog.d(TAG, "Background download: requesting record ${action.record} (resume)")
+                    if (!service.requestFlightProfileData(action.record, action.locatorId))
+                        downloadController.requestNotSent()
+                }
+                BackgroundDownloadController.Action.HandBack -> {
+                    SpLog.d(TAG, "Background download: handing the locator back (DisarmRequest)")
                     service.exitFlightProfileMode()
                 }
-                downloadInFlight = false
-                _backgroundDownload.value = null
-                continue
-            }
-            val (record, locatorId) = held
-
-            // The chart is driving this transfer itself.
-            if (onChart) {
-                downloadInFlight = false
-                _backgroundDownload.value = null
-                continue
             }
 
-            val state = _rocketState.value
-            val locatorFree =
-                BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Ready &&
-                _connectedLocatorId.value == locatorId &&
-                !BluetoothManagerRepository.armedState.value &&
-                now - state.lastPreLaunchDataTime < DOWNLOAD_LOCATOR_FRESH_MS
-            val linkHeld = linkHolds.value.isNotEmpty()
-
-            // Something else needs the link: hand it over.
-            if (linkHeld && downloadInFlight) {
-                SpLog.d(TAG, "Background download of record $record paused: link held by ${linkHolds.value}")
-                downloadInFlight = false
-                service.exitFlightProfileMode()
+            _backgroundDownload.value = out.status?.let {
+                BackgroundDownload(
+                    record = it.record,
+                    percent = it.percent,
+                    phase = if (it.phase == BackgroundDownloadController.Phase.Downloading)
+                        DownloadPhase.Downloading else DownloadPhase.Paused,
+                )
             }
-
-            // A transfer that has gone quiet is not in flight any more: the
-            // request was lost, the BLE link dropped, or the locator timed out.
-            if (downloadInFlight &&
-                now - maxOf(lastTransferFrameMs, downloadRequestedMs) > DOWNLOAD_STALL_MS) {
-                SpLog.d(TAG, "Background download of record $record stalled — will retry")
-                downloadInFlight = false
-            }
-
-            if (!downloadInFlight && !linkHeld && locatorFree) {
-                SpLog.d(TAG, "Background download: requesting record $record (resume)")
-                if (service.requestFlightProfileData(record, locatorId)) {
-                    downloadInFlight = true
-                    downloadRequestedMs = now
-                }
-            }
-
-            val pct = if (progress.packetCount > 0)
-                (100 * progress.receivedCount / progress.packetCount) else 0
-            _backgroundDownload.value = BackgroundDownload(
-                record = record,
-                percent = pct,
-                phase = if (downloadInFlight) DownloadPhase.Downloading else DownloadPhase.Paused,
-            )
         }
     }
 
