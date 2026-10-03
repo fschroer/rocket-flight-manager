@@ -25,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -35,8 +36,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,13 +58,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.LocatorSettingsBounds
+import com.steampigeon.flightmanager.data.LocatorSettingsBounds.Setting
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.NoseAxis
 import com.steampigeon.flightmanager.data.Protocol
 import kotlinx.coroutines.delay
-import java.math.RoundingMode
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.reflect.KClass
 
 private const val TAG = "LocatorSettings"
@@ -87,6 +89,62 @@ fun LocatorSettingsScreen(
     val locatorConfigMessageState = viewModel.locatorConfigMessageState.collectAsState().value
     val locatorVersion by viewModel.locatorVersion.collectAsState()
     val scrollState = rememberScrollState()
+    // Settings whose field holds an entry this screen refuses (ADR-0034 decision
+    // 3): out of range, unreadable, or empty.  Update stays disabled while any do.
+    var refusedSettings by remember { mutableStateOf(emptySet<Setting>()) }
+    // The config as it stood when typing began in a field.  A typed value pushes
+    // its partner from HERE, not from the last keystroke: typing 300 into a main
+    // primary passes through 3 and 30 on the way, and pushing from each of those
+    // would leave the backup dragged down to 29 by a number nobody meant.
+    var typingBase by remember { mutableStateOf<LocatorConfig?>(null) }
+
+    // The delay or altitude field for whichever deployment a channel is set to.
+    // Both channels of a pair edit the same two values, and moving one onto the
+    // other pushes the other along (ADR-0034 decision 2) — the arrows step by
+    // one, a typed value jumps, and either way the pair stays in order.
+    @Composable
+    fun DeploymentSetting(mode: DeployMode?) {
+        val setting = when (mode) {
+            DeployMode.DroguePrimary -> Setting.DroguePrimary
+            DeployMode.DrogueBackup -> Setting.DrogueBackup
+            DeployMode.MainPrimary -> Setting.MainPrimary
+            DeployMode.MainBackup -> Setting.MainBackup
+            else -> return
+        }
+        DeploymentSettingField(
+            configItemName = stringResource(
+                when (setting) {
+                    Setting.DroguePrimary -> R.string.drogue_primary_deploy_delay
+                    Setting.DrogueBackup -> R.string.drogue_backup_deploy_delay
+                    Setting.MainPrimary -> R.string.main_primary_deploy_altitude
+                    Setting.MainBackup -> R.string.main_backup_deploy_altitude
+                }
+            ),
+            setting = setting,
+            value = LocatorSettingsBounds.valueOf(stagedLocatorConfig, setting),
+            canIncrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, +1) != stagedLocatorConfig,
+            canDecrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, -1) != stagedLocatorConfig,
+            configMessageState = locatorConfigMessageState,
+            modifier = modifier,
+            onEditStart = { typingBase = stagedLocatorConfig },
+            onTyped = { value ->
+                stagedLocatorConfig = LocatorSettingsBounds.withValue(typingBase ?: stagedLocatorConfig, setting, value)
+                viewModel.updateLocatorConfigChanged(true)
+            },
+            onStep = { delta ->
+                stagedLocatorConfig = LocatorSettingsBounds.step(stagedLocatorConfig, setting, delta)
+                typingBase = stagedLocatorConfig
+                viewModel.updateLocatorConfigChanged(true)
+            },
+            onRefusedChange = { refused ->
+                refusedSettings = if (refused) refusedSettings + setting else refusedSettings - setting
+            }
+        )
+    }
+    // Every field accepted, and the pair in order.  The second can only fail on a
+    // config read from a locator older than ADR-0034, which could store anything;
+    // one arrow press on either member of the pair puts it back in order.
+    val stagedConfigValid = refusedSettings.isEmpty() && LocatorSettingsBounds.isValid(stagedLocatorConfig)
 
     Column (
         modifier = modifier
@@ -120,61 +178,7 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel1Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            when (stagedLocatorConfig.deploymentChannel1Mode) {
-                DeployMode.DroguePrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
-                        minValue = 0.0,
-                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.DrogueBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
-                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
-                        maxValue = 3.0,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainPrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
-                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
-                        maxValue = 500,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
-                        minValue = 0,
-                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                else -> {}
-            }
+            DeploymentSetting(stagedLocatorConfig.deploymentChannel1Mode)
             Text(stringResource(R.string.deployment_channel_2))
             EnumDropdown(
                 DeployMode::class,
@@ -186,61 +190,7 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel2Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            when (stagedLocatorConfig.deploymentChannel2Mode) {
-                DeployMode.DroguePrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
-                        minValue = 0.0,
-                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.DrogueBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
-                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
-                        maxValue = 3.0,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainPrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
-                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
-                        maxValue = 500,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
-                        minValue = 0,
-                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                else -> {}
-            }
+            DeploymentSetting(stagedLocatorConfig.deploymentChannel2Mode)
             Text(stringResource(R.string.deployment_channel_3))
             EnumDropdown(
                 DeployMode::class,
@@ -252,61 +202,7 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel3Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            when (stagedLocatorConfig.deploymentChannel3Mode) {
-                DeployMode.DroguePrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
-                        minValue = 0.0,
-                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.DrogueBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
-                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
-                        maxValue = 3.0,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainPrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
-                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
-                        maxValue = 500,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
-                        minValue = 0,
-                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                else -> {}
-            }
+            DeploymentSetting(stagedLocatorConfig.deploymentChannel3Mode)
             Text(stringResource(R.string.deployment_channel_4))
             EnumDropdown(
                 DeployMode::class,
@@ -318,61 +214,7 @@ fun LocatorSettingsScreen(
                 stagedLocatorConfig = stagedLocatorConfig.copy(deploymentChannel4Mode = newConfigValue as DeployMode)
                 viewModel.updateLocatorConfigChanged(true)
             }
-            when (stagedLocatorConfig.deploymentChannel4Mode) {
-                DeployMode.DroguePrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_primary_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.droguePrimaryDeployDelay.toDouble() / 10,
-                        minValue = 0.0,
-                        maxValue = max((stagedLocatorConfig.drogueBackupDeployDelay - 1).toDouble() / 10, 0.0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(droguePrimaryDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.DrogueBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.drogue_backup_deploy_delay),
-                        initialConfigValue = stagedLocatorConfig.drogueBackupDeployDelay.toDouble() / 10,
-                        minValue = min((stagedLocatorConfig.droguePrimaryDeployDelay + 1).toDouble() / 10, 3.0),
-                        maxValue = 3.0,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(drogueBackupDeployDelay = (newConfigValue * 10).toInt())
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainPrimary -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_primary_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainPrimaryDeployAltitude,
-                        minValue = min(stagedLocatorConfig.mainBackupDeployAltitude + 1, 500),
-                        maxValue = 500,
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainPrimaryDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                DeployMode.MainBackup -> {
-                    ConfigurationItemNumeric(
-                        configItemName = stringResource(R.string.main_backup_deploy_altitude),
-                        initialConfigValue = stagedLocatorConfig.mainBackupDeployAltitude,
-                        minValue = 0,
-                        maxValue = max(stagedLocatorConfig.mainPrimaryDeployAltitude - 1, 0),
-                        configMessageState = locatorConfigMessageState,
-                        modifier = modifier
-                    ) { newConfigValue ->
-                        stagedLocatorConfig = stagedLocatorConfig.copy(mainBackupDeployAltitude = newConfigValue)
-                        viewModel.updateLocatorConfigChanged(true)
-                    }
-                }
-                else -> {}
-            }
+            DeploymentSetting(stagedLocatorConfig.deploymentChannel4Mode)
             ConfigurationItemText(
                 configItemName = stringResource(R.string.device_name),
                 configItemValue = stagedLocatorConfig.deviceName,
@@ -422,6 +264,12 @@ fun LocatorSettingsScreen(
                 viewModel.updateLocatorConfigChanged(true)
             }
         }
+        if (refusedSettings.isEmpty() && !stagedConfigValid) {
+            Text(
+                text = stringResource(R.string.settings_out_of_order),
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         Spacer(modifier = Modifier.padding(vertical = 4.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -437,7 +285,10 @@ fun LocatorSettingsScreen(
             Button(
                 modifier = Modifier.weight(1f),
                 // the button is enabled when the user makes a selection
-                enabled = (locatorConfigChanged && locatorConfigMessageState == LocatorMessageState.Idle),
+                // ...and never while a field holds a refused entry: Update would
+                // send the last ACCEPTED value, not the one on screen.
+                enabled = (locatorConfigChanged && stagedConfigValid &&
+                        locatorConfigMessageState == LocatorMessageState.Idle),
                 onClick = {
                     if (locatorConfigMessageState == LocatorMessageState.Idle) {
                         viewModel.updateLocatorConfigMessageState(LocatorMessageState.SendRequested)
@@ -510,8 +361,17 @@ fun ConfigurationItemNumeric(configItemName: String,
                              maxValue: Int = Int.MAX_VALUE,
                              configMessageState: LocatorMessageState = LocatorMessageState.Idle,
                              modifier: Modifier = Modifier,
+                             onRefusedChange: (Boolean) -> Unit = {},
                              onConfigUpdate: (Int) -> Unit) {
     var currentValue by remember { mutableIntStateOf(initialConfigValue)}
+    // A typed value outside [minValue, maxValue] is shown and refused, not
+    // clamped and not committed (ADR-0034 decision 3); the caller holds its
+    // Update button through onRefusedChange.  It used to be committed raw, and
+    // the focus-loss clamp below compared against a value typing had already
+    // overwritten, so it never ran.
+    val refused = currentValue !in minValue..maxValue
+    val currentOnRefusedChange by rememberUpdatedState(onRefusedChange)
+    LaunchedEffect(refused) { currentOnRefusedChange(refused) }
     var lastKeyPressed by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     // Follow externally-driven changes to the value. `remember` seeds once, so a
@@ -534,15 +394,11 @@ fun ConfigurationItemNumeric(configItemName: String,
                     else
                         (currentValue).toString(),
             onValueChange = { newValue ->
-                currentValue = (newValue.filter { it.isDigit() }.toIntOrNull() ?: 0)
-                onConfigUpdate(currentValue)
+                // take(6): a long run of digits is out of range anyway; don't overflow Int.
+                currentValue = (newValue.filter { it.isDigit() }.take(6).toIntOrNull() ?: 0)
+                if (currentValue in minValue..maxValue) onConfigUpdate(currentValue)
             },
-            modifier = Modifier.onFocusChanged { focusState ->
-                if (!focusState.isFocused && currentValue != initialConfigValue) {
-                    currentValue = currentValue.coerceIn(minValue, maxValue)
-                    onConfigUpdate(currentValue)
-                }
-            }
+            modifier = Modifier
                 .weight(configItemWidth)
                 .onKeyEvent { keyEvent: KeyEvent ->
                     lastKeyPressed = keyEvent.key.toString() // Capture the last key pressed
@@ -550,9 +406,12 @@ fun ConfigurationItemNumeric(configItemName: String,
                 },
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
+            isError = refused,
+            supportingText = if (refused) {
+                { Text(stringResource(R.string.settings_range, minValue, maxValue)) }
+            } else null,
             // Single line with a Done key, so Enter dismisses the keypad instead of
-            // inserting a newline. Clearing focus rather than only hiding the keyboard
-            // also runs the onFocusChanged handler above, which coerces and commits.
+            // inserting a newline.
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
@@ -576,61 +435,143 @@ fun ConfigurationItemNumeric(configItemName: String,
     }
 }
 
+/**
+ * One deployment delay or altitude (ADR-0034).
+ *
+ * A typed entry is checked against the bounds table on every keystroke.  In
+ * range, it goes to [onTyped] and may push the pair's other member along.  Out
+ * of range, it stays on screen with the reason under it, nothing is staged, and
+ * [onRefusedChange] tells the screen to hold Update — decision 3: refuse, never
+ * clamp.  The arrows go through [onStep], which stops at the limits, so they
+ * never produce anything to refuse.
+ */
 @Composable
-fun ConfigurationItemNumeric(configItemName: String,
-                             initialConfigValue: Double,
-                             minValue: Double = 0.0,
-                             maxValue: Double = Double.MAX_VALUE,
-                             configMessageState: LocatorMessageState = LocatorMessageState.Idle,
-                             modifier: Modifier = Modifier,
-                             onConfigUpdate: (Double) -> Unit) {
-    var configValue by remember { mutableDoubleStateOf(initialConfigValue)}
-    var configText by remember { mutableStateOf(initialConfigValue.toString()) }
+fun DeploymentSettingField(
+    configItemName: String,
+    setting: Setting,
+    value: Int,
+    canIncrement: Boolean,
+    canDecrement: Boolean,
+    configMessageState: LocatorMessageState,
+    modifier: Modifier = Modifier,
+    onEditStart: () -> Unit,
+    onTyped: (Int) -> Unit,
+    onStep: (Int) -> Unit,
+    onRefusedChange: (Boolean) -> Unit,
+) {
     val focusManager = LocalFocusManager.current
+    var text by remember { mutableStateOf(LocatorSettingsBounds.format(setting, value)) }
+    var focused by remember { mutableStateOf(false) }
+    val parsed = LocatorSettingsBounds.validate(setting, text)
+    val problem = (parsed as? LocatorSettingsBounds.Parsed.Refused)?.problem
+
+    // Follow the value when it moves for any other reason: an arrow, a push from
+    // the pair's other member, or a field for the same setting on another
+    // channel.  Text that already reads as this value is left alone, so "1."
+    // stays "1." while the user is still typing "1.5".
+    LaunchedEffect(value) {
+        if ((LocatorSettingsBounds.validate(setting, text) as? LocatorSettingsBounds.Parsed.Ok)?.value != value)
+            text = LocatorSettingsBounds.format(setting, value)
+    }
+    val currentOnRefusedChange by rememberUpdatedState(onRefusedChange)
+    LaunchedEffect(problem != null) { currentOnRefusedChange(problem != null) }
+    // Switching a channel's mode removes this field; a refusal must not outlive it
+    // and hold Update disabled with nothing on screen to fix.
+    DisposableEffect(Unit) { onDispose { currentOnRefusedChange(false) } }
+
+    fun shown(v: Int) =
+        if (setting.tenths) "${LocatorSettingsBounds.format(setting, v)} s" else "$v m"
+
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start
     ) {
         OutlinedTextField(
-            value = configText,
-            onValueChange = { newValue ->
-                configValue = (newValue.filter { it.isDigit() || it == '.' }.toDoubleOrNull() ?: 0.0)
-                configText = newValue
-                onConfigUpdate(configValue)
+            value = text,
+            onValueChange = { newText ->
+                text = newText
+                val p = LocatorSettingsBounds.validate(setting, newText)
+                if (p is LocatorSettingsBounds.Parsed.Ok) onTyped(p.value)
             },
-            modifier = modifier.onFocusChanged { focusState ->
-                if (!focusState.isFocused && configValue != initialConfigValue) {
-                    configValue = configValue.coerceIn(minValue, maxValue)
-                    configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
-                    onConfigUpdate(configValue)
+            modifier = Modifier
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused && !focused) onEditStart()
+                    // Tidy an accepted entry ("05" -> "5", "1." -> "1.0").  A refused
+                    // one is left exactly as typed, so the user sees what was wrong.
+                    if (!focusState.isFocused && focused && problem == null)
+                        text = LocatorSettingsBounds.format(setting, value)
+                    focused = focusState.isFocused
                 }
-            }
                 .weight(configItemWidth),
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
-            // See the Int overload: Enter closes the keypad and commits through onFocusChanged.
+            isError = problem != null,
+            supportingText = problem?.let {
+                {
+                    Text(
+                        when (it) {
+                            LocatorSettingsBounds.Problem.Empty -> stringResource(R.string.settings_enter_value)
+                            LocatorSettingsBounds.Problem.TooPrecise -> stringResource(R.string.settings_tenths_only)
+                            is LocatorSettingsBounds.Problem.BelowMin -> stringResource(R.string.settings_min, shown(it.min))
+                            is LocatorSettingsBounds.Problem.AboveMax -> stringResource(R.string.settings_max, shown(it.max))
+                        }
+                    )
+                }
+            },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (setting.tenths) KeyboardType.Decimal else KeyboardType.Number,
+                imeAction = ImeAction.Done
+            ),
             keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
         )
-        //Spacer(modifier = Modifier.width(8.dp))
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.SpaceEvenly
         ) {
-            NudgeButton(configValue, 0.1, maxValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = stringResource(id = R.string.increment)) },
-                { newValue -> configValue = newValue
-                    configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
-                    onConfigUpdate(newValue)
-                })
-            NudgeButton(configValue, -0.1, minValue, configMessageState,
-                { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = stringResource(id = R.string.decrement)) },
-                { newValue -> configValue = newValue
-                    configText = configValue.toBigDecimal().setScale(1, RoundingMode.HALF_UP).toString()
-                    onConfigUpdate(newValue)
-                })
+            StepButton(canIncrement && configMessageState == LocatorMessageState.Idle, { onStep(+1) }) {
+                Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = stringResource(id = R.string.increment))
+            }
+            StepButton(canDecrement && configMessageState == LocatorMessageState.Idle, { onStep(-1) }) {
+                Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = stringResource(id = R.string.decrement))
+            }
+        }
+    }
+}
+
+/**
+ * An arrow that steps by one, with hold-to-repeat.  Unlike [NudgeButton] it does
+ * not compute the next value itself: each repeat calls [onStep] afresh, so the
+ * caller's push rule runs on every step and the repeat stops at the limit
+ * instead of running past it.
+ */
+@Composable
+fun StepButton(
+    enabled: Boolean,
+    onStep: () -> Unit,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val currentOnStep by rememberUpdatedState(onStep)
+    TextButton(
+        onClick = { if (enabled) onStep() },
+        enabled = enabled,
+        interactionSource = interactionSource,
+        content = content
+    )
+    // onClick handles a single tap, so the repeat starts only after the initial delay.
+    LaunchedEffect(isPressed) {
+        if (isPressed) {
+            delay(maxDelayMillis)
+            var currentDelayMillis = maxDelayMillis
+            while (isPressed) {
+                currentOnStep()
+                delay(currentDelayMillis)
+                val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
+                currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
+            }
         }
     }
 }
@@ -681,45 +622,6 @@ fun NudgeButton(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val enabled = (if (change > 0) configItemValue < bound else configItemValue > bound) &&
-            configMessageState == LocatorMessageState.Idle
-
-    TextButton(
-        onClick = { if (enabled) onConfigUpdate(configItemValue + change) },
-        enabled = enabled,
-        interactionSource = interactionSource,
-        content = content
-    )
-    // Hold-to-repeat: after an initial delay, keep incrementing while the button is held.
-    // onClick handles the single-tap case, so start the repeat loop only after the initial delay
-    // to avoid a double-increment on a quick tap.
-    LaunchedEffect(isPressed) {
-        if (isPressed) {
-            delay(maxDelayMillis)
-            var currentDelayMillis = maxDelayMillis
-            var repeatValue = configItemValue + change
-            while (isPressed) {
-                onConfigUpdate(repeatValue)
-                repeatValue += change
-                delay(currentDelayMillis)
-                val nextDelayMillis = currentDelayMillis - (currentDelayMillis * delayDecayFactor)
-                currentDelayMillis = nextDelayMillis.toLong().coerceAtLeast(minDelayMillis)
-            }
-        }
-    }
-}
-
-@Composable
-fun NudgeButton(
-    configItemValue: Double,
-    change: Double,
-    bound: Double,
-    configMessageState: LocatorMessageState = LocatorMessageState.Idle,
-    content: @Composable RowScope.() -> Unit,
-    onConfigUpdate: (Double) -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val enabled = (if (change > 0) configItemValue < bound - 0.05 else configItemValue > bound + 0.05) &&
             configMessageState == LocatorMessageState.Idle
 
     TextButton(

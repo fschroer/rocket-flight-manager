@@ -66,6 +66,13 @@
     <string name="rocket_pin_label">Rocket</string>
     <string name="unknown">Unknown</string>
     <string name="update">Update</string>
+    <!-- Deployment settings bounds (ADR-0034): a typed value out of range is refused, not clamped. -->
+    <string name="settings_max">Max %1$s</string>
+    <string name="settings_min">Min %1$s</string>
+    <string name="settings_range">Must be %1$d to %2$d</string>
+    <string name="settings_enter_value">Enter a value</string>
+    <string name="settings_tenths_only">Use steps of 0.1 s</string>
+    <string name="settings_out_of_order">A backup is not after its primary. Use the arrows to fix it.</string>
     <string name="update_failed">Send Failed</string>
     <string name="update_not_acknowledged">Not Received</string>
     <string name="updated">Updated</string>

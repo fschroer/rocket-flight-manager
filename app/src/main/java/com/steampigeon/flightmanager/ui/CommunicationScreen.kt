@@ -72,6 +72,7 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.ChannelOccupancy
 import com.steampigeon.flightmanager.data.ChannelSurvey
 import com.steampigeon.flightmanager.data.LocatorMessageState
+import com.steampigeon.flightmanager.data.LocatorSettingsBounds
 import com.steampigeon.flightmanager.data.LocatorSearch
 import kotlinx.coroutines.delay
 
@@ -214,6 +215,9 @@ fun CommunicationScreen(
     // composed before the locator's config had arrived, seeded 0, and then refused
     // every update on the grounds that 0 was an edit in progress.
     var receiverChannelEdited by remember { mutableStateOf(false) }
+    // The channel field holds a typed number outside 0–63 (ADR-0034 decision 3):
+    // it is shown and refused, and Update waits until it is fixed.
+    var channelEntryRefused by remember { mutableStateOf(false) }
 
     // Follow the device while the user has not typed anything, so a late-arriving
     // config or a channel changed from elsewhere shows up immediately — but never
@@ -623,9 +627,10 @@ fun CommunicationScreen(
                     ),
                     initialConfigValue = stagedReceiverChannel,
                     minValue = 0,
-                    maxValue = 63,
+                    maxValue = LocatorSettingsBounds.LORA_CHANNEL_MAX,
                     configMessageState = channelMessageState,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    onRefusedChange = { channelEntryRefused = it },
                 ) { newConfigValue ->
                     stagedReceiverChannel = newConfigValue
                     receiverChannelEdited = true
@@ -701,7 +706,8 @@ fun CommunicationScreen(
                 }
             }
             ApplyRow(
-                enabled = channelChanged && channelMessageState == LocatorMessageState.Idle,
+                enabled = channelChanged && !channelEntryRefused &&
+                    channelMessageState == LocatorMessageState.Idle,
                 messageState = channelMessageState,
                 onApply = {
                     receiverChannelEdited = false
