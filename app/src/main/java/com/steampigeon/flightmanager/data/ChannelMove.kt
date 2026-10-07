@@ -164,7 +164,7 @@ object ChannelMove {
      * @param askedAtMs when the revert was requested; a frame must be newer than this
      */
     fun relinked(
-        receiverChannel: Int,
+        receiverChannel: Int?,
         locatorChannel: Int,
         oldChannel: Int,
         lastFrameMs: Long,
@@ -192,15 +192,16 @@ object ChannelMove {
      *   locator may be stranded" is the difference between a shrug and a search.
      *
      * @param attemptedChannel the channel the move was aimed at
-     * @param receiverChannel where the receiver actually is now
+     * @param receiverChannel where the receiver actually is now, or null if it has
+     *        not reported since — then "nothing moved" cannot be claimed (#51)
      */
-    fun message(verdict: Verdict?, attemptedChannel: Int, receiverChannel: Int): Message =
+    fun message(verdict: Verdict?, attemptedChannel: Int, receiverChannel: Int?): Message =
         when (verdict) {
             Verdict.Confirmed -> Message.Succeeded
             Verdict.NotChecked -> Message.NotChecked
             Verdict.NoEvidence ->
                 // The receiver never left, so nothing moved and nothing is stranded.
-                if (receiverChannel != attemptedChannel) Message.NothingMoved
+                if (receiverChannel != null && receiverChannel != attemptedChannel) Message.NothingMoved
                 else Message.Unresolved
             // LocatorStayed, or no probe ran at all: the revert put both devices back.
             else -> Message.LeftOnPrevious

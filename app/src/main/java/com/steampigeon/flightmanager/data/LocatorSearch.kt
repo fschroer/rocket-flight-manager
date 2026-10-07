@@ -97,7 +97,7 @@ object LocatorSearch {
          * on the false channel had no way to reach the real one. The row is about a
          * channel, so the test has to be too.
          */
-        fun connectedOn(currentChannel: Int, connectedLocatorId: Long?): Boolean =
+        fun connectedOn(currentChannel: Int?, connectedLocatorId: Long?): Boolean =
             channel == currentChannel &&
                     locatorId != 0L &&
                     locatorId == connectedLocatorId
@@ -238,9 +238,10 @@ object LocatorSearch {
      *                       are already here and hearing nothing. It is included at
      *                       all because "already here" is not proof — a locator
      *                       powered on ten seconds ago has not been waited out yet.
+     *                       Null while the receiver has not reported it (#51).
      */
     fun candidates(
-        currentChannel: Int,
+        currentChannel: Int?,
         targetChannel: Int? = null,
         knownChannels: List<Int> = emptyList(),
         attemptedChannel: Int? = null,
@@ -251,7 +252,7 @@ object LocatorSearch {
             addAll(knownChannels)
             attemptedChannel?.let { add(it) }
             add(DEFAULT_CHANNEL)
-            add(currentChannel)
+            currentChannel?.let { add(it) }
         }
             .filter { it in 0 until Protocol.SURVEY_CHANNEL_COUNT }
             // The firmware dedupes too, because it must — it cannot trust a caller

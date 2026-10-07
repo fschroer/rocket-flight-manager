@@ -54,6 +54,25 @@ object FlightLog {
     private val TIMESTAMP_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", LOCALE)
 
+    /** What a new receiver-channel reading means for an open log. */
+    enum class ChannelTransition { Same, Learned, Changed }
+
+    /**
+     * Only a known channel replaced by a different known channel is a change, and
+     * only a change closes the log. Unknown → known is the app learning a fact that
+     * was true all along, and known → unknown is the app forgetting one (#51).
+     *
+     * The Nike Smoke log opened before the receiver had reported its channel, held
+     * the old placeholder 0, and closed itself when the first real report said 44 —
+     * losing the landing and the walk-in, the part the log exists for, on a flight
+     * that never left channel 44.
+     */
+    fun receiverChannelTransition(last: Int?, next: Int?): ChannelTransition = when {
+        last == null && next != null -> ChannelTransition.Learned
+        last != null && next != null && next != last -> ChannelTransition.Changed
+        else -> ChannelTransition.Same
+    }
+
     /** The date-time half of a log's filename — see [fileName]. */
     private val FILENAME_TIME_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss", LOCALE)
@@ -141,7 +160,7 @@ object FlightLog {
         locatorName: String,
         locatorId: Long?,
         receiverName: String,
-        receiverChannel: Int,
+        receiverChannel: Int?,
         appVersion: String,
         locatorBatteryMv: Int?,
         receiverBatteryMv: Int?,
@@ -149,9 +168,11 @@ object FlightLog {
     ): String = buildString {
         append("Steam Pigeon app flight log")
         append("; locator=").append(locatorName.ifEmpty { "unknown" })
-        append("; locator_id=").append(locatorId ?: 0L)
+        // "unknown", never 0: 0 is a real channel, and a placeholder written as
+        // one put receiver_channel=0 in the header of a flight flown on 44 (#51).
+        append("; locator_id=").append(locatorId?.toString() ?: "unknown")
         append("; receiver=").append(receiverName.ifEmpty { "unknown" })
-        append("; receiver_channel=").append(receiverChannel)
+        append("; receiver_channel=").append(receiverChannel?.toString() ?: "unknown")
         append("; app_version=").append(appVersion)
         if (locatorBatteryMv != null && receiverBatteryMv != null) {
             append("; locator_batt_mv=").append(locatorBatteryMv)

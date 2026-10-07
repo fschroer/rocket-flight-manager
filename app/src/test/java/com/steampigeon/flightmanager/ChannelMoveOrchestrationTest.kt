@@ -137,6 +137,16 @@ class ChannelMoveOrchestrationTest {
     }
 
     @Test
+    fun `no evidence with the receiver channel unreported is unresolved, not nothing moved`() {
+        // "Nothing moved" is a claim that the receiver is still on the old channel.
+        // With no report since, that is unknown, and 0 used to stand in for it (#51).
+        assertEquals(
+            ChannelMove.Message.Unresolved,
+            ChannelMove.message(ChannelMove.Verdict.NoEvidence, attemptedChannel = 60, receiverChannel = null),
+        )
+    }
+
+    @Test
     fun `a refusal says it could not check, whatever the channels read`() {
         assertEquals(
             ChannelMove.Message.NotChecked,

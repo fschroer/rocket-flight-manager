@@ -46,6 +46,14 @@ class LocatorSearchTest {
         assertTrue(LocatorSearch.DEFAULT_CHANNEL in c)
     }
 
+    @Test fun anUnreportedCurrentChannelIsLeftOutNotSearchedAsZero() {
+        // Before the receiver reports its channel there is no "here" to include,
+        // and searching 0 in its place would spend a dwell on a placeholder (#51).
+        // 0 still appears, but as the default channel, once, for its own reason.
+        val c = LocatorSearch.candidates(currentChannel = null, knownChannels = listOf(12))
+        assertEquals(listOf(12, LocatorSearch.DEFAULT_CHANNEL), c)
+    }
+
     @Test fun currentChannelIsLast() {
         // We are already sitting here hearing nothing, so it is the least likely
         // answer — but not an impossible one, so it is included rather than dropped.

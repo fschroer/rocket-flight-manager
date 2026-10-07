@@ -65,7 +65,7 @@ object LocatorConnection {
      */
     fun isFromChannelBeingLeft(
         frameChannel: Int?,
-        previousChannel: Int,
+        previousChannel: Int?,
         awaitingRecognition: Boolean,
         moveInFlight: Boolean,
     ): Boolean =

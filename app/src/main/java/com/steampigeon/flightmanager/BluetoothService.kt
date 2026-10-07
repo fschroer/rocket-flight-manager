@@ -301,14 +301,20 @@ class BluetoothService : Service() {
     fun changeLocatorConfig(locatorConfig: LocatorConfig): Boolean =
         sendMessage(MsgType.LocatorCfgChgRequest, LocatorConfigWire.payload(locatorConfig))
 
-    fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean =
-        sendMessage(
+    fun changeReceiverConfig(receiverConfig: ReceiverConfig): Boolean {
+        // Name and channel ride in one message, so a rename sent while the channel
+        // is still unknown would have to invent one — and inventing 0 moves the
+        // receiver to channel 0 (#51). Refused instead; the caller reports a send
+        // failure, and the channel arrives with the next PreLaunchData or ReceiverInfo.
+        val channel = receiverConfig.channel ?: return false
+        return sendMessage(
             MsgType.ReceiverCfgChgRequest,
             concatBytes(
-                byteArrayOf(receiverConfig.channel.toByte()),
+                byteArrayOf(channel.toByte()),
                 fillFixed(Protocol.DEVICE_NAME_LENGTH, receiverConfig.deviceName)
             )
         )
+    }
 
     fun requestFlightProfileMetadata(): Boolean =
         sendMessage(MsgType.FlightMetadataRequest, null)

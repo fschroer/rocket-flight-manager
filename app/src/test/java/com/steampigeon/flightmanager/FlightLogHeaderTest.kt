@@ -1,6 +1,7 @@
 package com.steampigeon.flightmanager
 
 import com.steampigeon.flightmanager.data.FlightLog
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,11 +28,12 @@ class FlightLogHeaderTest {
         locatorName: String = "Mike 8",
         locatorId: Long? = 3711341977L,
         receiverName: String = "Mike's Communicator",
+        receiverChannel: Int? = 8,
     ) = FlightLog.sessionHeader(
         locatorName = locatorName,
         locatorId = locatorId,
         receiverName = receiverName,
-        receiverChannel = 8,
+        receiverChannel = receiverChannel,
         appVersion = "2026.09.04-abc1234",
         locatorBatteryMv = locatorBatteryMv,
         receiverBatteryMv = receiverBatteryMv,
@@ -107,6 +109,40 @@ class FlightLogHeaderTest {
         val h = header(locatorName = "", receiverName = "", locatorId = null)
         assertTrue(h, h.contains("locator=unknown"))
         assertTrue(h, h.contains("receiver=unknown"))
-        assertTrue(h, h.contains("locator_id=0"))
+        // Not 0: an unknown is not a value, and 0 reads as one (#51).
+        assertTrue(h, h.contains("locator_id=unknown"))
+        assertFalse(h, h.contains("locator_id=0"))
+    }
+
+    @Test
+    fun `an unreported receiver channel reads as unknown, not as channel 0`() {
+        // The Nike Smoke header said receiver_channel=0 on a flight flown on 44,
+        // because the log opened before the receiver had reported (#51).
+        val h = header(receiverChannel = null)
+        assertTrue(h, h.contains("receiver_channel=unknown"))
+        assertFalse(h, h.contains("receiver_channel=0"))
+    }
+
+    @Test
+    fun `channel 0 is a real channel and is written as one`() {
+        assertTrue(header(receiverChannel = 0).contains("receiver_channel=0"))
+    }
+
+    // ── What closes the log (#51) ────────────────────────────────────────────
+
+    @Test
+    fun `learning the channel is not changing it`() {
+        // The Nike Smoke case: unknown at open, 44 on the first ReceiverInfo.
+        assertEquals(FlightLog.ChannelTransition.Learned, FlightLog.receiverChannelTransition(null, 44))
+    }
+
+    @Test
+    fun `only a known channel replaced by a different known channel is a change`() {
+        assertEquals(FlightLog.ChannelTransition.Changed, FlightLog.receiverChannelTransition(44, 12))
+        assertEquals(FlightLog.ChannelTransition.Changed, FlightLog.receiverChannelTransition(44, 0))
+        assertEquals(FlightLog.ChannelTransition.Changed, FlightLog.receiverChannelTransition(0, 44))
+        assertEquals(FlightLog.ChannelTransition.Same, FlightLog.receiverChannelTransition(44, 44))
+        assertEquals(FlightLog.ChannelTransition.Same, FlightLog.receiverChannelTransition(44, null))
+        assertEquals(FlightLog.ChannelTransition.Same, FlightLog.receiverChannelTransition(null, null))
     }
 }

@@ -899,7 +899,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     // passively prompt for an already-known locator before the store is read.
     @Volatile private var knownLocatorsLoaded = false
     private var awaitingChannelRecognition = false
-    private var channelChangePreviousChannel = 0
+    // Null when the receiver had not reported a channel when the move began (#51):
+    // then there is no previous channel to recognize frames from or to revert to.
+    private var channelChangePreviousChannel: Int? = null
 
     // ── Channel survey (ADR-0019 tier 3) ──────────────────────────────────────
     // null = never run this session. Sweeping is on demand only: it costs ~1 s of
@@ -1575,7 +1577,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      *  Releases the connection outright — the point of the change is to go somewhere
      *  else, so the first authorized locator heard on the new channel should claim it
      *  without waiting out [CONNECTION_HOLD_MS]. */
-    fun beginChannelChangeRecognition(previousChannel: Int) {
+    fun beginChannelChangeRecognition(previousChannel: Int?) {
         channelChangePreviousChannel = previousChannel
         awaitingChannelRecognition = true
         _connectedLocatorId.value = null
@@ -1754,7 +1756,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun noteLocatorChannel(locatorId: Long, receiverChannel: Int? = null) {
         if (!knownLocatorsLoaded) return
-        val channel = receiverChannel ?: _remoteReceiverConfig.value.channel
+        // Nothing to note while the receiver has not reported its channel (#51):
+        // recording a placeholder would seed the next search with a false channel.
+        val channel = receiverChannel ?: _remoteReceiverConfig.value.channel ?: return
         if (notedLocatorChannels[locatorId] == channel) return
         notedLocatorChannels[locatorId] = channel
         viewModelScope.launch { updateKnownLocator(locatorId) { it.setLastChannel(channel) } }
@@ -2297,13 +2301,24 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             var last = _remoteReceiverConfig.value.channel
             _remoteReceiverConfig.collect { cfg ->
-                if (cfg.channel != last) {
-                    logFlightEvent(LogEvent.ReceiverChannelChanged, "$last -> ${cfg.channel}")
-                    // Past this point the rows describe a different piece of sky.
-                    closeFlightLog(LogCloseReason.ReceiverChannelChanged)
-                    flightLogRecorder.discardPreRoll()
-                    last = cfg.channel
+                when (FlightLog.receiverChannelTransition(last, cfg.channel)) {
+                    FlightLog.ChannelTransition.Changed -> {
+                        logFlightEvent(LogEvent.ReceiverChannelChanged, "$last -> ${cfg.channel}")
+                        // Past this point the rows describe a different piece of sky.
+                        closeFlightLog(LogCloseReason.ReceiverChannelChanged)
+                        flightLogRecorder.discardPreRoll()
+                    }
+                    // Learning the channel is not changing it. The Nike Smoke log
+                    // opened before any receiver report, held a placeholder 0, and
+                    // closed itself mid-recovery when the first real report said 44
+                    // — on a flight that never left 44 (#51).
+                    FlightLog.ChannelTransition.Learned,
+                    FlightLog.ChannelTransition.Same -> {}
                 }
+                // An unknown never overwrites a known: a receiver switch resets the
+                // config to unknown, and the next report is compared against the
+                // last channel actually heard rather than read as a first report.
+                if (cfg.channel != null) last = cfg.channel
             }
         }
         // Tracks the last locator actually CONNECTED, not the last value of the flow.

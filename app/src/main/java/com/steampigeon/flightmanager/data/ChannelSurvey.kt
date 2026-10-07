@@ -116,7 +116,7 @@ object ChannelSurvey {
          * genuinely indistinguishable, so any of them is as good as another.
          */
         val uniformFloor: Boolean,
-        val homeChannel: Int,
+        val homeChannel: Int?,
         /**
          * Channels the receiver dwelled on for a full broadcast period. Only these
          * are evidence that a channel is free: the coarse pass dwells ~12 ms, while
@@ -180,12 +180,13 @@ object ChannelSurvey {
     /**
      * @param status  the firmware's status byte, already decoded
      * @param levels  peak dBm per channel, index == channel number
-     * @param homeChannel the receiver's current channel
+     * @param homeChannel the receiver's current channel; null only for a local
+     *        failure result made before the receiver reported one (#51)
      */
     fun analyze(
         status: Status,
         levels: List<Int>,
-        homeChannel: Int,
+        homeChannel: Int?,
         confirmedChannels: List<Int> = emptyList(),
         confirmedFrames: List<Int> = emptyList(),
         confirmedLocatorIds: List<Long> = emptyList(),

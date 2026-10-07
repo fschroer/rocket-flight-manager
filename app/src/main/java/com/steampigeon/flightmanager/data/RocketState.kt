@@ -226,7 +226,11 @@ enum class PadAlertState {
 }
 
 data class ReceiverConfig(
-    val channel: Int = 0,
+    // Null until the receiver has reported it, in a PreLaunchData stamp or a
+    // ReceiverInfo (#51). It was 0, which is also a real LoRa channel: the
+    // first real report then read as a change from 0, and the flight-log watcher
+    // closed the Nike Smoke log mid-recovery. Unknown is not a channel.
+    val channel: Int? = null,
     val deviceName: String = "",
 )
 

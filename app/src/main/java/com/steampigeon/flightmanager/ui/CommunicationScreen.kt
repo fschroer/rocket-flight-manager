@@ -201,7 +201,11 @@ fun CommunicationScreen(
     // flag Receiver Settings uses for the name. The two screens now edit different
     // fields of the same struct, and a shared dirty flag would let a name staged
     // over there light up the Update button over here with nothing to send.
-    var stagedReceiverChannel by remember { mutableIntStateOf(remoteReceiverConfig.channel) }
+    // Seeded 0 only for the field to have something to show while the receiver's
+    // channel is unknown (#51) — which lasts until the ReceiverInfo requested on
+    // entry arrives. Update stays off until the user types (see channelChanged), so
+    // the placeholder can never be sent as a channel.
+    var stagedReceiverChannel by remember { mutableIntStateOf(remoteReceiverConfig.channel ?: 0) }
     // Whether Update moves the connected locator too, rather than only pointing the
     // receiver. Off on every visit: it decides which device a single button commands,
     // and a toggle that quietly persisted would make one press mean two different
@@ -223,8 +227,11 @@ fun CommunicationScreen(
     // config or a channel changed from elsewhere shows up immediately — but never
     // overwrite a number being edited.
     LaunchedEffect(remoteReceiverConfig.channel) {
-        if (!receiverChannelEdited) stagedReceiverChannel = remoteReceiverConfig.channel
+        val reported = remoteReceiverConfig.channel
+        if (!receiverChannelEdited && reported != null) stagedReceiverChannel = reported
     }
+    // How sentences name the receiver's channel; "?" until it has reported one.
+    val receiverChannelText = remoteReceiverConfig.channel?.toString() ?: "?"
     // One field now, so one sync — and the receiver's channel is the one to follow in
     // both modes. A chained move ends with the receiver ON the locator's new channel
     // (ADR-0011 invariant 1), so tracking the receiver tracks a successful move too;
@@ -347,15 +354,15 @@ fun CommunicationScreen(
                     ) {
                         ChannelMove.Message.NotChecked ->
                             stringResource(
-                                R.string.channel_move_not_checked, remoteReceiverConfig.channel,
+                                R.string.channel_move_not_checked, receiverChannelText,
                             ) to MaterialTheme.colorScheme.error
                         ChannelMove.Message.NothingMoved ->
                             stringResource(
-                                R.string.channel_move_nothing_moved, remoteReceiverConfig.channel,
+                                R.string.channel_move_nothing_moved, receiverChannelText,
                             ) to MaterialTheme.colorScheme.onSurfaceVariant
                         ChannelMove.Message.Unresolved ->
                             stringResource(
-                                R.string.channel_move_unresolved, remoteReceiverConfig.channel,
+                                R.string.channel_move_unresolved, receiverChannelText,
                             ) to MaterialTheme.colorScheme.error
                         else ->
                             stringResource(R.string.channel_move_not_acknowledged, channel) to
@@ -421,14 +428,14 @@ fun CommunicationScreen(
                     locatorHeard -> ChannelAgreementNote(
                         together = true,
                         text = stringResource(
-                            R.string.channels_devices_together, remoteReceiverConfig.channel,
+                            R.string.channels_devices_together, receiverChannelText,
                         ),
                     )
                     whereaboutsUnknown -> ChannelAgreementNote(
                         together = false,
                         text = stringResource(
                             R.string.channels_devices_split,
-                            remoteReceiverConfig.channel,
+                            receiverChannelText,
                             pendingChannelMove ?: channelMoveBannerChannel ?: 0,
                         ),
                     )
@@ -610,7 +617,10 @@ fun CommunicationScreen(
             // the number you are looking at and the locator is not.
             val channelChanged =
                 if (chained) stagedReceiverChannel != remoteLocatorConfig.loraChannel
-                else stagedReceiverChannel != remoteReceiverConfig.channel
+                // With the receiver's channel unknown, only a number the user typed
+                // counts: the field's placeholder 0 is not a request to move (#51).
+                else remoteReceiverConfig.channel?.let { stagedReceiverChannel != it }
+                    ?: receiverChannelEdited
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // weight(1f) so the field takes the row and leaves the icons their
@@ -1033,7 +1043,7 @@ internal fun ChannelSurveySection(
                 }
                 survey.homeRank?.let { rank ->
                     ChannelNote(
-                        stringResource(R.string.survey_home_rank, survey.homeChannel, rank),
+                        stringResource(R.string.survey_home_rank, survey.homeChannel ?: "?", rank),
                         MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1083,12 +1093,12 @@ internal fun ChannelSurveySection(
                     ChannelNote(
                         if (homeWho != null)
                             stringResource(
-                                R.string.survey_home_in_use_named, survey.homeChannel, homeWho,
+                                R.string.survey_home_in_use_named, survey.homeChannel ?: "?", homeWho,
                             )
                         else stringResource(
                             if (locatorConnected) R.string.survey_home_in_use_own
                             else R.string.survey_home_in_use_other,
-                            survey.homeChannel,
+                            survey.homeChannel ?: "?",
                         ),
                         if (locatorConnected) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.error,
@@ -1138,7 +1148,7 @@ internal fun LocatorSearchSection(
     onSearch: (List<Int>) -> Unit,
     onCancel: () -> Unit,
     onPick: (Int) -> Unit,
-    currentChannel: Int,
+    currentChannel: Int?,
     connectedLocatorId: Long?,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {

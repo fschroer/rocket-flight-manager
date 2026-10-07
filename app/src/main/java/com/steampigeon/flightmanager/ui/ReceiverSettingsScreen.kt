@@ -139,7 +139,10 @@ fun ReceiverSettingsScreen(
             }
             Button(
                 modifier = Modifier.weight(1f),
-                enabled = (receiverConfigChanged && receiverConfigMessageState == LocatorMessageState.Idle),
+                // A rename carries the channel too, so it waits until the receiver
+                // has reported one; sending without it would move the receiver (#51).
+                enabled = (receiverConfigChanged && remoteReceiverConfig.channel != null &&
+                        receiverConfigMessageState == LocatorMessageState.Idle),
                 onClick = {
                     if (receiverConfigMessageState == LocatorMessageState.Idle) {
                         viewModel.updateReceiverConfigMessageState(LocatorMessageState.SendRequested)

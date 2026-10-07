@@ -91,11 +91,11 @@
     <string name="link_congested">Channel is busy, but your link is clean.</string>
     <string name="survey_scan">Find a clean channel</string>
     <string name="survey_scanning">Scanning… (about 8 seconds)</string>
-    <string name="survey_home_in_use_own">Your channel (%1$d) carries your locator, as expected.</string>
-    <string name="survey_home_in_use_other">Your channel (%1$d) has a locator on it and none is connected — someone else is using it.</string>
+    <string name="survey_home_in_use_own">Your channel (%1$s) carries your locator, as expected.</string>
+    <string name="survey_home_in_use_other">Your channel (%1$s) has a locator on it and none is connected — someone else is using it.</string>
     <string name="survey_channel_occupied">Channel %1$d has another locator on it — not offered.</string>
     <string name="survey_channel_occupied_named">Channel %1$d has %2$s on it — not offered.</string>
-    <string name="survey_home_in_use_named">Your channel (%1$d) carries %2$s.</string>
+    <string name="survey_home_in_use_named">Your channel (%1$s) carries %2$s.</string>
     <!-- %1$s is the git stamp, generated into a resource by app/build.gradle.kts. -->
     <string name="app_version">App version: %1$s</string>
     <!-- Content description for the "i" that reveals a section's help. -->
@@ -121,8 +121,8 @@
          the one thing it can prove the other way — a move whose outcome was
          NoEvidence or NotChecked, where the receiver followed and nobody knows
          whether the locator did. -->
-    <string name="channels_devices_together">Receiver and locator are together on channel %1$d.</string>
-    <string name="channels_devices_split">Split: the receiver is on channel %1$d, and the locator never confirmed the move to %2$d — it may be on either. Use Find a locator to settle it.</string>
+    <string name="channels_devices_together">Receiver and locator are together on channel %1$s.</string>
+    <string name="channels_devices_split">Split: the receiver is on channel %1$s, and the locator never confirmed the move to %2$d — it may be on either. Use Find a locator to settle it.</string>
     <string name="channels_occupant_note">%2$s was last heard on channel %1$d.</string>
     <!-- A search heard a frame on this channel that carried no locator_id. The
          channel is occupied; nobody said who. Reads as the subject of the two
@@ -188,16 +188,16 @@
     <string name="channel_move_done">Now on channel %1$d.</string>
     <string name="channel_move_failed">Could not send the channel change. Check the receiver connection.</string>
     <string name="channel_move_not_acknowledged">The locator did not confirm channel %1$d. It has been left on its previous channel.</string>
-    <string name="channel_move_not_checked">Could not check where the locator is — the receiver was busy. The receiver is on channel %1$d; use Find a locator.</string>
+    <string name="channel_move_not_checked">Could not check where the locator is — the receiver was busy. The receiver is on channel %1$s; use Find a locator.</string>
     <string name="search_connect_ends_scan">Connecting to a result stops the scan — the receiver cannot keep searching and hold the channel you picked.</string>
-    <string name="channel_move_nothing_moved">The locator did not respond, so nothing was moved. The receiver is still on channel %1$d — power the locator up and the link should resume.</string>
-    <string name="channel_move_unresolved">Could not confirm where the locator is. The receiver is on channel %1$d — if the locator does not come back, use Find a locator.</string>
+    <string name="channel_move_nothing_moved">The locator did not respond, so nothing was moved. The receiver is still on channel %1$s — power the locator up and the link should resume.</string>
+    <string name="channel_move_unresolved">Could not confirm where the locator is. The receiver is on channel %1$s — if the locator does not come back, use Find a locator.</string>
     <string name="survey_move_here">Move here</string>
     <string name="survey_point_receiver">Point receiver</string>
     <string name="survey_moves_both">Moves your locator to the chosen channel; the receiver follows automatically.</string>
     <string name="survey_receiver_only">No locator connected, so this only re-points the receiver. Your locator stays where it is.</string>
     <string name="survey_channel_label">Channel %1$d</string>
-    <string name="survey_home_rank">Your channel (%1$d) ranks %2$d quietest.</string>
+    <string name="survey_home_rank">Your channel (%1$s) ranks %2$d quietest.</string>
     <string name="survey_uniform_floor">Every channel reads the same raised level — a transmitter close to the receiver, usually your own locator, spilling across the whole band. It does not favor any channel, so these are all equally good. Move the receiver away from powered locators for a sharper reading.</string>
     <string name="survey_all_hot">Every channel reads loud, which usually means a transmitter is very close to the receiver — check for another powered locator nearby. Move it away and scan again for a true reading. The channels below are still the least affected, and should be clean once it is moved.</string>
     <!-- "about a second" until 2026-09-02, which was the coarse pass alone: the confirm
