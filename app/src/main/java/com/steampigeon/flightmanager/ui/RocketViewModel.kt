@@ -2410,14 +2410,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             loggedLandingThisFlight = true
             logFlightEvent(LogEvent.LandingDetected, "locator reported Landed", timeMs)
         }
-        val firedMask = (if (msg.deploymentCh1Stats.and(4) == 4) 1 else 0) or
-                (if (msg.deploymentCh2Stats.and(4) == 4) 2 else 0) or
-                (if (msg.deploymentCh3Stats.and(4) == 4) 4 else 0) or
-                (if (msg.deploymentCh4Stats.and(4) == 4) 8 else 0)
-        val armedMask = (if (msg.deploymentCh1Stats.and(32) == 32) 1 else 0) or
-                (if (msg.deploymentCh2Stats.and(32) == 32) 2 else 0) or
-                (if (msg.deploymentCh3Stats.and(32) == 32) 4 else 0) or
-                (if (msg.deploymentCh4Stats.and(32) == 32) 8 else 0)
+        // Through the one decoder (#52). "Armed" here is live continuity — the same
+        // thing deploy_armed_mask carries from a pre-launch frame's deployStatus.
+        val stats = listOf(msg.deploymentCh1Stats, msg.deploymentCh2Stats,
+            msg.deploymentCh3Stats, msg.deploymentCh4Stats)
+        val firedMask = DeployChannelStats.mask(stats) { it.fired }
+        val armedMask = DeployChannelStats.mask(stats) { it.continuity }
         flightLogRecorder.offer(
             FlightLogRecord.Sample(
                 timestampMs = timeMs,
@@ -2904,14 +2902,16 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     baroStatus = parsed.msg.baroStatus,
                                     imuStatus = parsed.msg.imuStatus,
                                     gpsStatus = parsed.msg.gpsStatus,
-                                    deployChannel1Armed = parsed.msg.deploymentCh1Stats.and(32) == 32,
-                                    deployChannel2Armed = parsed.msg.deploymentCh2Stats.and(32) == 32,
-                                    deployChannel3Armed = parsed.msg.deploymentCh3Stats.and(32) == 32,
-                                    deployChannel4Armed = parsed.msg.deploymentCh4Stats.and(32) == 32,
-                                    channel1Fired = parsed.msg.deploymentCh1Stats.and(4) == 4,
-                                    channel2Fired = parsed.msg.deploymentCh2Stats.and(4) == 4,
-                                    channel3Fired = parsed.msg.deploymentCh3Stats.and(4) == 4,
-                                    channel4Fired = parsed.msg.deploymentCh4Stats.and(4) == 4,
+                                    // Live continuity (bit 6) and fired (bit 3), via the
+                                    // one decoder (#52) — not the post-fire bit and a mode bit.
+                                    deployChannel1Armed = DeployChannelStats.fromByte(parsed.msg.deploymentCh1Stats).continuity,
+                                    deployChannel2Armed = DeployChannelStats.fromByte(parsed.msg.deploymentCh2Stats).continuity,
+                                    deployChannel3Armed = DeployChannelStats.fromByte(parsed.msg.deploymentCh3Stats).continuity,
+                                    deployChannel4Armed = DeployChannelStats.fromByte(parsed.msg.deploymentCh4Stats).continuity,
+                                    channel1Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh1Stats).fired,
+                                    channel2Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh2Stats).fired,
+                                    channel3Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh3Stats).fired,
+                                    channel4Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh4Stats).fired,
                                     drogueDeployDetected = parsed.msg.physicalDeploymentStats.and(1) == 1,
                                     mainDeployDetected = parsed.msg.physicalDeploymentStats.and(2) == 2,
                                     // Guard against a non-finite AGL ever entering UI state:

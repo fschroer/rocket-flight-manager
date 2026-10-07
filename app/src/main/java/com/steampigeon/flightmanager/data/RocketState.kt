@@ -267,15 +267,28 @@ data class DeployChannelStats(
     val fired: Boolean = false,
     val preFireContinuity: Boolean = false,
     val postFireContinuity: Boolean = false,
+    /** Continuity right now. Set only in TelemetryData; the archive never stores it. */
+    val continuity: Boolean = false,
 ) {
     companion object {
         // Bit layout mirrors the locator's Constants.hpp bit_shift_* values.
+        //
+        // The ONE decoder for this byte, from either message (#52). Telemetry was
+        // decoded by hand with `and(4)` for fired — a mode bit — and `and(32)` for
+        // continuity — the post-fire bit, which is 0 until a charge has fired. So
+        // two drogue charges fired on Nike Smoke with "fired" reading 0, and the
+        // channel colors keyed off a bit that meant something else.
         fun fromByte(raw: Int) = DeployChannelStats(
             mode               = DeployMode.fromUByte((raw and 0x07).toUByte()),
             fired              = raw and (1 shl 3) != 0,
             preFireContinuity  = raw and (1 shl 4) != 0,
             postFireContinuity = raw and (1 shl 5) != 0,
+            continuity         = raw and (1 shl 6) != 0,
         )
+
+        /** One bit per channel (1 = ch 1 … 8 = ch 4) of [pick] over the four bytes. */
+        fun mask(bytes: List<Int>, pick: (DeployChannelStats) -> Boolean): Int =
+            bytes.foldIndexed(0) { i, acc, b -> if (pick(fromByte(b))) acc or (1 shl i) else acc }
     }
 }
 
