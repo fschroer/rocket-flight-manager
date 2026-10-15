@@ -1104,14 +1104,18 @@ private fun FlightSpeechAnnouncer(
             // airborne test the next 500 ms tick re-announces both deployments at
             // landing, having just been told it had never announced them.
             if (!flightConcluded && state.flightState.isAirborne()) {
+                // "Opening detected", not "deployed" (#54): the locator infers it from
+                // the descent rate slowing and staying slower, which any drag can do —
+                // Nike Smoke, falling in pieces, read as a drogue. The words claim the
+                // evidence, not a verdict on the recovery.
                 if (state.flightState >= FlightStates.DroguePrimaryEvent && !drogueDeploySpoken && state.drogueDeployDetected) {
                     drogueDeploySpoken = true
-                    announcer.add("Drogue deployed.")
+                    announcer.add("Drogue opening detected.")
                 }
                 if (state.flightState >= FlightStates.MainPrimaryEvent && !mainDeploySpoken && state.mainDeployDetected) {
                     mainDeploySpoken = true
                     drogueDeploySpoken = true
-                    announcer.add("Main deployed.")
+                    announcer.add("Main opening detected.")
                 }
             }
         }
