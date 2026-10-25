@@ -162,6 +162,8 @@ import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.RocketState
 import com.steampigeon.flightmanager.data.SensorHealth
+import com.steampigeon.flightmanager.data.joinSensorNames
+import com.steampigeon.flightmanager.data.sensorFaults
 import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.G_FORCE_MS2
 import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.RAD2DEG
 import com.steampigeon.flightmanager.ui.theme.TelemetryTextStyle
@@ -2250,6 +2252,14 @@ private fun MapControlsColumn(
         // holder of the connection — an Arm must not reach a different rocket).
         val armActionEnabled = (locatorArmedMessageState == LocatorMessageState.Idle ||
             locatorArmedMessageState == LocatorMessageState.AckUpdated) && locatorConnected
+        // ADR-0038 — read here so the note under the readouts and the Arm button
+        // below answer from the same broadcast.
+        val sensorFaults = rocketState.sensorFaults()
+        val failedSensorNames = joinSensorNames(buildList {
+            if (sensorFaults.imuFailed) add(stringResource(R.string.sensor_name_imu))
+            if (sensorFaults.baroFailed) add(stringResource(R.string.sensor_name_baro))
+            if (sensorFaults.gpsFailed) add(stringResource(R.string.sensor_name_gps))
+        })
 
         Column(
             modifier = Modifier
@@ -2465,6 +2475,27 @@ private fun MapControlsColumn(
                 }
             }
 
+            // Sensor failure (ADR-0038). A locator whose IMU, barometer or GPS
+            // failed its power-on check used to restart, so it never stayed on the
+            // air long enough to be shown here; it now boots without the sensor and
+            // reports it. The statistics panel already turns that sensor's lines
+            // red, but red says "unhealthy", not "the locator will refuse to arm" —
+            // and the refusal is the part an operator on the pad needs to read.
+            //
+            // Gated on a live locator: the health bytes describe the boot that sent
+            // them, and a power cycle may have fixed what the last broadcast said.
+            if (lastMessageAge < messageTimeout && sensorFaults.any) {
+                LinkQualityNote(
+                    text = stringResource(R.string.sensor_fault_failed, failedSensorNames) + " " +
+                        stringResource(
+                            if (sensorFaults.armingAllowed) R.string.sensor_fault_gps_only
+                            else R.string.sensor_fault_arming_disabled
+                        ),
+                    color = MaterialTheme.colorScheme.error,
+                    width = noteWidth,
+                )
+            }
+
             // ── Descending action buttons ─────────────────────────────────────
             // Large, clearly labeled touch targets revealed by tapping the panel.
             AnimatedVisibility(
@@ -2570,6 +2601,23 @@ private fun MapControlsColumn(
                                 Toast.makeText(
                                     context,
                                     context.getString(R.string.disarm_in_flight_blocked),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else if (!disarming && !sensorFaults.armingAllowed) {
+                                // The locator refuses ArmRequest without its IMU and
+                                // barometer (ADR-0038). Sending it anyway would end in
+                                // the arm-pending blink timing out with no reason
+                                // given; say the reason instead. Named from the IMU
+                                // and baro only — a failed GPS is not why.
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.arm_blocked_sensor_fault,
+                                        joinSensorNames(buildList {
+                                            if (sensorFaults.imuFailed) add(context.getString(R.string.sensor_name_imu))
+                                            if (sensorFaults.baroFailed) add(context.getString(R.string.sensor_name_baro))
+                                        }),
+                                    ),
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {
