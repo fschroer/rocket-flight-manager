@@ -9,7 +9,8 @@ import java.util.Locale
  * The app-side flight log: what the phone saw, as opposed to what the locator
  * archived.
  *
- * The locator's own archive is the authority on the flight — 20 Hz, GPS-disciplined,
+ * The locator's own archive is the authority on the flight — 50 Hz around launch, main and landing
+ * and 5 Hz between, GPS-disciplined,
  * and downloadable afterwards (see [FlightDataRepository]).  It cannot answer a
  * different class of question, because it does not know any of it: what the RSSI and
  * SNR were at the phone, when the app decided the link had degraded, what it
@@ -22,8 +23,8 @@ import java.util.Locale
  *
  * ## Rate
  *
- * The locator transmits exactly once per second — a 20 Hz superloop
- * (`SAMPLES_PER_SECOND`) whose `case 2` is the only branch that reaches the radio,
+ * The locator transmits exactly once per second — a 50 Hz superloop
+ * (`SAMPLES_PER_SECOND`) whose telemetry slot is the only branch that reaches the radio,
  * so one frame per second, pre-launch or telemetry, armed or not.  Every received
  * frame is logged; at 1 Hz there is nothing to downsample and no reason to.
  *

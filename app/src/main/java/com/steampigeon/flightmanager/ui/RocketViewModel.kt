@@ -189,7 +189,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // original cadence — those points are flagged synthetic and no marker
         // reads their time.
         const val LEGACY_PLACEHOLDER_INTERVAL_MS = 200L
-        const val SAMPLES_PER_SECOND = 20
+        // Locator super-loop rate (firmware SAMPLES_PER_SECOND).  50 since the
+        // locator ADR "50 Hz loop, variable-rate archive and magnetometer": the
+        // archive is 50 Hz around launch, main and landing and 5 Hz elsewhere, so
+        // archived samples are NOT evenly spaced — always use their timestampMs.
+        const val SAMPLES_PER_SECOND = 50
         const val HDOP_SCALE = 10
         const val ALTIMETER_SCALE = 10
         const val ACCELEROMETER_SCALE = 2048
@@ -2145,10 +2149,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     //
     // Distinct from the flight PATH above and from the locator's downloadable
     // archive.  The path is where the rocket went; the archive is what the locator
-    // measured at 20 Hz.  This is what the PHONE saw -- the same 1 Hz frames plus
-    // the receiver's RSSI/SNR/noise-floor reading of each one, plus what the app
-    // decided and said out loud about them.  None of that survives the flight
-    // anywhere else.
+    // measured at 50 Hz (5 Hz on the long descent).  This is what the PHONE
+    // saw -- the same 1 Hz frames plus the receiver's RSSI/SNR/noise-floor
+    // reading of each one, plus what the app decided and said out loud about
+    // them.  None of that survives the flight anywhere else.
 
     val flightLogStore = FlightLogStore(application)
     private val flightLogRecorder = FlightLogRecorder(flightLogStore.sink())
@@ -4078,9 +4082,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
  * **What this does NOT defend against, despite what it used to say here.**  The
  * original rationale had the locator transmitting at ~5 Hz against a ~1 Hz payload
  * refresh, so that four frames in five repeated a fix bit-for-bit.  That is wrong:
- * the locator transmits exactly **once per second**.  `main.c`'s 20 Hz superloop
+ * the locator transmits exactly **once per second**.  `main.c`'s 50 Hz superloop
  * wraps `rocket_service_count` at `SAMPLES_PER_SECOND`, and `Factory.cpp`'s
- * `case 2` is the only branch that reaches the radio — one frame per second,
+ * telemetry slot (`kSlotTelemetry`, 100 ms into the second) is the only branch
+ * that reaches the radio — one frame per second,
  * pre-launch or telemetry, armed or not.  There is no 5x stream and there never
  * was one.
  *

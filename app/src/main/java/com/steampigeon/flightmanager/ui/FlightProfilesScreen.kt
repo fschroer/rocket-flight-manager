@@ -127,8 +127,9 @@ private const val CHART_GRID_COUNT     = 5    // target gridlines per axis
 private const val MAX_EVENT_TEXT_SCALE = 2f
 
 // Upper bound on pinch zoom.  At 25x a 60 s flight shows ~2.4 s across the
-// plot, which is ~48 samples at the 20 Hz archive cadence — past that the
-// trace is just line segments between adjacent samples.
+// plot, which is ~120 samples at the 50 Hz ascent cadence (~48 on a pre-v8,
+// 20 Hz record) — past that the trace is just line segments between adjacent
+// samples.
 private const val MAX_CHART_ZOOM = 25f
 
 /**
@@ -256,7 +257,8 @@ private fun FlightSample.isSane(): Boolean {
 // ============================================================================
 
 // How far an event timestamp may sit from the nearest sample before the event is
-// dropped as unplottable.  Samples are 50 ms apart, so the nearest is normally
+// dropped as unplottable.  Every event the chart marks sits inside a full-rate window of the
+// download plan, where samples are 20–50 ms apart, so the nearest is normally
 // within 25 ms; the slack covers a gap left by packets still in flight (one lost
 // packet = 8 samples = 400 ms).
 private const val EVENT_MATCH_TOLERANCE_MS = 1_000L

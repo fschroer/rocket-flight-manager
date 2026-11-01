@@ -943,7 +943,7 @@ private fun FlightSpeechAnnouncer(
 
     // ── Prepped-and-disarmed alert (ADR-0021 Decision 5, #37) ────────────────
     // The locator judges the condition (vertical, still, e-matches wired, not
-    // armed) at 20 Hz and broadcasts the verdict; this only reacts to it, so the
+    // armed) every loop cycle and broadcasts the verdict; this only reacts to it, so the
     // buzzer at the pad and the voice here can never disagree.
     //
     // Speaks once on the rising edge, then repeats on a fixed cadence while the

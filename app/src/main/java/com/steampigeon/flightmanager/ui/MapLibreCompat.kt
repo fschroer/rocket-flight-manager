@@ -299,7 +299,7 @@ private const val CURTAIN_TARGET_RISER_M = 0.25f
 //
 // Deliberately set high enough NOT to bind on a normal flight, because the term
 // that drives it — summed |altitude change| — cannot tell signal from noise, and
-// that bit hard.  Raw baro at the 20 Hz archive cadence jitters a few meters
+// that bit hard.  Raw baro at the archive's full-rate cadence jitters a few meters
 // sample to sample, and summing ABSOLUTE differences over ~2000 samples turns
 // that jitter into thousands of meters: a 122 m flight measured 244 m of
 // variation clean, but 4000 m with ±3 m of noise.  With the old ceiling of 2000

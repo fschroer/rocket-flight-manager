@@ -565,7 +565,7 @@ data class PrelaunchParsed(
     val noseAxis: NoseAxis,       // uint8_t enum — mounting config (ADR-0021, #36)
     val armed: Boolean,           // uint8_t — stated arm state (ADR-0021, #35)
     // uint8_t — locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
-    // A verdict, not raw inputs: the locator judges it at 20 Hz, this message
+    // A verdict, not raw inputs: the locator judges it every loop cycle (50 Hz), this message
     // arrives at 1 Hz, and re-deriving quiescence from that would be guesswork.
     val padAlert: PadAlertState,
     val padAlertSnoozeMinutes: Int,   // uint8_t, decoded from the same byte
