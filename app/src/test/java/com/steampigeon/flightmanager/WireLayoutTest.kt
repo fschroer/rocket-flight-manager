@@ -181,6 +181,9 @@ class WireLayoutTest {
     @Test fun fullRecordPacketHeaderSize() = assertEquals(25, Protocol.FULL_RECORD_PACKET_HEADER_SIZE)
     @Test fun fullRecordPacketFillsOneLoRaFrame() =
         assertEquals(255, Protocol.FULL_RECORD_PACKET_HEADER_SIZE + Protocol.FULL_RECORD_PAYLOAD_CAPACITY)
+    // A parity frame is always the full buffer: its payload_len is an XOR of its
+    // members' lengths, so the BLE framer must not read it.
+    @Test fun fullRecordParityIsFixedSize() = assertEquals(255, Protocol.FULL_RECORD_PARITY_SIZE)
     @Test fun fullRecordHeaderOffsets() {
         assertEquals(6, Protocol.FULL_RECORD_OFFSET_RECORD_CRC)
         assertEquals(10, Protocol.FULL_RECORD_OFFSET_TOTAL_SAMPLES)

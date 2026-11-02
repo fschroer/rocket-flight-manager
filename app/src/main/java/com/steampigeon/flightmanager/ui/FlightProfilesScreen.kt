@@ -44,7 +44,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -342,8 +344,15 @@ fun FlightProfilesScreen(
 
     // Observe samples and progress directly from the repository so the chart
     // reacts to partial data arriving during a live transfer.
-    val samples   by FlightDataRepository.samples.collectAsState()
+    val quickLookSamples by FlightDataRepository.samples.collectAsState()
     val progress  by FlightDataRepository.progress.collectAsState()
+    // A full record from the phone, or the part of one the background transfer
+    // has delivered so far (ADR "The radio download becomes the primary data
+    // path", decision 6b), takes the place of the quick-look samples.
+    val fullSamples by viewModel.fullRecordSamples.collectAsState()
+    val samples = if (fullSamples.isNotEmpty()) fullSamples else quickLookSamples
+    val awaitingTransfer by viewModel.flightProfileAwaitingTransfer.collectAsState()
+    val transferStatus by viewModel.fullRecordStatus.collectAsState()
 
     // Filter to sane samples only — done once here so every downstream
     // calculation works from a validated list.
@@ -467,11 +476,25 @@ fun FlightProfilesScreen(
                 }
                 Spacer(modifier = modifier.weight(1f))
             }
+            FullRecordTransferStatus(transferStatus)
             Row(
                 modifier = modifier,
                 horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
                 verticalAlignment = Alignment.Bottom
             ) {
+                // Always available, whatever the automatic triggers are set to
+                // (ADR decision 6).  The locator still refuses unless it is
+                // disarmed on the ground, so the button only asks.
+                val running = transferStatus.isRunning()
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        if (running) viewModel.stopFullRecordTransfer() else viewModel.startFullRecordTransfer()
+                    }
+                ) {
+                    Text(stringResource(
+                        if (running) R.string.full_record_stop else R.string.full_record_start))
+                }
                 OutlinedButton(
                     modifier = Modifier.weight(1f),
                     onClick = onCancelButtonClicked
@@ -479,6 +502,17 @@ fun FlightProfilesScreen(
                     Text(stringResource(R.string.return_to_main))
                 }
             }
+        }
+    } else if (awaitingTransfer && fullSamples.isEmpty()) {
+        // Selected while the background transfer works on another record: it is
+        // never joined by a second transfer, so say so instead of starting one.
+        Column(
+            modifier = modifier.fillMaxHeight().padding(16.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(stringResource(R.string.full_record_awaiting))
+            FullRecordTransferStatus(transferStatus)
         }
     } else {
         // ── Chart view ───────────────────────────────────────────────────
@@ -1043,4 +1077,24 @@ private fun DrawScope.chartDeploymentIndicators(
     indicator(8f,  stats.preFireContinuity)
     indicator(24f, stats.fired)
     indicator(40f, stats.postFireContinuity)
+}
+private fun FullRecordTransfer.Status.isRunning() =
+    this is FullRecordTransfer.Status.Waiting || this is FullRecordTransfer.Status.Listing ||
+        this is FullRecordTransfer.Status.Transferring
+
+/** One line on the background full-record transfer, or nothing when it is idle. */
+@Composable
+private fun FullRecordTransferStatus(status: FullRecordTransfer.Status) {
+    val text = when (status) {
+        is FullRecordTransfer.Status.Waiting -> stringResource(R.string.full_record_status_waiting)
+        is FullRecordTransfer.Status.Listing -> stringResource(R.string.full_record_status_listing)
+        is FullRecordTransfer.Status.Transferring -> stringResource(
+            R.string.full_record_status_progress, status.recordIndex, status.recordCount,
+            if (status.totalSamples > 0) status.decoded * 100 / status.totalSamples else 0)
+        is FullRecordTransfer.Status.Finished ->
+            if (status.failed == 0) pluralStringResource(R.plurals.full_record_status_done, status.records, status.records)
+            else stringResource(R.string.full_record_status_done_failed, status.records, status.failed)
+        FullRecordTransfer.Status.Idle -> return
+    }
+    Text(text, modifier = Modifier.padding(vertical = 8.dp))
 }

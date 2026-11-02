@@ -236,4 +236,41 @@
     <string name="flight_log_share_failed">Could not prepare the log for sharing.</string>
     <string name="flight_log_truncated">Showing the first %1$d of %2$d rows. Share or save the log to read all of it.</string>
     <string name="flight_log_open_warning">This log is still being written. It can be shared now; more rows will follow.</string>
+
+    <!-- Background full-record transfer (locator ADR "The radio download becomes the
+         primary data path").  Every claim here is checked against FullRecordTransfer.kt:
+         the automatic starts need a landing seen from this locator, and nothing transfers
+         until the locator is disarmed and on the ground. -->
+    <string name="full_record_notification_title">Transferring flight data</string>
+    <string name="full_record_notification_progress">Flight %1$d of %2$d: %3$d%%</string>
+    <string name="full_record_notification_waiting">Waiting for the locator to be disarmed and in range</string>
+    <string name="full_record_start">Transfer new flight data</string>
+    <string name="full_record_stop">Stop transfer</string>
+    <string name="full_record_awaiting">This flight is waiting its turn in the background transfer and will appear here when it arrives.</string>
+    <string name="full_record_status_waiting">Transfer waiting: the locator must be disarmed, on the ground and in range</string>
+    <string name="full_record_status_listing">Transfer: reading the locator\'s flight list</string>
+    <string name="full_record_status_progress">Transferring flight %1$d of %2$d: %3$d%%</string>
+    <plurals name="full_record_status_done">
+        <item quantity="one">Transfer finished: %d new flight</item>
+        <item quantity="other">Transfer finished: %d new flights</item>
+    </plurals>
+    <string name="full_record_status_done_failed">Transfer finished: %1$d new, %2$d failed their integrity check</string>
+    <string name="full_record_setting_signal">Transfer when the signal is strong</string>
+    <string name="full_record_setting_signal_summary">After a landing, start once the locator is disarmed and has been heard above −100 dBm for 5 seconds</string>
+    <string name="full_record_setting_pickup">Transfer when the rocket is picked up</string>
+    <string name="full_record_setting_pickup_summary">After a landing, start once the locator senses it has been picked up and is then disarmed</string>
+    <!-- Cloud upload of full records (ADR decision 8).  Upload needs a build made with
+         google-services.json; cloud_not_configured is what every other build shows. -->
+    <string name="cloud_title">Cloud backup of flight data</string>
+    <string name="cloud_not_configured">Not available in this build of the app.</string>
+    <string name="cloud_signed_in">Signed in as %1$s</string>
+    <string name="cloud_all_uploaded">Every flight on this phone is uploaded (%1$d)</string>
+    <string name="cloud_waiting_upload">Flights waiting to upload: %1$d</string>
+    <string name="cloud_sign_out">Sign out</string>
+    <string name="cloud_email">Email</string>
+    <string name="cloud_password">Password</string>
+    <string name="cloud_sign_in">Sign in</string>
+    <string name="cloud_create_account">Create account</string>
+    <string name="cloud_sign_in_google">Sign in with Google</string>
+    <string name="cloud_error">Sign-in failed: %1$s</string>
 </resources>

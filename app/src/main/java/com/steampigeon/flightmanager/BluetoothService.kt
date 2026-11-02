@@ -268,13 +268,19 @@ class BluetoothService : Service() {
                 // Parity frames always carry the full payload buffer → fixed size.
                 return FLIGHT_DATA_PARITY_SIZE
             }
-            MsgType.FullRecordData, MsgType.FullRecordParity -> {
-                // Variable-length, data and parity alike: the 25-byte header says
-                // how many payload bytes follow (payload_len at offset 23).  Until
-                // that byte is buffered, ask for the maximum and wait.
+            MsgType.FullRecordData -> {
+                // Variable-length: the 25-byte header says how many payload bytes
+                // follow (payload_len at offset 23).  Until that byte is buffered,
+                // ask for the maximum and wait.
                 if (bytes.size <= Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN) return Protocol.MAX_PACKET_SIZE
                 return Protocol.FULL_RECORD_PACKET_HEADER_SIZE +
                     (bytes[Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN].toInt() and 0xFF)
+            }
+            MsgType.FullRecordParity -> {
+                // Always the full payload buffer, so a fixed 255 B.  Its payload_len
+                // is the XOR of its members' lengths, NOT its own length, so reading
+                // it here would cut the frame short and fail its CRC.
+                return Protocol.FULL_RECORD_PARITY_SIZE
             }
             else -> return Int.MAX_VALUE  // unknown type — skip
         }
@@ -373,6 +379,44 @@ class BluetoothService : Service() {
         frame[4] = (crc and 0xFF).toByte()
         frame[5] = ((crc shr 8) and 0xFF).toByte()
         return btManager.sendData(frame)
+    }
+
+    /**
+     * FullRecordRequest (ADR "The radio download becomes the primary data path"):
+     * page [page] of archive slot [record].  [page] 0xFFFF stops the transfer.
+     * Locator-directed, so it goes out addressed and only with a locator connected.
+     */
+    fun sendFullRecordRequest(record: Int, page: Int): Boolean =
+        sendMessage(MsgType.FullRecordRequest, byteArrayOf(
+            (page and 0xFF).toByte(), ((page shr 8) and 0xFF).toByte(), record.toByte(), 0))
+
+    /** FullRecordAck: the held-packet bitmap of [page] of the record [recordCrc] names. */
+    fun sendFullRecordAck(recordCrc: Long, page: Int, packetCount: Int, bitmap: ByteArray): Boolean {
+        if (bitmap.size != 32) return false
+        return sendMessage(MsgType.FullRecordAck, concatBytes(
+            u32le(recordCrc),
+            byteArrayOf((page and 0xFF).toByte(), ((page shr 8) and 0xFF).toByte(),
+                (packetCount and 0xFF).toByte(), ((packetCount shr 8) and 0xFF).toByte()),
+            bitmap,
+        ))
+    }
+
+    /**
+     * Show a background full-record transfer in the service's own notification,
+     * which is what keeps it running while the app is in the background (ADR
+     * decision 7).  [text] null restores the normal text.
+     */
+    fun showTransferProgress(text: String?, progress: Int = 0, max: Int = 0) {
+        val n = if (text == null) getNotification() else
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getString(R.string.full_record_notification_title))
+                .setContentText(text)
+                .setSmallIcon(R.drawable.rocket)
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .apply { if (max > 0) setProgress(max, progress, false) }
+                .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(1, n)
     }
 
     fun deploymentTest(deploymentChannel: Int): Boolean =

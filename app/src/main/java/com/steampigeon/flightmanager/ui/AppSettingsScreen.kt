@@ -91,6 +91,29 @@ fun AppSettingsScreen(
                 )
                 Text("Enable Speech")
             }
+            // Automatic starts of the background full-record transfer (locator ADR
+            // "The radio download becomes the primary data path", decision 6). Same
+            // row form as the speech setting; the button on the flight-history
+            // screen works whatever these say.
+            val onSignal = viewModel.transferOnSignal.collectAsState().value
+            Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = onSignal, onCheckedChange = { viewModel.setTransferOnSignal(it) })
+                Column {
+                    Text(stringResource(R.string.full_record_setting_signal))
+                    Text(stringResource(R.string.full_record_setting_signal_summary),
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            val onPickup = viewModel.transferOnPickup.collectAsState().value
+            Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = onPickup, onCheckedChange = { viewModel.setTransferOnPickup(it) })
+                Column {
+                    Text(stringResource(R.string.full_record_setting_pickup))
+                    Text(stringResource(R.string.full_record_setting_pickup_summary),
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            CloudAccountSection()
             Spacer(modifier = Modifier.height(16.dp))
             Text("Voice Name:")
             val voices = textToSpeech?.voices

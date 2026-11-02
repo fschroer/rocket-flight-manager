@@ -78,6 +78,9 @@ object Protocol {
     // payload_len 23, record 24.
     const val FULL_RECORD_PACKET_HEADER_SIZE = 25
     const val FULL_RECORD_PAYLOAD_CAPACITY = 230
+    // A parity frame always carries the whole payload buffer (its payload_len is
+    // an XOR of its members' lengths), so it is a fixed 25 + 230 = 255 B.
+    const val FULL_RECORD_PARITY_SIZE = FULL_RECORD_PACKET_HEADER_SIZE + FULL_RECORD_PAYLOAD_CAPACITY
     const val FULL_RECORD_OFFSET_RECORD_CRC = 6
     const val FULL_RECORD_OFFSET_TOTAL_SAMPLES = 10
     const val FULL_RECORD_OFFSET_PAGE = 14
