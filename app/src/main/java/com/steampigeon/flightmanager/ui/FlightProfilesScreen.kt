@@ -46,6 +46,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import com.steampigeon.flightmanager.data.FullRecordHub
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1085,11 +1086,13 @@ private fun FullRecordTransfer.Status.isRunning() =
 /** One line on the background full-record transfer, or nothing when it is idle. */
 @Composable
 private fun FullRecordTransferStatus(status: FullRecordTransfer.Status) {
+    val onCable by FullRecordHub.onCable.collectAsState()
     val text = when (status) {
         is FullRecordTransfer.Status.Waiting -> stringResource(R.string.full_record_status_waiting)
         is FullRecordTransfer.Status.Listing -> stringResource(R.string.full_record_status_listing)
         is FullRecordTransfer.Status.Transferring -> stringResource(
-            R.string.full_record_status_progress, status.recordIndex, status.recordCount,
+            if (onCable) R.string.full_record_status_progress_cable else R.string.full_record_status_progress,
+            status.recordIndex, status.recordCount,
             if (status.totalSamples > 0) status.decoded * 100 / status.totalSamples else 0)
         is FullRecordTransfer.Status.Finished ->
             if (status.failed == 0) pluralStringResource(R.plurals.full_record_status_done, status.records, status.records)

@@ -258,7 +258,8 @@ dependencies {
     implementation(libs.protobuf.java)
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
-    // jSerialComm / usb-serial-for-android removed with the unused USB-serial path.
+    // The full-record transfer over the locator's USB cable (CH340N), ADR-0040 decision 6c.
+    implementation(libs.usb.serial.for1.android)
     implementation(libs.androidx.material.icons.extended)
     // PROTOTYPE: MapLibre offline-satellite evaluation (see prototype/maplibre-offline)
     implementation(libs.maplibre.android)

@@ -22,14 +22,21 @@ package com.steampigeon.flightmanager.data.fullrecord
  * sender) would never tell it so, and the two would loop on the same window
  * forever.  JVM-tested under 10 % loss each way.
  *
- * Triggers (decision 6): pickup, sustained signal, or the button.  Every one is
+ * Over the USB cable (decision 6c) the same controller runs unchanged: the
+ * locator's periodic frames come up the cable instead, its [Link] sends down the
+ * cable, and the locator answers on the path it was last asked on, so a record
+ * moves between radio and cable mid-page and keeps every packet it holds.
+ *
+ * Triggers (decision 6): pickup, sustained signal, the button, or the cable
+ * being plugged in ([onCable]).  Every one is
  * held behind the gates the locator applies itself: disarmed, and on the ground
  * (WaitingLaunch, or Landed).  The automatic triggers additionally need a landing
  * seen from this locator since its last finished transfer: a locator disarmed
  * after landing goes straight back to WaitingLaunch (Factory's pad reset), which
  * on the wire looks exactly like one on the pad before a flight, and a transfer
  * started automatically on the pad would slow every command during prep to the
- * ~5.5 s cycle for nothing.
+ * ~5.5 s cycle for nothing.  The cable and the button are deliberate acts and
+ * need no landing.
  *
  * Pure Kotlin with an injected clock and link, so the JVM tests drive it against
  * a simulated locator.  The ViewModel feeds it frames and hands it a [Link] over
@@ -58,7 +65,7 @@ class FullRecordTransfer(
     /** One archive slot, from FlightMetadata. */
     data class Slot(val record: Int, val timestampS: Long, val apogeeM: Float)
 
-    enum class Trigger { Button, Pickup, Signal }
+    enum class Trigger { Button, Pickup, Signal, Cable }
 
     sealed class Status {
         object Idle : Status()
@@ -96,6 +103,7 @@ class FullRecordTransfer(
     private var signalSinceMs: Long? = null
     private var pickedUpLast = false
     private var pickupFired = false
+    private var cableFired = false
 
     // ---- the run ------------------------------------------------------------
     private var trigger = Trigger.Button
@@ -158,12 +166,15 @@ class FullRecordTransfer(
         // still armed after landing (pickup comes first, then the disarm) is kept
         // until the disarm opens the gate, rather than spent on a run that the
         // armed state would abort at once.
-        if (!active && gateOpen && landingSeen()) {
+        if (!active && gateOpen) {
             when {
+                cableFired -> begin(Trigger.Cable)
+                !landingSeen() -> {}
                 settings.pickupTrigger && pickupFired -> begin(Trigger.Pickup)
                 settings.signalTrigger && signalReady -> begin(Trigger.Signal)
             }
         }
+        if (active) cableFired = false     // a run already going carries on over the cable
         if (active && gateOpen) uplink(nowMs)
         else if (stopPending && gateOpen) { link.sendRequest(cur?.record ?: 0, STOP_PAGE); stopPending = false }
     }
@@ -177,6 +188,12 @@ class FullRecordTransfer(
             plan()
         }
     }
+
+    /**
+     * The USB cable is in and the locator answered over it: start a run at the
+     * next periodic frame the gate allows, or carry on the one running.
+     */
+    fun onCable() { cableFired = true }
 
     /** The user tapped "Transfer new flight data". */
     fun start(trigger: Trigger = Trigger.Button) { if (!active) begin(trigger) }
@@ -252,6 +269,7 @@ class FullRecordTransfer(
     private fun begin(t: Trigger) {
         trigger = t
         pickupFired = false
+        cableFired = false
         signalSinceMs = null
         done = 0; failed = 0
         listingAttempts = 0

@@ -194,6 +194,32 @@ class FullRecordTransferTest {
         assertFalse("everything is on the phone: no restart until the next landing", h.ctl.active)
     }
 
+    @Test fun theCableStartsARunWithNoLandingButOnlyThroughTheGate() {
+        val h = standard()
+        h.sim.armed = true
+        h.ctl.onCable()
+        h.runUntil(10) { false }
+        assertFalse("armed: the cable waits for the disarm", h.ctl.active)
+        h.sim.armed = false
+        h.runUntil(5) { h.ctl.active }
+        assertTrue(h.ctl.active)
+        assertEquals(Trigger.Cable, (h.ctl.status as? Status.Listing)?.trigger ?: (h.ctl.status as? Status.Transferring)?.trigger)
+        h.runUntil { h.ctl.status is Status.Finished }
+        assertEquals(Status.Finished(2, 0), h.ctl.status)
+        assertBitExact(h)
+        h.runUntil(30) { h.ctl.active }
+        assertFalse("still plugged in: one run per plug", h.ctl.active)
+    }
+
+    @Test fun stoppingACableRunDoesNotRestartIt() {
+        val h = standard()
+        h.ctl.onCable()
+        h.runUntil(200) { h.ctl.status is Status.Transferring && (h.ctl.status as Status.Transferring).decoded > 0 }
+        h.ctl.stop()
+        h.runUntil(30) { h.ctl.active }
+        assertFalse(h.ctl.active)
+    }
+
     @Test fun weakSignalDoesNotStartButPickupDoes() {
         val h = standard()
         h.sim.rssi = -110

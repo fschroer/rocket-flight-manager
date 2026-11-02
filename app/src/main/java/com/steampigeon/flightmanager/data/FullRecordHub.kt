@@ -8,6 +8,7 @@ import com.steampigeon.flightmanager.data.fullrecord.FullRecordCodec
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordStore
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer.Status
+import com.steampigeon.flightmanager.data.fullrecord.SerialFrames
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,13 +23,20 @@ private const val TAG = "FullRecordHub"
  * over BluetoothService, and publishes its state for the UI and the service's
  * notification.
  *
+ * Two paths (ADR decision 6c).  While the locator's USB cable is in and the
+ * locator answers over it, the cable drives the transfer: its periodic frames
+ * pace it, its requests and ACKs go down the cable, and the radio's periodic
+ * frames are ignored for it.  The flight list still comes over the radio,
+ * because only the full-record frames work over the cable.  When the cable goes
+ * the radio takes over where it was, with nothing restarted.
+ *
  * An object, not ViewModel state: the transfer must not restart because the
  * Activity was recreated, and there must never be two of it.  Everything is
  * called on the main thread (the packet collector and the UI), so it needs no
  * locking; the transfer itself is pure Kotlin and JVM-tested in
  * `app/src/test/.../fullrecord`.
  */
-object FullRecordHub : FullRecordTransfer.Listener {
+object FullRecordHub : FullRecordTransfer.Listener, UsbLocatorLink.Sink {
 
     @Volatile var service: BluetoothService? = null
     /** Firebase upload, when configured (google-services.json present and signed in). */
@@ -38,6 +46,13 @@ object FullRecordHub : FullRecordTransfer.Listener {
     private var store: FullRecordStore? = null
     private var transfer: FullRecordTransfer? = null
     private var lastNotifyMs = 0L
+    private var cable: UsbLocatorLink? = null
+    /** The locator on the cable, once it has answered there. */
+    private var cableLocatorId: Long? = null
+
+    private val _onCable = MutableStateFlow(false)
+    /** True while the transfer runs over the USB cable. */
+    val onCable: StateFlow<Boolean> = _onCable.asStateFlow()
 
     private val _status = MutableStateFlow<Status>(Status.Idle)
     val status: StateFlow<Status> = _status.asStateFlow()
@@ -53,6 +68,7 @@ object FullRecordHub : FullRecordTransfer.Listener {
         store = s
         transfer = FullRecordTransfer(s, link, this)
         _finished.value = s.finished()
+        cable = UsbLocatorLink(context, this).also { it.start() }
     }
 
     val settings: FullRecordTransfer.Settings? get() = transfer?.settings
@@ -60,8 +76,10 @@ object FullRecordHub : FullRecordTransfer.Listener {
 
     // ---- inputs from the packet collector ---------------------------------------
 
-    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssi: Int, pickedUp: Boolean) =
+    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssi: Int, pickedUp: Boolean) {
+        if (cableLocatorId != null) return             // the cable paces the transfer
         transfer?.onPeriodic(nowMs, locatorId, armed, flightState, rssi, pickedUp)
+    }
 
     fun onFrame(frame: ByteArray) = transfer?.onFrame(frame)
 
@@ -101,6 +119,27 @@ object FullRecordHub : FullRecordTransfer.Listener {
         _finished.value = store?.finished() ?: _finished.value
     }
 
+    // ---- UsbLocatorLink.Sink -------------------------------------------------------
+
+    override fun onCableFrame(frame: ByteArray) {
+        val t = transfer ?: return
+        if (SerialFrames.isFullRecord(frame)) { t.onFrame(frame); return }
+        val p = SerialFrames.periodic(frame) ?: return
+        val first = cableLocatorId == null
+        cableLocatorId = p.locatorId
+        _onCable.value = true
+        // No RSSI on a cable; the lowest value keeps the signal trigger out of it.
+        t.onPeriodic(System.currentTimeMillis(), p.locatorId, p.armed, p.flightState, Int.MIN_VALUE, p.pickedUp)
+        if (first) { log("locator ${"%08X".format(p.locatorId)} on the USB cable"); t.onCable() }
+    }
+
+    override fun onCableLost() {
+        if (cableLocatorId == null) return
+        log("USB cable gone; the transfer continues over the radio")
+        cableLocatorId = null
+        _onCable.value = false
+    }
+
     // ---- FullRecordTransfer.Listener ------------------------------------------------
 
     override fun onStatus(status: Status) {
@@ -137,9 +176,17 @@ object FullRecordHub : FullRecordTransfer.Listener {
     }
 
     private val link = object : FullRecordTransfer.Link {
-        override fun sendRequest(record: Int, page: Int) = service?.sendFullRecordRequest(record, page) == true
-        override fun sendAck(recordCrc: Long, page: Int, packetCount: Int, bitmap: ByteArray) =
-            service?.sendFullRecordAck(recordCrc, page, packetCount, bitmap) == true
+        override fun sendRequest(record: Int, page: Int): Boolean {
+            val id = cableLocatorId
+            if (id != null) return cable?.send(SerialFrames.request(id, record, page)) == true
+            return service?.sendFullRecordRequest(record, page) == true
+        }
+        override fun sendAck(recordCrc: Long, page: Int, packetCount: Int, bitmap: ByteArray): Boolean {
+            val id = cableLocatorId
+            if (id != null) return cable?.send(SerialFrames.ack(id, recordCrc, page, packetCount, bitmap)) == true
+            return service?.sendFullRecordAck(recordCrc, page, packetCount, bitmap) == true
+        }
+        // The flight list and leaving it are radio commands, whichever path the pages take.
         override fun requestListing() = service?.requestFlightProfileMetadata() == true
         override fun exitListing() = service?.exitFlightProfileMode() == true
     }

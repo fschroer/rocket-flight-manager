@@ -250,6 +250,7 @@
     <string name="full_record_status_waiting">Transfer waiting: the locator must be disarmed, on the ground and in range</string>
     <string name="full_record_status_listing">Transfer: reading the locator\'s flight list</string>
     <string name="full_record_status_progress">Transferring flight %1$d of %2$d: %3$d%%</string>
+    <string name="full_record_status_progress_cable">Transferring flight %1$d of %2$d over the USB cable: %3$d%%</string>
     <plurals name="full_record_status_done">
         <item quantity="one">Transfer finished: %d new flight</item>
         <item quantity="other">Transfer finished: %d new flights</item>
