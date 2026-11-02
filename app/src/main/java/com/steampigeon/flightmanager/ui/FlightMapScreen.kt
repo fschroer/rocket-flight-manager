@@ -1158,6 +1158,11 @@ private fun AppDrawerContent(
         // Ungated: the logs are files on the phone, so they are readable with the
         // receiver switched off and out of range — which is where they are read.
         add(DrawerItem(R.string.app_flight_logs, R.drawable.flight_log, NavDestination.AppFlightLogs))
+        // Heard and disarmed, like Flight Profiles and Locator Settings: the
+        // locator starts a simulation only while disarmed (locator ADR-0041), so
+        // a screen behind the armed gate would offer a button that never works.
+        if (locatorActive && !armedState)
+            add(DrawerItem(R.string.simulated_flight, R.drawable.rocket, NavDestination.SimulatedFlight))
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
     }
@@ -1451,7 +1456,11 @@ private fun MapWithOverlays(
                 // to notice. The color already carries the distinction; the motion
                 // now agrees with it.
                 pulse = padAlert != PadAlertState.Quiet,
-                text = (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
+                // A locator-computed simulated flight (locator ADR-0041) says so
+                // first, above everything else the banner carries, for as long as
+                // the locator's telemetry carries the simulated bit.
+                text = (if (rocketState.simulated) stringResource(R.string.simulated_banner) + "\n" else "") +
+                        (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
                         else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed, padAlertSnoozeMinutes)
                         else if (!armedState) "Disarmed" else "") +
                         (if (!armedState && !locatorGPSLock) "\n" else "") +

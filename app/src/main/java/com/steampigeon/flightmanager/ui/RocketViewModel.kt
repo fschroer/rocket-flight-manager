@@ -2814,6 +2814,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     // is what makes it usable for ageing the fields
                                     // only this message carries.
                                     lastPreLaunchDataTime = currentTime,
+                                    // PreLaunchData means no simulation is in flight.
+                                    simulated = false,
                                     // Back on the pad.  PreLaunchData is sent only by
                                     // a disarmed locator whose flight state is
                                     // WaitingLaunch, so its arrival is the locator
@@ -2972,6 +2974,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     channel4Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh4Stats).fired,
                                     drogueDeployDetected = parsed.msg.physicalDeploymentStats.and(1) == 1,
                                     mainDeployDetected = parsed.msg.physicalDeploymentStats.and(2) == 2,
+                                    // A locator-computed simulated flight (locator ADR-0041).
+                                    simulated = (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0,
                                     // Guard against a non-finite AGL ever entering UI state:
                                     // it would render as "NaN" and feed NaN into tilt/descent math.
                                     altitudeAboveGroundLevel = parsed.msg.agl.takeIf { it.isFinite() }

@@ -68,6 +68,7 @@ import com.steampigeon.flightmanager.ui.FlightProfilesScreen
 import com.steampigeon.flightmanager.ui.HomeScreen
 import com.steampigeon.flightmanager.ui.LocatorPasswordDialog
 import com.steampigeon.flightmanager.ui.LocatorSettingsScreen
+import com.steampigeon.flightmanager.ui.SimulatedFlightScreen
 import com.steampigeon.flightmanager.ui.CommunicationScreen
 import com.steampigeon.flightmanager.ui.ReceiverSettingsScreen
 import com.steampigeon.flightmanager.ui.RocketViewModel
@@ -84,6 +85,7 @@ enum class NavDestination(@StringRes val title: Int) {
     ReceiverSettings(title = R.string.receiver_settings),
     Communication(title = R.string.communication),
     DeploymentTest(title = R.string.deployment_test),
+    SimulatedFlight(title = R.string.simulated_flight),
     FlightProfiles(title = R.string.flight_profiles),
     Export(title = R.string.export),
     DownloadMap(title = R.string.download_map),
@@ -104,6 +106,7 @@ private val LINK_SCREENS = setOf(
     NavDestination.Communication,
     NavDestination.DeploymentTest,
     NavDestination.FlightProfiles,
+    NavDestination.SimulatedFlight,
 )
 private const val SCREEN_LINK_HOLD = "screen"
 
@@ -197,7 +200,7 @@ fun RocketApp(
     // TextToSpeech — it enumerates voices and previews them, which is not a flight
     // announcement and does not belong in a flight log.
     val announcer = remember(textToSpeech) {
-        Announcer(textToSpeech, viewModel::logAnnouncement)
+        Announcer(textToSpeech, viewModel::logAnnouncement) { viewModel.rocketState.value.simulated }
     }
 
     DisposableEffect(Unit) {
@@ -432,6 +435,11 @@ fun RocketApp(
             }
             composable(route = NavDestination.DeploymentTest.name) {
                 DeploymentTestScreen(viewModel, bluetoothService,
+                    onCancelButtonClicked = { navigateToStart(navController) }, modifier)
+            }
+            composable(route = NavDestination.SimulatedFlight.name) {
+                SimulatedFlightScreen(viewModel, bluetoothService,
+                    onStarted = { navigateToStart(navController) },
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
             composable(route = NavDestination.DownloadMap.name) {

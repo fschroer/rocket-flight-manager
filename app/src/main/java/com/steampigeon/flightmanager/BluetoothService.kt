@@ -21,6 +21,8 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.SimFlightProfile
+import com.steampigeon.flightmanager.data.SimFlightWire
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_PARITY_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
@@ -421,6 +423,17 @@ class BluetoothService : Service() {
 
     fun deploymentTest(deploymentChannel: Int): Boolean =
         sendMessage(MsgType.DeploymentTestRequest, byteArrayOf(deploymentChannel.toByte()))
+
+    /** Start a simulated flight on the connected locator (locator ADR "An
+     *  app-started simulated flight computed on the locator").  The locator
+     *  refuses silently unless it is disarmed and still on the pad; the app sees
+     *  the result as the simulated bit in telemetry, or its absence. */
+    fun startSimulatedFlight(profile: SimFlightProfile, seed: Int, originLat: Double?, originLon: Double?): Boolean =
+        profile.valid && sendMessage(MsgType.SimFlightRequest, SimFlightWire.start(profile, seed, originLat, originLon))
+
+    /** End a simulated flight.  Never refused by the locator. */
+    fun cancelSimulatedFlight(): Boolean =
+        sendMessage(MsgType.SimFlightRequest, SimFlightWire.cancel())
 
     /** Ask the receiver for its current LoRa channel and device name.
      *  Used when no locator PreLaunchData has been received recently. */

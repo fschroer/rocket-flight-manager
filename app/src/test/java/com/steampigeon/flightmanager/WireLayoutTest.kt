@@ -1,5 +1,6 @@
 package com.steampigeon.flightmanager
 
+import com.steampigeon.flightmanager.data.SimFlightWire
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
 import com.steampigeon.flightmanager.data.FlightEventIndex
@@ -150,10 +151,31 @@ class WireLayoutTest {
     // 9, was 10, since locator ARCHIVE_VERSION 6 (#38) — see METADATA_RECORD_COUNT.
     @Test fun flightMetadataPayloadSize() = assertEquals(90, FLIGHT_METADATA_PAYLOAD_SIZE)
 
-    // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + reserved 1 +
+    // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + flags 1 +
     // present_mask 2 + flight_timestamp_s 4 + event_timestamp_ms[11] 44 +
     // max_altitude_m 4 + deployment_ch_stats[4] 4)
     @Test fun flightEventsPayloadSize() = assertEquals(60, Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE)
+
+    // ── App-started simulated flight (locator ADR-0041) ─────────────────────────
+    // Firmware: static_assert(sizeof(SimFlightRequest) == 30), MsgType 30, offsetof
+    // asserts for every field, FlightEventsMessage::flags at 7, and the telemetry
+    // bit 0x40 beside the picked-up bit 0x80.  The iOS copy owes these (UI_PARITY).
+    @Test fun simFlightRequestType() = assertEquals(30.toUByte(), MsgType.SimFlightRequest.value)
+    @Test fun simFlightRequestSize() =
+        assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.PAYLOAD_SIZE)
+    @Test fun simFlightRequestOffsets() {
+        assertEquals(10, SimFlightWire.OFFSET_APOGEE_M)
+        assertEquals(12, SimFlightWire.OFFSET_ORIGIN_LAT)
+        assertEquals(16, SimFlightWire.OFFSET_ORIGIN_LON)
+        assertEquals(20, SimFlightWire.OFFSET_WIND_FROM_DEG)
+        assertEquals(22, SimFlightWire.OFFSET_SEED)
+        assertEquals(24, SimFlightWire.OFFSET_ACTION)
+        assertEquals(28, SimFlightWire.OFFSET_WIND_MPS)
+    }
+    @Test fun simulatedBits() {
+        assertEquals(0x40, Protocol.TELEMETRY_SIMULATED_BIT)
+        assertEquals(0x01, Protocol.FLIGHT_EVENTS_FLAG_SIMULATED)
+    }
 
     // The event count is baked into the payload size above and into the wire
     // order shared with the firmware's Communication::FlightEvent enum.

@@ -27,6 +27,12 @@ import android.speech.tts.TextToSpeech
 class Announcer(
     private val tts: TextToSpeech?,
     private val onSpoken: (String) -> Unit,
+    /**
+     * True while the locator is flying a simulated flight (locator ADR-0041).
+     * Every callout is then prefixed "Simulated.", so a voice heard from across
+     * the field can never be taken for a real launch, deployment or landing.
+     */
+    private val simulated: () -> Boolean = { false },
 ) {
     /** Interrupts whatever is mid-sentence. For anything that outranks a routine callout. */
     fun flush(text: String) = speak(text, TextToSpeech.QUEUE_FLUSH)
@@ -36,7 +42,12 @@ class Announcer(
 
     fun speak(text: String, queueMode: Int) {
         val engine = tts ?: return
-        onSpoken(text)
-        engine.speak(text, queueMode, null, null)
+        val said = if (simulated()) "$SIMULATED_PREFIX $text" else text
+        onSpoken(said)
+        engine.speak(said, queueMode, null, null)
+    }
+
+    companion object {
+        const val SIMULATED_PREFIX = "Simulated."
     }
 }

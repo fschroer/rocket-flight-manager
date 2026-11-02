@@ -274,4 +274,22 @@
     <string name="cloud_create_account">Create account</string>
     <string name="cloud_sign_in_google">Sign in with Google</string>
     <string name="cloud_error">Sign-in failed: %1$s</string>
+    <!-- Simulated flight (locator ADR "An app-started simulated flight computed on the locator") -->
+    <string name="simulated_flight">Simulated Flight</string>
+    <string name="simulated_banner">SIMULATED</string>
+    <string name="simulated_label">Simulated</string>
+    <string name="sim_flight_explanation">The locator flies a computed flight from these numbers, with its own settings deciding each deployment. It runs only while disarmed, and nothing can fire. Arming ends it.</string>
+    <string name="sim_flight_apogee">Target apogee (m)</string>
+    <string name="sim_flight_burn">Burn time (0.1 s)</string>
+    <string name="sim_flight_drogue">Drogue descent rate (m/s)</string>
+    <string name="sim_flight_main">Main descent rate (m/s)</string>
+    <string name="sim_flight_wind">Wind speed (m/s)</string>
+    <string name="sim_flight_wind_from">Wind from (degrees)</string>
+    <string name="sim_flight_start">Start Simulated Flight</string>
+    <string name="sim_flight_starting">Starting…</string>
+    <string name="sim_flight_cancel">Stop Simulated Flight</string>
+    <string name="sim_flight_canceling">Stopping…</string>
+    <string name="sim_flight_not_started">The locator did not start. It starts only when disarmed, on the pad, standing still and with healthy sensors.</string>
+    <string name="sim_flight_confirm_title">Start a simulated flight?</string>
+    <string name="sim_flight_confirm_text">The locator will report a launch, deployments and a landing that did not happen, and record them as a simulated flight. Do not start one on a rocket at the pad.</string>
 </resources>

@@ -633,6 +633,15 @@ fun FlightProfilesScreen(
                 .fillMaxHeight()
                 .padding(16.dp)
         ) {
+            // A record the locator flew from a formula (locator ADR-0041), marked
+            // by FlightEvents' flags so it is never read as a real flight.
+            if (flightEvents.simulated && flightEvents.record == flightProfileArchivePosition) {
+                Text(
+                    text = stringResource(R.string.simulated_label),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
             // Transfer progress indicator — visible until transfer is complete
             if (!progress.complete && progress.packetCount > 0) {
                 Text(

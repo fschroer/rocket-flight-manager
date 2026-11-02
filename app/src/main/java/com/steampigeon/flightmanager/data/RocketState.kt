@@ -58,7 +58,7 @@ object Protocol {
     const val RECEIVER_INFO_PAYLOAD_SIZE = 24
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
-    // FlightEvents payload: record (1) + reserved (1) + present_mask (2) +
+    // FlightEvents payload: record (1) + flags (1) + present_mask (2) +
     // flight_timestamp_s (4) + event_timestamp_ms[11] (44) + max_altitude_m (4)
     // + deployment_ch_stats[4] (4) = 60.  On-wire struct is 66 with the header.
     const val FLIGHT_EVENTS_PAYLOAD_SIZE = 60
@@ -97,6 +97,13 @@ object Protocol {
     // TelemetryData.physical_deployment_stats bit 7: picked up after landing (bits
     // 0 and 1 stay drogue / main detected).  A background-transfer trigger.
     const val TELEMETRY_PICKED_UP_BIT = 0x80
+    // Bit 6: the locator is flying an app-started simulated flight (locator ADR
+    // "An app-started simulated flight computed on the locator", 0041).
+    const val TELEMETRY_SIMULATED_BIT = 0x40
+    // FlightEventsMessage::flags (was reserved): bit 0 = a simulated record.
+    const val FLIGHT_EVENTS_FLAG_SIMULATED = 0x01
+    // SimFlightRequest: header 6 + target 4 + 20 bytes of profile (SimFlightWire).
+    const val SIM_FLIGHT_REQUEST_SIZE = 30
 }
 
 /**
@@ -143,6 +150,8 @@ data class RocketState(
     val channel4Fired: Boolean = false,
     val drogueDeployDetected: Boolean = false,
     val mainDeployDetected: Boolean = false,
+    /** TelemetryData says the locator is flying a simulated flight (ADR-0041). */
+    val simulated: Boolean = false,
     val altitudeAboveGroundLevel: Float = 0f,
     val accelerometer: Vec3f = Vec3f(0f, 0f, 0f),
     val gyro: Vec3f = Vec3f(0f, 0f, 0f),
@@ -338,6 +347,8 @@ data class FlightEvents(
     val eventTimestampMs: List<Long> = emptyList(),
     val maxAltitudeM: Float = 0f,
     val channelStats: List<DeployChannelStats> = emptyList(),
+    /** An app-started simulated flight (locator ADR-0041): every sensor was synthetic. */
+    val simulated: Boolean = false,
 ) {
     /** Launch wall-clock time, or null if the locator had no GPS fix. */
     val launchDate: ZonedDateTime?
@@ -376,7 +387,7 @@ data class FlightEvents(
             var o = Protocol.HEADER_SIZE
 
             val record      = frame[o].toInt() and 0xFF;  o += 1
-            o += 1                                        // reserved
+            val flags       = frame[o].toInt() and 0xFF;  o += 1   // was reserved, always 0
             val presentMask = le16(frame, o);             o += 2
             val flightTsS   = le32(frame, o);             o += 4
 
@@ -395,6 +406,7 @@ data class FlightEvents(
                 eventTimestampMs = timestamps,
                 maxAltitudeM     = maxAltitude,
                 channelStats     = channelStats,
+                simulated        = (flags and Protocol.FLIGHT_EVENTS_FLAG_SIMULATED) != 0,
             )
         }
 
@@ -530,7 +542,9 @@ enum class MsgType(val value: UByte) {
     FullRecordRequest(26u),     // App→locator: send page N of a record (0xFFFF stops).
     FullRecordData(27u),        // Locator→app: one packet of a page.
     FullRecordParity(28u),      // Locator→app: XOR of up to four data packets.
-    FullRecordAck(29u);         // App→locator: bitmap of the page's packets received.
+    FullRecordAck(29u),         // App→locator: bitmap of the page's packets received.
+    // Start or cancel a simulated flight the locator computes (locator ADR-0041).
+    SimFlightRequest(30u);
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }
