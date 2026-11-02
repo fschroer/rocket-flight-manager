@@ -66,6 +66,34 @@ object Protocol {
     const val DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE = 1
     const val MAX_PACKET_SIZE = 256
     const val DEVICE_NAME_LENGTH = 20
+
+    // ── Paged full-record transfer (firmware FullRecord* in MessageProtocol.hpp,
+    // pinned there by static_assert and here by WireLayoutTest) ───────────────
+    // FullRecordRequest: header 6 + target_locator_id 4 + page 2 + record 1 + reserved 1.
+    const val FULL_RECORD_REQUEST_SIZE = 14
+    const val FULL_RECORD_STOP_PAGE = 0xFFFF
+    // FullRecordData / FullRecordParity: a 25-byte header, then payload_len bytes.
+    // Header offsets: record_crc 6, total_samples 10, page 14, packet_count 16,
+    // packet_index 18, parity_mask 19, first_in_page 20, sample_count 22,
+    // payload_len 23, record 24.
+    const val FULL_RECORD_PACKET_HEADER_SIZE = 25
+    const val FULL_RECORD_PAYLOAD_CAPACITY = 230
+    const val FULL_RECORD_OFFSET_RECORD_CRC = 6
+    const val FULL_RECORD_OFFSET_TOTAL_SAMPLES = 10
+    const val FULL_RECORD_OFFSET_PAGE = 14
+    const val FULL_RECORD_OFFSET_PACKET_COUNT = 16
+    const val FULL_RECORD_OFFSET_PACKET_INDEX = 18
+    const val FULL_RECORD_OFFSET_PARITY_MASK = 19
+    const val FULL_RECORD_OFFSET_FIRST_IN_PAGE = 20
+    const val FULL_RECORD_OFFSET_SAMPLE_COUNT = 22
+    const val FULL_RECORD_OFFSET_PAYLOAD_LEN = 23
+    const val FULL_RECORD_OFFSET_RECORD = 24
+    // FullRecordAck: header 6 + target 4 + record_crc 4 + page 2 + packet_count 2 + bitmap 32.
+    const val FULL_RECORD_ACK_SIZE = 50
+    const val FULL_RECORD_SAMPLES_PER_PAGE = 512
+    // TelemetryData.physical_deployment_stats bit 7: picked up after landing (bits
+    // 0 and 1 stay drogue / main detected).  A background-transfer trigger.
+    const val TELEMETRY_PICKED_UP_BIT = 0x80
 }
 
 /**
@@ -491,7 +519,15 @@ enum class MsgType(val value: UByte) {
     // receiver sizes payloads from msg_type alone, so growing it would desync a
     // receiver predating the change on the ordinary scan too. See the firmware's
     // MessageProtocol.hpp, which carries the same note.
-    ChannelSurveyCancelRequest(25u);
+    ChannelSurveyCancelRequest(25u),
+    // Paged, bit-exact full-record transfer (locator ADR "The radio download
+    // becomes the primary data path").  Layouts in Protocol.FULL_RECORD_*.
+    // Framed and relayed now; the background transfer that sends and handles
+    // them is the next step and is not in this app yet.
+    FullRecordRequest(26u),     // App→locator: send page N of a record (0xFFFF stops).
+    FullRecordData(27u),        // Locator→app: one packet of a page.
+    FullRecordParity(28u),      // Locator→app: XOR of up to four data packets.
+    FullRecordAck(29u);         // App→locator: bitmap of the page's packets received.
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

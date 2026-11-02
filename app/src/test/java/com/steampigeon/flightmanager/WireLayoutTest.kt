@@ -162,6 +162,45 @@ class WireLayoutTest {
     // FlightDataPacket: max LoRa frame = 256 on the app side
     @Test fun maxPacketSize() = assertEquals(256, Protocol.MAX_PACKET_SIZE)
 
+    // ── Paged full-record transfer ──────────────────────────────────────────────
+    // Firmware: static_assert(sizeof(FullRecordRequest) == 14), (FullRecordPacketHeader
+    // == 25), (kFullRecordPayloadSize == 230), (FullRecordAck == 50), plus offsetof
+    // asserts for every header field.  The iOS WireLayoutTests.swift pins the same.
+    @Test fun fullRecordMessageTypeValues() {
+        assertEquals(26.toUByte(), MsgType.FullRecordRequest.value)
+        assertEquals(27.toUByte(), MsgType.FullRecordData.value)
+        assertEquals(28.toUByte(), MsgType.FullRecordParity.value)
+        assertEquals(29.toUByte(), MsgType.FullRecordAck.value)
+    }
+    @Test fun fullRecordRequestSize() =
+        assertEquals(Protocol.FULL_RECORD_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + 2 + 1 + 1)
+    @Test fun fullRecordRequestSizeMatchesFirmware() = assertEquals(14, Protocol.FULL_RECORD_REQUEST_SIZE)
+    @Test fun fullRecordAckSize() =
+        assertEquals(Protocol.FULL_RECORD_ACK_SIZE, Protocol.HEADER_SIZE + targetIdSize + 4 + 2 + 2 + 32)
+    @Test fun fullRecordAckSizeMatchesFirmware() = assertEquals(50, Protocol.FULL_RECORD_ACK_SIZE)
+    @Test fun fullRecordPacketHeaderSize() = assertEquals(25, Protocol.FULL_RECORD_PACKET_HEADER_SIZE)
+    @Test fun fullRecordPacketFillsOneLoRaFrame() =
+        assertEquals(255, Protocol.FULL_RECORD_PACKET_HEADER_SIZE + Protocol.FULL_RECORD_PAYLOAD_CAPACITY)
+    @Test fun fullRecordHeaderOffsets() {
+        assertEquals(6, Protocol.FULL_RECORD_OFFSET_RECORD_CRC)
+        assertEquals(10, Protocol.FULL_RECORD_OFFSET_TOTAL_SAMPLES)
+        assertEquals(14, Protocol.FULL_RECORD_OFFSET_PAGE)
+        assertEquals(16, Protocol.FULL_RECORD_OFFSET_PACKET_COUNT)
+        assertEquals(18, Protocol.FULL_RECORD_OFFSET_PACKET_INDEX)
+        assertEquals(19, Protocol.FULL_RECORD_OFFSET_PARITY_MASK)
+        assertEquals(20, Protocol.FULL_RECORD_OFFSET_FIRST_IN_PAGE)
+        assertEquals(22, Protocol.FULL_RECORD_OFFSET_SAMPLE_COUNT)
+        assertEquals(23, Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN)
+        assertEquals(24, Protocol.FULL_RECORD_OFFSET_RECORD)
+    }
+    @Test fun fullRecordPageAndStop() {
+        assertEquals(512, Protocol.FULL_RECORD_SAMPLES_PER_PAGE)
+        assertEquals(0xFFFF, Protocol.FULL_RECORD_STOP_PAGE)
+    }
+    // Rides in a spare bit of physical_deployment_stats, so TelemetryData keeps its
+    // size (77) and every existing parser keeps working; bits 0/1 are deployments.
+    @Test fun pickedUpBitIsSpare() = assertEquals(0x80, Protocol.TELEMETRY_PICKED_UP_BIT)
+
     // ---------------------------------------------------------------------
     //  LocatorCfgChgRequest body — the one message the app builds byte by byte
     // ---------------------------------------------------------------------

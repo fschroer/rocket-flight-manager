@@ -268,6 +268,14 @@ class BluetoothService : Service() {
                 // Parity frames always carry the full payload buffer → fixed size.
                 return FLIGHT_DATA_PARITY_SIZE
             }
+            MsgType.FullRecordData, MsgType.FullRecordParity -> {
+                // Variable-length, data and parity alike: the 25-byte header says
+                // how many payload bytes follow (payload_len at offset 23).  Until
+                // that byte is buffered, ask for the maximum and wait.
+                if (bytes.size <= Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN) return Protocol.MAX_PACKET_SIZE
+                return Protocol.FULL_RECORD_PACKET_HEADER_SIZE +
+                    (bytes[Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN].toInt() and 0xFF)
+            }
             else -> return Int.MAX_VALUE  // unknown type — skip
         }
         return Protocol.HEADER_SIZE + payloadSize
