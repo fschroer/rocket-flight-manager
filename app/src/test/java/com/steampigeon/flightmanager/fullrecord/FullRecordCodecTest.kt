@@ -20,12 +20,15 @@ import kotlin.random.Random
  * `sender_fixture.bin` comes from the locator repo's Tools/full-record-fixture:
  * it runs FullRecordSender.hpp and FullRecordCodec.hpp over two synthetic
  * records (a realistic 1,100-sample one with every invalid marker in it, and a
- * 300-sample one of pure noise, the codec's worst case) plus an empty slot, and
- * the locator's FormatFloat over 4,100 values.  Regenerate it whenever either
+ * 300-sample one of pure noise, the codec's worst case) plus an empty slot, the
+ * locator's FormatFloat over 4,100 values, and its FormatDeg1e7 over 2,015.  Regenerate it whenever either
  * side of the codec changes; a mismatch here is a wire-format break.
  */
 class FullRecordCodecTest {
-    private class Fixture(val frames: List<ByteArray>, val crcs: List<Long>, val fmt: List<Triple<Float, Int, String>>)
+    private class Fixture(
+        val frames: List<ByteArray>, val crcs: List<Long>, val fmt: List<Triple<Float, Int, String>>,
+        val deg: List<Pair<Int, String>>,
+    )
 
     private val fx: Fixture by lazy {
         val raw = javaClass.classLoader!!.getResourceAsStream("fullrecord/sender_fixture.bin")!!.readBytes()
@@ -38,7 +41,11 @@ class FullRecordCodecTest {
             val v = Float.fromBits(b.int); val frac = b.get().toInt(); val l = b.get().toInt()
             Triple(v, frac, String(ByteArray(l).also { s -> b.get(s) }, Charsets.US_ASCII))
         }
-        Fixture(frames, crcs, fmt)
+        val deg = List(b.int) {
+            val v = b.int; val l = b.get().toInt()
+            v to String(ByteArray(l).also { s -> b.get(s) }, Charsets.US_ASCII)
+        }
+        Fixture(frames, crcs, fmt, deg)
     }
 
     private fun packets(record: Int) = fx.frames.mapNotNull { FullRecordPacket.parse(it) }.filter { it.record == record }
@@ -145,6 +152,13 @@ class FullRecordCodecTest {
             if (sb.toString() != want) { if (bad++ < 5) println("fmt($v, $frac) = $sb, locator $want") }
         }
         assertEquals(0, bad)
+    }
+
+    @Test fun latLonMatchTheLocatorExactly() {
+        val sb = StringBuilder()
+        for ((v, want) in fx.deg) { sb.setLength(0); FullRecordCsv.deg1e7(sb, v); assertEquals("$v", want, sb.toString()) }
+        sb.setLength(0); FullRecordCsv.deg1e7(sb, -1191103439)
+        assertEquals("-119.1103439", sb.toString())                // every stored digit
     }
 
     @Test fun csvRowCarriesBlanksForInvalidFields() {

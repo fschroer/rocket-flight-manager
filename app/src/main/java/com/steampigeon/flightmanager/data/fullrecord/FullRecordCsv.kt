@@ -11,10 +11,13 @@ import java.io.Writer
  * The number formatting is a port of the locator's `FormatFloat`, in Float
  * arithmetic, not String.format: the locator converts every value to float and
  * rounds with its own add-a-half, and a "better" formatter would print different
- * digits for the same record.  Two consequences carried over on purpose:
- *   - a NaN (fixed-point INT32_MIN) prints as 0.00, as it does on the locator;
- *   - lat/lon are converted to FLOAT before printing, so their 7 decimals carry
- *     only float precision (about 0.4 m).  The .bin keeps the exact 1e-7 degrees.
+ * digits for the same record.  One consequence carried over on purpose: a NaN
+ * (fixed-point INT32_MIN) prints as 0.00, as it does on the locator.
+ *
+ * Lat/lon are the exception: both sides print them from the stored integer
+ * (degrees x 1e-7) with no float in between (the locator's FormatDeg1e7), so
+ * all 7 decimals are exact.  Until 2026-11-02 the export passed them through
+ * float and kept only ~0.4 m.
  */
 object FullRecordCsv {
     const val HEADER = "time_ms,raw_baro_agl_m,fused_agl_m,raw_baro_vel_mps,fused_vspeed_mps," +
@@ -45,8 +48,8 @@ object FullRecordCsv {
         fixed(sb, i32(b, o + 16), 100f, 2); sb.append(',')    // fused_vspeed_cms
         for (a in 0 until 3) { fixed(sb, i32(b, o + 20 + 4 * a), 1000f, 3); sb.append(',') }   // accel_mg
         for (a in 0 until 3) { fixed(sb, i32(b, o + 32 + 4 * a), 100f, 2); sb.append(',') }    // gyro_cdps
-        fmt(sb, (i32(b, o + 44) / 1.0e7).toFloat(), 7); sb.append(',')
-        fmt(sb, (i32(b, o + 48) / 1.0e7).toFloat(), 7); sb.append(',')
+        deg1e7(sb, i32(b, o + 44)); sb.append(',')
+        deg1e7(sb, i32(b, o + 48)); sb.append(',')
         sb.append(u8(b, o + 76)).append(',')                  // flight_state
         sb.append(u8(b, o + 77)).append(',')                  // armed
         sb.append(u8(b, o + 78)).append(',')                  // ekf_health
@@ -87,6 +90,15 @@ object FullRecordCsv {
 
     private fun fixed(sb: StringBuilder, q: Int, scale: Float, frac: Int) =
         fmt(sb, if (q == FIXED_INVALID) Float.NaN else q.toFloat() / scale, frac)
+
+    /** The locator's FormatDeg1e7: degrees x 1e-7 as exact decimal degrees. */
+    internal fun deg1e7(sb: StringBuilder, v: Int) {
+        val m = if (v < 0) { sb.append('-'); -(v.toLong()) } else v.toLong()
+        sb.append(m / 10_000_000L).append('.')
+        val frac = (m % 10_000_000L).toString()
+        repeat(7 - frac.length) { sb.append('0') }
+        sb.append(frac)
+    }
 
     /** The locator's FormatFloat, in the same float arithmetic. */
     internal fun fmt(sb: StringBuilder, v0: Float, frac: Int) {
