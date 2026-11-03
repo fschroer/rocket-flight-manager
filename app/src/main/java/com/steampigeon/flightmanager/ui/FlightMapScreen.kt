@@ -1164,7 +1164,7 @@ private fun AppDrawerContent(
         // locator starts a simulation only while disarmed (locator ADR-0041), so
         // a screen behind the armed gate would offer a button that never works.
         if (locatorActive && !armedState)
-            add(DrawerItem(R.string.simulated_flight, R.drawable.rocket, NavDestination.SimulatedFlight))
+            add(DrawerItem(R.string.simulated_flight, R.drawable.rocket_md, NavDestination.SimulatedFlight))
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
     }
