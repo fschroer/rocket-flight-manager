@@ -2163,7 +2163,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                     else -> null
                 }
             }
-            if (points.isNotEmpty()) _flightPath.value = points
+            // A point saved before positions were checked at parse time could be
+            // out of range, and MapLibre throws on it every launch.
+            val usable = points.filter { usableFix(it.latitude, it.longitude) == it.latitude to it.longitude }
+            if (usable.isNotEmpty()) _flightPath.value = usable
         } catch (_: Exception) {}
     }
 
@@ -4011,10 +4014,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private fun parsePrelaunch(frame: ByteArray): PrelaunchParsed {
         var o = 6 // start after PacketHeader
 
-        val latitude = Bytes.f64(frame, o); o += 8
-        val longitude = Bytes.f64(frame, o); o += 8
-        val rawLatitude = Bytes.f64(frame, o); o += 8
-        val rawLongitude = Bytes.f64(frame, o); o += 8
+        // Out-of-range positions become the 0,0 "no fix" placeholder: see usableFix.
+        val (latitude, longitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
+        val (rawLatitude, rawLongitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
         val satellites = Bytes.u8(frame[o]); o += 1
         val hacc = Bytes.f32(frame, o); o += 4
 
@@ -4083,8 +4085,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun parseTelemetry(frame: ByteArray): TelemetryParsed {
         var o = 6
 
-        val latitude = Bytes.f64(frame, o); o += 8
-        val longitude = Bytes.f64(frame, o); o += 8
+        val (latitude, longitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
         val satellites = Bytes.u8(frame[o]); o += 1
         val hacc = Bytes.f32(frame, o); o += 4
 
@@ -4378,6 +4379,20 @@ internal fun FlightStates.isAirborne() =
  * ordinary use — that was the recognition gate dropping all telemetry (see
  * restoreProvisionalRecognition), not this rule.
  */
+/**
+ * A received position, or the 0,0 "no fix" placeholder if it could not be one.
+ *
+ * MapLibre's LatLng throws on a latitude outside -90..90 (NaN included), and
+ * the map built one straight from telemetry: a single bad frame killed the app
+ * ("latitude must be between -90 and 90", Frank, 2026-11-03). Every screen
+ * already treats 0,0 as no fix, so the frame keeps its other fields and the map
+ * waits for the next good position. Both halves go together: a good longitude
+ * with a NaN latitude is not half a fix.
+ */
+internal fun usableFix(lat: Double, lon: Double): Pair<Double, Double> =
+    if (lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0) lat to lon
+    else 0.0 to 0.0
+
 internal fun startsNewFlight(previous: FlightStates, current: FlightStates) =
     previous.isGrounded() && current.isAirborne()
 
