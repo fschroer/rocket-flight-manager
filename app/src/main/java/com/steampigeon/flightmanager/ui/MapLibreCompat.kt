@@ -340,7 +340,9 @@ private const val TICK_HALF_WIDTH_M = 1.6
 private const val TICK_HALF_LENGTH_M = 0.4
 
 // Ceiling on marker count.  A recording left running for an hour would otherwise
-// emit 3600 posts, all rebuilt on every telemetry message.
+// emit 3600 posts, all rebuilt on every telemetry message.  The NEWEST are kept:
+// a trace carried over several flights used to fill the cap with the old ones
+// and draw the flight in the air with no marks at all (Frank, 2026-11-03).
 private const val TICK_MAX_COUNT = 600
 
 // Rocket marker icons, pre-tinted per marker state.  Separate images rather than
@@ -1002,7 +1004,7 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
     // meaningful time axis to mark up.
     if (endMs <= startMs) return FeatureCollection.fromFeatures(emptyList())
 
-    val features = ArrayList<Feature>()
+    val features = ArrayDeque<Feature>()
     val metersPerDegLat = 111_320.0
     // The same curve the curtain is built from.  Interpolating a mark linearly
     // while the wall beside it curves would stand the post's top off the wall's
@@ -1011,7 +1013,7 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
     var index = firstReal    // walks forward with the marks; both are ordered
 
     var elapsed = TICK_INTERVAL_MS
-    while (startMs + elapsed <= endMs && features.size < TICK_MAX_COUNT) {
+    while (startMs + elapsed <= endMs) {
         val markMs = startMs + elapsed
         elapsed += TICK_INTERVAL_MS
 
@@ -1060,13 +1062,14 @@ internal fun secondMarkers(path: List<PathPoint>): FeatureCollection {
         val ring = listOf(
             corner(-1, +1), corner(+1, +1), corner(+1, -1), corner(-1, -1), corner(-1, +1),
         )
-        features.add(
+        features.addLast(
             Feature.fromGeometry(Polygon.fromLngLats(listOf(ring))).apply {
                 addNumberProperty("height", alt)
             }
         )
+        if (features.size > TICK_MAX_COUNT) features.removeFirst()
     }
-    return FeatureCollection.fromFeatures(features)
+    return FeatureCollection.fromFeatures(features.toList())
 }
 
 /**

@@ -2800,6 +2800,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             // PreLaunchData means WaitingLaunch (flight state 0).
                             FullRecordHub.onPeriodic(currentTime, parsed.msg.locatorId, parsed.msg.armed,
                                 FullRecordTransfer.FLIGHT_STATE_WAITING_LAUNCH, parsed.msg.rssi, pickedUp = false)
+                            // The pad, seen.  PreLaunchData comes only from a disarmed
+                            // locator in WaitingLaunch, so an app started or restarted
+                            // with the rocket on the pad now counts it as grounded, and
+                            // the launch that follows clears the old trace.  Before,
+                            // only a TelemetryData frame counted, and the first one such
+                            // an app heard was already Launched.  A restart mid-flight
+                            // hears no PreLaunchData, so its protection stands.
+                            _previousFlightState = FlightStates.WaitingLaunch
+                            flightStateObserved = true
                             // Prepped-and-disarmed verdict (#37), inside the same
                             // connected-locator gate so a bystander cannot raise it.
                             BluetoothManagerRepository.updatePadAlert(parsed.msg.padAlert)
@@ -3000,15 +3009,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             val newFlightState = parsed.msg.flightState
                             if (flightStateObserved &&
                                 startsNewFlight(_previousFlightState, newFlightState)) {
+                                // A launch erases every trace, as the map's Reset does
+                                // (Frank, 2026-11-03): the live track, a displayed
+                                // archived track, and a paused recording.  The record
+                                // itself is kept; Flight Profiles can draw it again.
                                 _flightPath.value = emptyList()
                                 saveFlightPath()
                                 landingConcludedThisFlight = false
                                 landedStatusReceived = false
-                                // Fall back to the live track. An archived record substitutes
-                                // for the live path while displayed, so a new flight left on
-                                // the archived source would draw the old record and none of
-                                // the flight now in the air.  The download itself is kept.
+                                _archivedFlightPath.value = emptyList()
                                 _showArchivedPath.value = false
+                                _isFlightPathRecording.value = true
                                 // Opened BEFORE this frame is logged, so the frame that
                                 // proved the launch lands after the launch marker rather
                                 // than in the pre-roll ahead of it.
