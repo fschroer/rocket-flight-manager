@@ -91,7 +91,7 @@ class FullRecordTransferTest {
             now += if (burst.isEmpty()) 1_000 else 5_500
             for (f in burst) if (rng.nextDouble() >= lossDown) ctl.onFrame(f)
             if (rng.nextDouble() >= lossDown)
-                ctl.onPeriodic(now, id, sim.armed, sim.flightState, sim.rssi, sim.pickedUp)
+                ctl.onPeriodic(now, id, sim.armed, sim.flightState, sim.rssi, sim.pickedUp, sim.simulated)
         }
 
         fun runUntil(maxCycles: Int = 20_000, cond: () -> Boolean): Int {
@@ -192,6 +192,21 @@ class FullRecordTransferTest {
 
         h.runUntil(30) { h.ctl.active }
         assertFalse("everything is on the phone: no restart until the next landing", h.ctl.active)
+    }
+
+    // Locator ADR-0041: a simulated flight lands disarmed, so without this the
+    // signal trigger fired the moment it landed (first hardware run, 2026-11-03).
+    @Test fun aSimulatedLandingStartsNothing() {
+        val h = standard()
+        h.sim.rssi = -70
+        h.sim.simulated = true; h.sim.flightState = 8                      // simulated, landed, disarmed
+        h.runUntil(30) { h.ctl.active }
+        assertFalse("simulated landing: no automatic start", h.ctl.active)
+        h.sim.simulated = false; h.sim.flightState = 0                     // back on the pad
+        h.runUntil(30) { h.ctl.active }
+        assertFalse("and nothing after it either", h.ctl.active)
+        h.ctl.start()
+        assertTrue("the button still works", h.ctl.active)
     }
 
     @Test fun theCableStartsARunWithNoLandingButOnlyThroughTheGate() {

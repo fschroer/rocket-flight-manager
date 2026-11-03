@@ -2942,7 +2942,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             FullRecordHub.onPeriodic(currentTime, parsed.msg.locatorId, parsed.msg.armed,
                                 parsed.msg.flightState.flightStates.toInt(), parsed.msg.rssi,
                                 pickedUp = parsed.msg.physicalDeploymentStats and
-                                    Protocol.TELEMETRY_PICKED_UP_BIT != 0)
+                                    Protocol.TELEMETRY_PICKED_UP_BIT != 0,
+                                simulated = parsed.msg.physicalDeploymentStats and
+                                    Protocol.TELEMETRY_SIMULATED_BIT != 0)
                             // TelemetryData carries no pad_alert — it is an on-pad
                             // condition and this message means armed or in flight.
                             // Cleared explicitly because PreLaunchData stops arriving
@@ -3180,20 +3182,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 _connectedLocatorId.value?.let {
                                     FullRecordHub.onListing(it, FlightDataRepository.metadata.value)
                                 }
-                                _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
-                                // Expose parsed metadata to the UI via the existing _flightProfileMetadata flow.
-                                // FlightDataRepository.metadata maps directly to FlightProfileMetadata used by the UI.
-                                _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
-                                    FlightProfileMetadata(
-                                        position    = record.position,
-                                        date        = if (record.timestampS > 0L)
-                                                          java.time.Instant.ofEpochSecond(record.timestampS)
-                                                              .atZone(java.time.ZoneId.systemDefault())
-                                                      else null,
-                                        apogee      = record.apogeeM,
-                                        timeToDrogue = record.flightTimeMs / 1000f,
-                                    )
-                                }
+                                publishFlightMetadata()
                             }
                         }
 
@@ -3785,6 +3774,24 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** The repository's flight list, published to the Flight Profiles screen. */
+    private fun publishFlightMetadata() {
+        _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
+        // Expose parsed metadata to the UI via the existing _flightProfileMetadata flow.
+        // FlightDataRepository.metadata maps directly to FlightProfileMetadata used by the UI.
+        _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
+            FlightProfileMetadata(
+                position    = record.position,
+                date        = if (record.timestampS > 0L)
+                                  java.time.Instant.ofEpochSecond(record.timestampS)
+                                      .atZone(java.time.ZoneId.systemDefault())
+                              else null,
+                apogee      = record.apogeeM,
+                timeToDrogue = record.flightTimeMs / 1000f,
+            )
+        }
+    }
+
     /**
      * Fetch the flight-record list, re-requesting with exponential backoff until
      * the locator answers.
@@ -3802,6 +3809,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun fetchFlightProfileMetadata(service: BluetoothService) {
         var backoffMs = METADATA_RETRY_INITIAL_MS
         var attempt = 0
+
+        // A background full-record transfer is running, and it began from this
+        // locator's list, which the repository still holds.  Asking again would
+        // compete with the transfer for the receiver's one forwarding slot (each
+        // periodic frame carries one uplink, the transfer's ACK), and the request
+        // rarely got through.  Show the list it already has.
+        if (FullRecordHub.status.value is FullRecordTransfer.Status.Transferring &&
+            FlightDataRepository.metadata.value.isNotEmpty()) {
+            publishFlightMetadata()
+            return
+        }
 
         // Exits by cancellation, or by an explicit return below.
         while (true) {

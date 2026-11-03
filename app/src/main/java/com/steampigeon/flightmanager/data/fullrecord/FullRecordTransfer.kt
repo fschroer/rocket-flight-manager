@@ -139,12 +139,15 @@ class FullRecordTransfer(
      * A PreLaunchData or TelemetryData frame from the CONNECTED locator.
      * [flightState] is the FlightStates value (PreLaunchData is WaitingLaunch).
      */
-    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssiDbm: Int, pickedUp: Boolean) {
+    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssiDbm: Int, pickedUp: Boolean,
+                   simulated: Boolean = false) {
         if (this.locatorId != locatorId) switchLocator(locatorId)
         val onGround = flightState == FLIGHT_STATE_WAITING_LAUNCH || flightState == FLIGHT_STATE_LANDED
         gateOpen = !armed && onGround
 
-        if (flightState == FLIGHT_STATE_LANDED) setLandingSeen(true)
+        // A simulated landing (locator ADR-0041) is not a rocket to recover: it
+        // must not start an automatic transfer.  The button still can.
+        if (flightState == FLIGHT_STATE_LANDED && !simulated) setLandingSeen(true)
         if (armed || !onGround) {
             // Armed or flying: the locator forgets its side (the slot may be
             // rewritten), so ours stops too.  Partials stay on disk, keyed by CRC.

@@ -76,12 +76,33 @@ object FullRecordHub : FullRecordTransfer.Listener, UsbLocatorLink.Sink {
 
     // ---- inputs from the packet collector ---------------------------------------
 
-    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssi: Int, pickedUp: Boolean) {
+    fun onPeriodic(nowMs: Long, locatorId: Long, armed: Boolean, flightState: Int, rssi: Int, pickedUp: Boolean,
+                   simulated: Boolean = false) {
         if (cableLocatorId != null) return             // the cable paces the transfer
-        transfer?.onPeriodic(nowMs, locatorId, armed, flightState, rssi, pickedUp)
+        transfer?.onPeriodic(nowMs, locatorId, armed, flightState, rssi, pickedUp, simulated)
     }
 
-    fun onFrame(frame: ByteArray) = transfer?.onFrame(frame)
+    /** When the last full-record frame arrived, for [radioTransferLive]. */
+    @Volatile private var lastFrameMs = 0L
+
+    fun onFrame(frame: ByteArray) {
+        lastFrameMs = System.currentTimeMillis()
+        transfer?.onFrame(frame)
+    }
+
+    /**
+     * True while a transfer is running over the radio and the locator was heard
+     * from recently, by its periodic frame or a record frame.  The locator then
+     * sends its periodic frame once per burst cycle, about every 5.5 s, not once
+     * a second, so a 2-3 s silence is the transfer and not a lost locator.
+     */
+    fun radioTransferLive(nowMs: Long, lastPeriodicMs: Long): Boolean {
+        if (_onCable.value || _status.value !is Status.Transferring) return false
+        return nowMs - maxOf(lastFrameMs, lastPeriodicMs) < RADIO_TRANSFER_SILENCE_MS
+    }
+
+    /** Longer than one burst cycle, with one cycle's loss to spare. */
+    private const val RADIO_TRANSFER_SILENCE_MS = 12_000L
 
     fun onListing(locatorId: Long, records: List<FlightRecordMetadata>) =
         transfer?.onListing(locatorId, records.map {

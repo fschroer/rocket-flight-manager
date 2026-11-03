@@ -156,6 +156,8 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentCharges
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.FlightStates
+import com.steampigeon.flightmanager.data.FullRecordHub
+import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.PadAlertState
@@ -725,8 +727,12 @@ fun HomeScreen(
     // the app asked it for the record (#49), so its silence must not read as a
     // missing locator: the menu keeps the locator's screens, and opening one
     // pauses the download.
+    // The background full-record transfer (ADR-0040) is the same case: over the
+    // radio the locator sends its periodic frame once per burst cycle, about
+    // every 5.5 s, so a 2 s silence is the transfer, not a missing locator.
     val downloadingRecord =
-        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading
+        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading ||
+            FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime)
     val flightPath = viewModel.flightPath.collectAsState().value
     val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
     // Whether the locator's reported position is one we can quote a distance or a
@@ -1020,7 +1026,10 @@ private fun FlightSpeechAnnouncer(
             val now = System.currentTimeMillis()
             val messageAge = now - state.lastMessageTime
             val descentRate = state.velNed.z   // NED Down component: positive while descending
-            val linkLive = messageAge < linkLossTimeout
+            // A full-record transfer over the radio spaces the periodic frame
+            // about 5.5 s apart (ADR-0040); that is not a lost link.
+            val linkLive = messageAge < linkLossTimeout ||
+                FullRecordHub.radioTransferLive(now, state.lastMessageTime)
             val fromLaunch = launchRelativePhrase(state, vector)
 
             // Link health.  Announced only after the link has been live at least
@@ -1229,6 +1238,12 @@ private fun MapWithOverlays(
         val archivedFlightPath = viewModel.archivedFlightPath.collectAsState().value
         val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
         val backgroundDownload = viewModel.backgroundDownload.collectAsState().value
+        // The full-record transfer's progress, shown in place of "No Locator"
+        // while it runs over the radio and the locator is heard (ADR-0040).
+        val fullRecordStatus = viewModel.fullRecordStatus.collectAsState().value
+        val fullRecordBusyPercent = (fullRecordStatus as? FullRecordTransfer.Status.Transferring)
+            ?.takeIf { FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime) }
+            ?.let { if (it.totalSamples > 0) (100L * it.decoded / it.totalSamples).toInt() else 0 }
         // Password gating: only the connected locator may be armed from the app.
         val locatorConnected = viewModel.locatorConnected.collectAsState().value
         // Warn from LOW downward — one step below the UNRELIABLE threshold that
@@ -1278,7 +1293,8 @@ private fun MapWithOverlays(
         val markerState = when {
             // Silent because it is sending us a record (#49), not lost: shown as
             // degraded (last known position), not stale.
-            !rocketFresh && backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
+            !rocketFresh && (backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ||
+                FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime)) ->
                 RocketMarkerState.Degraded
             !rocketFresh -> RocketMarkerState.Stale
             rocketState.gpsStatus != SensorHealth.Ok -> RocketMarkerState.Degraded
@@ -1528,6 +1544,8 @@ private fun MapWithOverlays(
                         surveyInProgress -> stringResource(R.string.status_scanning)
                         backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
                             stringResource(R.string.status_downloading_record, backgroundDownload.percent)
+                        fullRecordBusyPercent != null ->
+                            stringResource(R.string.status_downloading_record, fullRecordBusyPercent)
                         else -> null
                     },
                     onToggleArmed = { viewModel.updateArmedState() },

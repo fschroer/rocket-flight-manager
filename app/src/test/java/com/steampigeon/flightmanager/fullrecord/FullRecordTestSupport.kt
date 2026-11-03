@@ -131,6 +131,7 @@ object TestEncoder {
 class SimLocator(val locatorId: Long, val slots: MutableMap<Int, ByteArray>, val rng: Random = Random(1)) {
     var armed = false
     var flightState = 0
+    var simulated = false
     var pickedUp = false
     var listingMode = false
     var rssi = -80
