@@ -902,7 +902,7 @@ private fun FlightSpeechAnnouncer(
             // already — this is the number the user walks toward.
             if (!landingSpoken) {
                 announcer.flush("Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
-                        ?: ", location unknown."}")
+                        ?: ", location unknown."}", mark = true)
             }
             // Reset all announcement guards for the next flight
             previousAGL = 0
@@ -1067,7 +1067,8 @@ private fun FlightSpeechAnnouncer(
                 val roundedAGL = (state.altitudeAboveGroundLevel / 100).toInt() * 100
                 if (roundedAGL > previousAGL) {
                     if (state.velocity > minimumSpokenAGLVelocity)
-                        announcer.add("$roundedAGL meters.")
+                        // A reading, not an event: dropped rather than said late.
+                        announcer.addCurrent("$roundedAGL meters.")
                     previousAGL = roundedAGL
                 }
             }
@@ -1083,7 +1084,7 @@ private fun FlightSpeechAnnouncer(
                         landingSpoken = true
                         flightConcluded = true
                         announcer.flush("Landing." + (fromLaunch?.let { " Last known$it" }
-                                ?: " Location unknown."))
+                                ?: " Location unknown."), mark = true)
                     }
                     // Everything below needs a live link: altitude and descent rate out of a
                     // stale packet describe where the rocket was, not where it is.
@@ -1091,7 +1092,7 @@ private fun FlightSpeechAnnouncer(
                     landingImminent(agl, descentRate) -> {
                         landingSpoken = true
                         flightConcluded = true
-                        announcer.flush("Landing${fromLaunch ?: ", location unknown."}")
+                        announcer.flush("Landing${fromLaunch ?: ", location unknown."}", mark = true)
                     }
                     descentRate >= freefallDescentRate &&
                             now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
