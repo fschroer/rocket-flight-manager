@@ -216,6 +216,13 @@ fun SimulatedFlightScreen(
             SimDecimalField(stringResource(R.string.sim_flight_diameter), rocket.diameterMm, 5f, 500f, 1, editable, refused) {
                 rocket = rocket.copy(diameterMm = it)
             }
+            SimIntField(R.string.sim_flight_length, rocket.lengthMm, 100..5000, editable, refused) {
+                rocket = rocket.copy(lengthMm = it)
+            }
+            SimDecimalField(stringResource(R.string.sim_flight_stability), rocket.stabilityCal, 0.5f, 10f, 1, editable, refused) {
+                rocket = rocket.copy(stabilityCal = it)
+            }
+            Text(stringResource(R.string.sim_flight_stability_help), style = MaterialTheme.typography.bodySmall)
 
             // ── Drag ───────────────────────────────────────────────────────
             SimSection(R.string.sim_flight_section_drag)

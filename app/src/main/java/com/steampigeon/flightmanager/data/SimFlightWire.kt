@@ -8,7 +8,7 @@ import com.steampigeon.flightmanager.data.simflight.Thrust
  * The simulated-flight commands (locator ADR "An app-started simulated flight
  * computed on the locator", 0041, amended 2026-11-03).
  *
- * - **SimFlightStart** (MsgType 31, 196 B): the whole rocket in one frame.  The
+ * - **SimFlightStart** (MsgType 31, 199 B): the whole rocket in one frame.  The
  *   firmware struct is `SimFlightStart` in MessageProtocol.hpp, pinned there by
  *   static_assert and here by WireLayoutTest and SimFlightWireTest.
  * - **SimFlightRequest** (MsgType 30, 30 B): since the amendment, only cancels.
@@ -30,8 +30,8 @@ object SimFlightWire {
     const val CANCEL_PAYLOAD_SIZE = 20
     const val OFFSET_CANCEL_ACTION = 24
 
-    /** SimFlightStart bytes after the target id: frame offsets 10..195. */
-    const val START_PAYLOAD_SIZE = 186
+    /** SimFlightStart bytes after the target id: frame offsets 10..198. */
+    const val START_PAYLOAD_SIZE = 189
 
     // SimFlightStart frame offsets, from the C++ struct.
     const val OFFSET_ORIGIN_LAT = 10
@@ -54,6 +54,9 @@ object SimFlightWire {
     const val OFFSET_CD_MILLI = 52
     const val OFFSET_T_MS = 68
     const val OFFSET_THRUST_FRAC = 132
+    // Added 2026-11-03 for the restoring-moment weathercock model.
+    const val OFFSET_LENGTH_MM = 196
+    const val OFFSET_STABILITY_DCAL = 198
 
     /**
      * A start.  [originLat]/[originLon] are the phone's position in degrees, used
@@ -82,6 +85,8 @@ object SimFlightWire {
         putF(b, at(OFFSET_MOTOR_PROP_KG), motor.propKg)
         putF(b, at(OFFSET_DRY_MASS_KG), r.dryMassG / 1000f)
         putF(b, at(OFFSET_REF_DIAMETER_M), r.diameterMm / 1000f)
+        put16(b, at(OFFSET_LENGTH_MM), r.lengthMm)
+        b[at(OFFSET_STABILITY_DCAL)] = Math.round(r.stabilityCal * 10f).toByte()
         r.cd.forEachIndexed { i, cd -> put16(b, at(OFFSET_CD_MILLI) + 2 * i, Math.round(cd * 1000f)) }
         curve.forEachIndexed { i, (t, f) ->
             put16(b, at(OFFSET_T_MS) + 2 * i, Math.round(t * 1000f))

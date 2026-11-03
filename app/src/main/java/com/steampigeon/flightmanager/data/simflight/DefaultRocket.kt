@@ -7,7 +7,9 @@ package com.steampigeon.flightmanager.data.simflight
  *
  * Every number comes from that .ork's first simulation, which was saved with
  * its data: 501 g without the motor, 67.4 mm reference diameter, a 1 m rail and
- * 2 m/s of wind.  Cd is OpenRocket's own over the ascent, fitted with
+ * 2 m/s of wind.  Length is the nose cone, middle and rear tubes (230 + 668 +
+ * 177 mm); 2.5 calibers is its static margin with the motor loaded, from
+ * OpenRocket's CP and CG at rail exit (2.49).  Cd is OpenRocket's own over the ascent, fitted with
  * [Drag.fitOpenRocketCsv]; the flight peaks at Mach 0.52, so the points above
  * Mach 0.5 are the standard transonic rise, not OpenRocket's.  The motor curve
  * is the thrust column of that simulation, which is OpenRocket's reading of the
@@ -25,6 +27,8 @@ object DefaultRocket {
         name = "Tron Short 2.6 (example)",
         dryMassG = 501,
         diameterMm = 67.4f,
+        lengthMm = 1075,
+        stabilityCal = 2.5f,
         cd = listOf(0.661f, 0.665f, 0.691f, 0.705f, 0.774f, 1.071f, 1.002f, 0.898f),
         motorId = MOTOR_ID,
         drogueMps = 7,

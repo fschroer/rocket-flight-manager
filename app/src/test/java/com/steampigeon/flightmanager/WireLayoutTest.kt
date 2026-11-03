@@ -165,7 +165,7 @@ class WireLayoutTest {
         assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.CANCEL_PAYLOAD_SIZE)
     @Test fun simFlightCancelOffset() = assertEquals(24, SimFlightWire.OFFSET_CANCEL_ACTION)
 
-    // Firmware: static_assert(sizeof(SimFlightStart) == 196), MsgType 31, and the
+    // Firmware: static_assert(sizeof(SimFlightStart) == 199), MsgType 31, and the
     // offsetof asserts below (ADR-0041 amendment, 2026-11-03).
     @Test fun simFlightStartType() = assertEquals(31.toUByte(), MsgType.SimFlightStart.value)
     @Test fun simFlightStartSize() =
@@ -182,6 +182,8 @@ class WireLayoutTest {
         assertEquals(52, SimFlightWire.OFFSET_CD_MILLI)
         assertEquals(68, SimFlightWire.OFFSET_T_MS)
         assertEquals(132, SimFlightWire.OFFSET_THRUST_FRAC)
+        assertEquals(196, SimFlightWire.OFFSET_LENGTH_MM)
+        assertEquals(198, SimFlightWire.OFFSET_STABILITY_DCAL)
     }
     @Test fun simulatedBits() {
         assertEquals(0x40, Protocol.TELEMETRY_SIMULATED_BIT)

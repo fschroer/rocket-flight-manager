@@ -105,8 +105,8 @@ object Protocol {
     // SimFlightRequest: header 6 + target 4 + 20 bytes (SimFlightWire).  Cancel only
     // since the ADR-0041 amendment.
     const val SIM_FLIGHT_REQUEST_SIZE = 30
-    // SimFlightStart: header 6 + target 4 + the 186-byte rocket profile.
-    const val SIM_FLIGHT_START_SIZE = 196
+    // SimFlightStart: header 6 + target 4 + the 189-byte rocket profile.
+    const val SIM_FLIGHT_START_SIZE = 199
 }
 
 /**

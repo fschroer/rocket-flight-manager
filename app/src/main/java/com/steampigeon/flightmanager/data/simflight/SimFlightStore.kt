@@ -96,6 +96,7 @@ class SimFlightStore(context: Context) {
 
     private fun toJson(r: SimRocket) = JSONObject().apply {
         put("name", r.name); put("dryMassG", r.dryMassG); put("diameterMm", r.diameterMm.toDouble())
+        put("lengthMm", r.lengthMm); put("stabilityCal", r.stabilityCal.toDouble())
         put("cd", JSONArray(r.cd.map { it.toDouble() })); put("motorId", r.motorId ?: JSONObject.NULL)
         put("drogueMps", r.drogueMps); put("mainMps", r.mainMps)
         put("railLengthCm", r.railLengthCm); put("railAngleTenths", r.railAngleTenths)
@@ -111,6 +112,8 @@ class SimFlightStore(context: Context) {
         return SimRocket(
             name = o.optString("name", ""), dryMassG = o.optInt("dryMassG", d.dryMassG),
             diameterMm = o.optDouble("diameterMm", d.diameterMm.toDouble()).toFloat(), cd = cd,
+            lengthMm = o.optInt("lengthMm", d.lengthMm),
+            stabilityCal = o.optDouble("stabilityCal", d.stabilityCal.toDouble()).toFloat(),
             motorId = if (o.isNull("motorId")) null else o.optString("motorId"),
             drogueMps = o.optInt("drogueMps", d.drogueMps), mainMps = o.optInt("mainMps", d.mainMps),
             railLengthCm = o.optInt("railLengthCm", d.railLengthCm),

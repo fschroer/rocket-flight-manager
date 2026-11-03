@@ -254,6 +254,13 @@ data class SimRocket(
     val name: String = "",
     val dryMassG: Int = 1200,
     val diameterMm: Float = 54f,
+    /** Overall length, nose tip to the aft end. */
+    val lengthMm: Int = 1000,
+    /**
+     * Static stability margin in calibers, as OpenRocket shows it with the motor
+     * loaded.  With [lengthMm] it sets how fast the rocket turns into the wind.
+     */
+    val stabilityCal: Float = 2.0f,
     /** Cd on [Drag.MACH_GRID]. */
     val cd: List<Float> = Drag.spread(0.45f).toList(),
     val motorId: String? = null,
@@ -275,6 +282,8 @@ data class SimRocket(
         if (motor == null) { add("No motor selected"); return@buildList }
         if (dryMassG !in 10..200_000) add("Dry mass out of range")
         if (diameterMm !in 5f..500f) add("Diameter out of range")
+        if (lengthMm !in 100..5000) add("Length out of range")
+        if (Math.round(stabilityCal * 10f) !in 5..100) add("Stability margin out of range")
         if (cd.size != Drag.MACH_GRID.size || cd.any { it !in 0.05f..3.0f }) add("Cd out of range")
         if (drogueMps !in 5..60) add("Drogue rate out of range")
         if (mainMps !in 2..15) add("Main rate out of range")

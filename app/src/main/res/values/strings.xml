@@ -298,6 +298,9 @@
     <string name="sim_flight_name">Name</string>
     <string name="sim_flight_dry_mass">Mass without motor (g)</string>
     <string name="sim_flight_diameter">Body diameter (mm)</string>
+    <string name="sim_flight_length">Length (mm)</string>
+    <string name="sim_flight_stability">Stability margin (calibers)</string>
+    <string name="sim_flight_stability_help">The margin OpenRocket shows with the motor loaded. With the length, it sets how quickly the rocket turns into the wind off the rail.</string>
     <string name="sim_flight_drag_help">Type one Cd and press Spread to fill the Mach points with a typical rise near Mach 1, type each point, or fit them from an OpenRocket simulation exported as CSV.</string>
     <string name="sim_flight_cd_typed">Cd</string>
     <string name="sim_flight_cd_spread">Spread</string>
