@@ -162,15 +162,26 @@ class WireLayoutTest {
     // bit 0x40 beside the picked-up bit 0x80.  The iOS copy owes these (UI_PARITY).
     @Test fun simFlightRequestType() = assertEquals(30.toUByte(), MsgType.SimFlightRequest.value)
     @Test fun simFlightRequestSize() =
-        assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.PAYLOAD_SIZE)
-    @Test fun simFlightRequestOffsets() {
-        assertEquals(10, SimFlightWire.OFFSET_APOGEE_M)
-        assertEquals(12, SimFlightWire.OFFSET_ORIGIN_LAT)
-        assertEquals(16, SimFlightWire.OFFSET_ORIGIN_LON)
-        assertEquals(20, SimFlightWire.OFFSET_WIND_FROM_DEG)
-        assertEquals(22, SimFlightWire.OFFSET_SEED)
-        assertEquals(24, SimFlightWire.OFFSET_ACTION)
-        assertEquals(28, SimFlightWire.OFFSET_WIND_MPS)
+        assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.CANCEL_PAYLOAD_SIZE)
+    @Test fun simFlightCancelOffset() = assertEquals(24, SimFlightWire.OFFSET_CANCEL_ACTION)
+
+    // Firmware: static_assert(sizeof(SimFlightStart) == 196), MsgType 31, and the
+    // offsetof asserts below (ADR-0041 amendment, 2026-11-03).
+    @Test fun simFlightStartType() = assertEquals(31.toUByte(), MsgType.SimFlightStart.value)
+    @Test fun simFlightStartSize() =
+        assertEquals(Protocol.SIM_FLIGHT_START_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.START_PAYLOAD_SIZE)
+    @Test fun simFlightStartOffsets() {
+        assertEquals(10, SimFlightWire.OFFSET_ORIGIN_LAT)
+        assertEquals(18, SimFlightWire.OFFSET_SEED)
+        assertEquals(24, SimFlightWire.OFFSET_RAIL_LEN_CM)
+        assertEquals(26, SimFlightWire.OFFSET_RAIL_ANGLE_DDEG)
+        assertEquals(30, SimFlightWire.OFFSET_TEMP_C)
+        assertEquals(31, SimFlightWire.OFFSET_N_POINTS)
+        assertEquals(32, SimFlightWire.OFFSET_PEAK_THRUST_N)
+        assertEquals(48, SimFlightWire.OFFSET_REF_DIAMETER_M)
+        assertEquals(52, SimFlightWire.OFFSET_CD_MILLI)
+        assertEquals(68, SimFlightWire.OFFSET_T_MS)
+        assertEquals(132, SimFlightWire.OFFSET_THRUST_FRAC)
     }
     @Test fun simulatedBits() {
         assertEquals(0x40, Protocol.TELEMETRY_SIMULATED_BIT)

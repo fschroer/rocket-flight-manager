@@ -102,8 +102,11 @@ object Protocol {
     const val TELEMETRY_SIMULATED_BIT = 0x40
     // FlightEventsMessage::flags (was reserved): bit 0 = a simulated record.
     const val FLIGHT_EVENTS_FLAG_SIMULATED = 0x01
-    // SimFlightRequest: header 6 + target 4 + 20 bytes of profile (SimFlightWire).
+    // SimFlightRequest: header 6 + target 4 + 20 bytes (SimFlightWire).  Cancel only
+    // since the ADR-0041 amendment.
     const val SIM_FLIGHT_REQUEST_SIZE = 30
+    // SimFlightStart: header 6 + target 4 + the 186-byte rocket profile.
+    const val SIM_FLIGHT_START_SIZE = 196
 }
 
 /**
@@ -543,8 +546,11 @@ enum class MsgType(val value: UByte) {
     FullRecordData(27u),        // Locator→app: one packet of a page.
     FullRecordParity(28u),      // Locator→app: XOR of up to four data packets.
     FullRecordAck(29u),         // App→locator: bitmap of the page's packets received.
-    // Start or cancel a simulated flight the locator computes (locator ADR-0041).
-    SimFlightRequest(30u);
+    // Cancel a simulated flight (locator ADR-0041; its start was retired by the
+    // 2026-11-03 amendment).
+    SimFlightRequest(30u),
+    // Start a simulated flight from a rocket profile (ADR-0041 amendment).
+    SimFlightStart(31u);
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }

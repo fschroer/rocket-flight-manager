@@ -1,83 +1,98 @@
 package com.steampigeon.flightmanager.data
 
+import com.steampigeon.flightmanager.data.simflight.SimMotor
+import com.steampigeon.flightmanager.data.simflight.SimRocket
+import com.steampigeon.flightmanager.data.simflight.Thrust
+
 /**
- * The profile of an app-started simulated flight, and its SimFlightRequest
- * payload (locator ADR "An app-started simulated flight computed on the
- * locator", 0041; the firmware struct is `SimFlightRequest` in
- * MessageProtocol.hpp, pinned there by static_assert and here by
- * WireLayoutTest and SimFlightWireTest).
+ * The simulated-flight commands (locator ADR "An app-started simulated flight
+ * computed on the locator", 0041, amended 2026-11-03).
  *
- * The payload is everything after the target id, which BluetoothService's
- * sendMessage prepends: offsets below are the frame's, so 10 is the first
- * payload byte.  Ranges are the ADR's; the locator refuses a request with any
- * field outside them, so the screen refuses it first.
+ * - **SimFlightStart** (MsgType 31, 196 B): the whole rocket in one frame.  The
+ *   firmware struct is `SimFlightStart` in MessageProtocol.hpp, pinned there by
+ *   static_assert and here by WireLayoutTest and SimFlightWireTest.
+ * - **SimFlightRequest** (MsgType 30, 30 B): since the amendment, only cancels.
+ *
+ * Payloads are everything after the target id, which BluetoothService's
+ * sendMessage prepends: the offsets below are the frame's, so 10 is the first
+ * payload byte.  The locator rejects a start with any field out of range, so the
+ * screen checks [SimRocket.problems] first.
  *
  * Pure Kotlin, JVM-tested.
  */
-data class SimFlightProfile(
-    val apogeeM: Int = 300,
-    val burnTenths: Int = 15,
-    val drogueMps: Int = 20,
-    val mainMps: Int = 6,
-    val windMps: Int = 3,
-    val windFromDeg: Int = 270,
-) {
-    val valid: Boolean
-        get() = apogeeM in APOGEE_M && burnTenths in BURN_TENTHS && drogueMps in DROGUE_MPS &&
-            mainMps in MAIN_MPS && windMps in WIND_MPS && windFromDeg in WIND_FROM_DEG
-
-    companion object {
-        val APOGEE_M = 30..3000
-        val BURN_TENTHS = 3..50
-        val DROGUE_MPS = 5..60
-        val MAIN_MPS = 2..15
-        val WIND_MPS = 0..20
-        val WIND_FROM_DEG = 0..359
-    }
-}
-
 object SimFlightWire {
     const val ACTION_CANCEL = 0
-    const val ACTION_START = 1
 
-    /** Bytes after the target id: frame offsets 10..29. */
-    const val PAYLOAD_SIZE = 20
+    /** temp_c meaning "use the locator's barometer temperature" (kSimTempFromBaro). */
+    const val TEMP_FROM_BARO = -128
 
-    // Frame offsets, from the C++ struct.
-    const val OFFSET_APOGEE_M = 10
-    const val OFFSET_ORIGIN_LAT = 12
-    const val OFFSET_ORIGIN_LON = 16
+    /** SimFlightRequest bytes after the target id: frame offsets 10..29. */
+    const val CANCEL_PAYLOAD_SIZE = 20
+    const val OFFSET_CANCEL_ACTION = 24
+
+    /** SimFlightStart bytes after the target id: frame offsets 10..195. */
+    const val START_PAYLOAD_SIZE = 186
+
+    // SimFlightStart frame offsets, from the C++ struct.
+    const val OFFSET_ORIGIN_LAT = 10
+    const val OFFSET_ORIGIN_LON = 14
+    const val OFFSET_SEED = 18
     const val OFFSET_WIND_FROM_DEG = 20
-    const val OFFSET_SEED = 22
-    const val OFFSET_ACTION = 24
-    const val OFFSET_BURN_DS = 25
-    const val OFFSET_DROGUE_MPS = 26
-    const val OFFSET_MAIN_DMPS = 27
-    const val OFFSET_WIND_MPS = 28
+    const val OFFSET_LAUNCH_AZ_DEG = 22
+    const val OFFSET_RAIL_LEN_CM = 24
+    const val OFFSET_RAIL_ANGLE_DDEG = 26
+    const val OFFSET_WIND_MPS = 27
+    const val OFFSET_DROGUE_MPS = 28
+    const val OFFSET_MAIN_DMPS = 29
+    const val OFFSET_TEMP_C = 30
+    const val OFFSET_N_POINTS = 31
+    const val OFFSET_PEAK_THRUST_N = 32
+    const val OFFSET_MOTOR_LOADED_KG = 36
+    const val OFFSET_MOTOR_PROP_KG = 40
+    const val OFFSET_DRY_MASS_KG = 44
+    const val OFFSET_REF_DIAMETER_M = 48
+    const val OFFSET_CD_MILLI = 52
+    const val OFFSET_T_MS = 68
+    const val OFFSET_THRUST_FRAC = 132
 
     /**
      * A start.  [originLat]/[originLon] are the phone's position in degrees, used
      * by the locator only when it has no fix of its own; null sends "none".
      */
-    fun start(p: SimFlightProfile, seed: Int, originLat: Double?, originLon: Double?): ByteArray {
-        require(p.valid) { "profile out of range: $p" }
-        val b = ByteArray(PAYLOAD_SIZE)
+    fun start(r: SimRocket, motor: SimMotor, seed: Int, originLat: Double?, originLon: Double?): ByteArray {
+        require(r.problems(motor).isEmpty()) { "rocket out of range: ${r.problems(motor)}" }
+        val curve = Thrust.thin(motor.curve)
+        val peak = curve.maxOf { it.second }
+        val b = ByteArray(START_PAYLOAD_SIZE)
         fun at(frameOffset: Int) = frameOffset - 10
-        put16(b, at(OFFSET_APOGEE_M), p.apogeeM)
         put32(b, at(OFFSET_ORIGIN_LAT), originLat?.let { Math.round(it * 1e7).toInt() } ?: 0)
         put32(b, at(OFFSET_ORIGIN_LON), originLon?.let { Math.round(it * 1e7).toInt() } ?: 0)
-        put16(b, at(OFFSET_WIND_FROM_DEG), p.windFromDeg)
         put16(b, at(OFFSET_SEED), seed and 0xFFFF)
-        b[at(OFFSET_ACTION)] = ACTION_START.toByte()
-        b[at(OFFSET_BURN_DS)] = p.burnTenths.toByte()
-        b[at(OFFSET_DROGUE_MPS)] = p.drogueMps.toByte()
-        b[at(OFFSET_MAIN_DMPS)] = (p.mainMps * 10).toByte()
-        b[at(OFFSET_WIND_MPS)] = p.windMps.toByte()
+        put16(b, at(OFFSET_WIND_FROM_DEG), r.windFromDeg)
+        put16(b, at(OFFSET_LAUNCH_AZ_DEG), r.launchAzDeg)
+        put16(b, at(OFFSET_RAIL_LEN_CM), r.railLengthCm)
+        b[at(OFFSET_RAIL_ANGLE_DDEG)] = r.railAngleTenths.toByte()
+        b[at(OFFSET_WIND_MPS)] = r.windMps.toByte()
+        b[at(OFFSET_DROGUE_MPS)] = r.drogueMps.toByte()
+        b[at(OFFSET_MAIN_DMPS)] = (r.mainMps * 10).toByte()
+        b[at(OFFSET_TEMP_C)] = (r.tempC ?: TEMP_FROM_BARO).toByte()
+        b[at(OFFSET_N_POINTS)] = curve.size.toByte()
+        putF(b, at(OFFSET_PEAK_THRUST_N), peak)
+        putF(b, at(OFFSET_MOTOR_LOADED_KG), motor.loadedKg)
+        putF(b, at(OFFSET_MOTOR_PROP_KG), motor.propKg)
+        putF(b, at(OFFSET_DRY_MASS_KG), r.dryMassG / 1000f)
+        putF(b, at(OFFSET_REF_DIAMETER_M), r.diameterMm / 1000f)
+        r.cd.forEachIndexed { i, cd -> put16(b, at(OFFSET_CD_MILLI) + 2 * i, Math.round(cd * 1000f)) }
+        curve.forEachIndexed { i, (t, f) ->
+            put16(b, at(OFFSET_T_MS) + 2 * i, Math.round(t * 1000f))
+            put16(b, at(OFFSET_THRUST_FRAC) + 2 * i, Math.round(f / peak * 65535f).coerceIn(0, 65535))
+        }
         return b
     }
 
     /** A cancel: never refused by the locator. */
-    fun cancel(): ByteArray = ByteArray(PAYLOAD_SIZE).also { it[OFFSET_ACTION - 10] = ACTION_CANCEL.toByte() }
+    fun cancel(): ByteArray =
+        ByteArray(CANCEL_PAYLOAD_SIZE).also { it[OFFSET_CANCEL_ACTION - 10] = ACTION_CANCEL.toByte() }
 
     private fun put16(b: ByteArray, o: Int, v: Int) {
         b[o] = v.toByte(); b[o + 1] = (v shr 8).toByte()
@@ -85,4 +100,5 @@ object SimFlightWire {
     private fun put32(b: ByteArray, o: Int, v: Int) {
         for (i in 0 until 4) b[o + i] = (v shr (8 * i)).toByte()
     }
+    private fun putF(b: ByteArray, o: Int, v: Float) = put32(b, o, java.lang.Float.floatToRawIntBits(v))
 }

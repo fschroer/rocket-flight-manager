@@ -21,7 +21,8 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
-import com.steampigeon.flightmanager.data.SimFlightProfile
+import com.steampigeon.flightmanager.data.simflight.SimMotor
+import com.steampigeon.flightmanager.data.simflight.SimRocket
 import com.steampigeon.flightmanager.data.SimFlightWire
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_PARITY_SIZE
@@ -428,8 +429,9 @@ class BluetoothService : Service() {
      *  app-started simulated flight computed on the locator").  The locator
      *  refuses silently unless it is disarmed and still on the pad; the app sees
      *  the result as the simulated bit in telemetry, or its absence. */
-    fun startSimulatedFlight(profile: SimFlightProfile, seed: Int, originLat: Double?, originLon: Double?): Boolean =
-        profile.valid && sendMessage(MsgType.SimFlightRequest, SimFlightWire.start(profile, seed, originLat, originLon))
+    fun startSimulatedFlight(rocket: SimRocket, motor: SimMotor, seed: Int, originLat: Double?, originLon: Double?): Boolean =
+        rocket.problems(motor).isEmpty() &&
+            sendMessage(MsgType.SimFlightStart, SimFlightWire.start(rocket, motor, seed, originLat, originLon))
 
     /** End a simulated flight.  Never refused by the locator. */
     fun cancelSimulatedFlight(): Boolean =
