@@ -329,6 +329,9 @@
     <string name="sim_flight_canopy_incomplete">Enter a diameter and Cd.</string>
     <string name="sim_flight_canopy_use">Use</string>
     <string name="sim_flight_save_rocket">Save Rocket</string>
+    <string name="sim_flight_delete_rocket">Delete Rocket</string>
+    <string name="sim_flight_delete_title">Delete saved rocket?</string>
+    <string name="sim_flight_delete_text">\"%1$s\" is removed from the saved rockets on this phone. Its values stay on screen until you pick another rocket.</string>
     <string name="sim_flight_range_decimal">Must be %1$s to %2$s</string>
     <string name="sim_flight_drogue">Drogue descent rate (m/s)</string>
     <string name="sim_flight_main">Main descent rate (m/s)</string>

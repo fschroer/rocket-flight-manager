@@ -134,6 +134,8 @@ fun SimulatedFlightScreen(
 
     val refused = remember { mutableStateMapOf<String, Boolean>() }
     var confirming by remember { mutableStateOf(false) }
+    // The saved rocket named on the Delete confirmation, or null while none is open.
+    var deleting by remember { mutableStateOf<String?>(null) }
     var waitingForStart by remember { mutableStateOf(false) }
     var notStarted by remember { mutableStateOf(false) }
     var cancelSent by remember { mutableStateOf(false) }
@@ -340,10 +342,18 @@ fun SimulatedFlightScreen(
 
             HorizontalDivider()
             problems.forEach { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            OutlinedButton(
-                onClick = { store.saveRocket(rocket); rockets = store.rockets() },
-                enabled = rocket.name.isNotBlank() && editable,
-            ) { Text(stringResource(R.string.sim_flight_save_rocket)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { store.saveRocket(rocket); rockets = store.rockets() },
+                    enabled = rocket.name.isNotBlank() && editable,
+                ) { Text(stringResource(R.string.sim_flight_save_rocket)) }
+                // Deletes the saved rocket of this name. The fields stay on
+                // screen, so a mistaken delete is undone with Save.
+                OutlinedButton(
+                    onClick = { deleting = rocket.name },
+                    enabled = editable && rockets.any { it.name == rocket.name },
+                ) { Text(stringResource(R.string.sim_flight_delete_rocket)) }
+            }
             Button(
                 onClick = { notStarted = false; confirming = true },
                 enabled = fieldsValid && !simulated && !waitingForStart,
@@ -392,6 +402,24 @@ fun SimulatedFlightScreen(
                 Text(stringResource(R.string.return_to_main))
             }
         }
+    }
+
+    deleting?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text(stringResource(R.string.sim_flight_delete_title)) },
+            text = { Text(stringResource(R.string.sim_flight_delete_text, name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    store.deleteRocket(name)
+                    rockets = store.rockets()
+                }) { Text(stringResource(R.string.sim_flight_delete_rocket)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
     }
 
     if (confirming) {
