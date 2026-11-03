@@ -1173,7 +1173,11 @@ private fun AppDrawerContent(
         items.forEach { item ->
             NavigationDrawerItem(
                 label = { Text(stringResource(item.labelRes), style = typography.titleLarge) },
-                icon = { Icon(painterResource(item.iconRes), contentDescription = stringResource(item.labelRes)) },
+                // Pinned to the Material icon size: a drawable's intrinsic size is
+                // whatever its XML says, and one drawn at 512 dp pushes the label
+                // off the drawer instead of sitting beside it.
+                icon = { Icon(painterResource(item.iconRes), contentDescription = stringResource(item.labelRes),
+                    modifier = Modifier.size(24.dp)) },
                 selected = false,
                 onClick = { onNavigate(item.screen) }
             )
