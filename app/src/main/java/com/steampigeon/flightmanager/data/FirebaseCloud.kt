@@ -37,7 +37,7 @@ private const val TAG = "FirebaseCloud"
  * Each finished record goes up as two files, its raw v8 bytes and the CSV the
  * locator's USB export prints, under
  *     users/{uid}/locators/{locator_id}/{record_ts}_{crc}.{bin,csv}
- * which `firebase/storage.rules` limits to the signed-in owner.  Sharing is the
+ * which `storage.rules` in steam-pigeon-web limits to the signed-in owner.  Sharing is the
  * file's download URL and its token (decision 9), so nothing here grants access.
  *
  * Off unless the app was built with a google-services.json: without one the
