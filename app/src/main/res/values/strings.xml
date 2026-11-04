@@ -254,6 +254,11 @@
     <string name="full_record_notification_progress">Flight %1$d of %2$d: %3$d%%</string>
     <string name="full_record_notification_waiting">Waiting for the locator to be disarmed and in range</string>
     <string name="full_record_start">Transfer new flight data</string>
+    <plurals name="full_record_start_pending">
+        <item quantity="one">Transfer %d new flight</item>
+        <item quantity="other">Transfer %d new flights</item>
+    </plurals>
+    <string name="full_record_none_pending">All flights transferred</string>
     <string name="full_record_stop">Stop transfer</string>
     <string name="full_record_awaiting">This flight is waiting its turn in the background transfer and will appear here when it arrives.</string>
     <string name="full_record_status_waiting">Transfer waiting: the locator must be disarmed, on the ground and in range</string>

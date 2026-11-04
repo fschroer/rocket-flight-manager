@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -46,6 +48,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import com.steampigeon.flightmanager.data.FullRecordHub
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import androidx.compose.ui.unit.dp
@@ -354,6 +357,7 @@ fun FlightProfilesScreen(
     val samples = if (fullSamples.isNotEmpty()) fullSamples else quickLookSamples
     val awaitingTransfer by viewModel.flightProfileAwaitingTransfer.collectAsState()
     val transferStatus by viewModel.fullRecordStatus.collectAsState()
+    val transferPending by viewModel.fullRecordPending.collectAsState()
 
     // Filter to sane samples only — done once here so every downstream
     // calculation works from a validated list.
@@ -478,29 +482,41 @@ fun FlightProfilesScreen(
                 Spacer(modifier = modifier.weight(1f))
             }
             FullRecordTransferStatus(transferStatus)
+            // The row is as tall as its taller button and both fill it, so the two
+            // match whatever their labels wrap to (Frank, 2026-11-04).
             Row(
-                modifier = modifier,
+                modifier = modifier.height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Always available, whatever the automatic triggers are set to
-                // (ADR decision 6).  The locator still refuses unless it is
-                // disarmed on the ground, so the button only asks.
+                // Available whatever the automatic triggers are set to (ADR
+                // decision 6), except when the locator's list shows nothing left
+                // to transfer.  The locator still refuses unless it is disarmed on
+                // the ground, so the button only asks.
                 val running = transferStatus.isRunning()
+                val pending = transferPending
                 OutlinedButton(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    enabled = running || pending != 0,
                     onClick = {
                         if (running) viewModel.stopFullRecordTransfer() else viewModel.startFullRecordTransfer()
                     }
                 ) {
-                    Text(stringResource(
-                        if (running) R.string.full_record_stop else R.string.full_record_start))
+                    Text(
+                        when {
+                            running -> stringResource(R.string.full_record_stop)
+                            pending == null -> stringResource(R.string.full_record_start)
+                            pending == 0 -> stringResource(R.string.full_record_none_pending)
+                            else -> pluralStringResource(R.plurals.full_record_start_pending, pending, pending)
+                        },
+                        textAlign = TextAlign.Center,
+                    )
                 }
                 OutlinedButton(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
                     onClick = onCancelButtonClicked
                 ) {
-                    Text(stringResource(R.string.return_to_main))
+                    Text(stringResource(R.string.return_to_main), textAlign = TextAlign.Center)
                 }
             }
         }

@@ -286,6 +286,39 @@ class FullRecordTransferTest {
         assertTrue(h.sim.cycles - cycles < 10)
     }
 
+    // Frank, 2026-11-04: the button says what is left to transfer.
+    @Test fun pendingCountsTheLocatorsRecordsNotYetOnThePhone() {
+        val h = standard()
+        assertEquals(null, h.ctl.pending)                                  // no list yet
+        h.ctl.start()
+        h.runUntil { h.ctl.status is Status.Transferring }
+        assertEquals(2, h.ctl.pending)                                     // slot 1 is empty
+        h.runUntil { h.ctl.status is Status.Finished }
+        assertEquals(0, h.ctl.pending)
+    }
+
+    // Frank, 2026-11-04: "finished" still showed after the next simulated flight.
+    @Test fun aFlightClearsTheLastRunsFinishedStatus() {
+        val h = standard()
+        h.ctl.start()
+        h.runUntil { h.ctl.status is Status.Finished }
+        h.sim.flightState = 2                                              // in flight
+        h.cycle()
+        assertEquals(Status.Idle, h.ctl.status)
+        assertEquals(null, h.ctl.pending)                                  // the list is stale now
+    }
+
+    @Test fun aNewRecordInTheListClearsTheLastRunsFinishedStatus() {
+        val h = standard()
+        h.ctl.start()
+        h.runUntil { h.ctl.status is Status.Finished }
+        h.ctl.onListing(id, h.meta)                                        // same list: still finished
+        assertEquals(Status.Finished(2, 0), h.ctl.status)
+        h.ctl.onListing(id, h.meta + Slot(3, 1_700_300_000, 200f))
+        assertEquals(Status.Idle, h.ctl.status)
+        assertEquals(1, h.ctl.pending)
+    }
+
     @Test fun aSlotRewrittenMidTransferIsStartedOver() {
         val h = standard()
         h.ctl.start()

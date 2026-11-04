@@ -60,6 +60,8 @@ class FullRecordTransfer(
         fun onStatus(status: Status) {}
         fun onRecordFinished(record: FullRecordStore.Finished) {}
         fun log(msg: String) {}
+        /** Records on the connected locator not yet on the phone; null until its list is known. */
+        fun onPending(count: Int?) {}
     }
 
     /** One archive slot, from FlightMetadata. */
@@ -94,6 +96,22 @@ class FullRecordTransfer(
 
     var status: Status = Status.Idle
         private set(v) { field = v; listener.onStatus(v) }
+
+    /**
+     * How many of the connected locator's records are not on the phone yet, or
+     * null while its flight list is unknown.  Simulated flights count: the button
+     * transfers every record the locator holds (Frank, 2026-11-04).
+     */
+    var pending: Int? = null
+        private set(v) { if (field != v) { field = v; listener.onPending(v) } }
+
+    private fun publishPending() {
+        val id = locatorId
+        val list = slots
+        pending = if (id == null || list == null) null
+            // An empty slot (no apogee) is listed but has nothing to transfer.
+            else list.count { it.apogeeM > 0f && store.finished(id, it.timestampS) == null }
+    }
 
     val active get() = status is Status.Waiting || status is Status.Listing || status is Status.Transferring
 
@@ -153,6 +171,11 @@ class FullRecordTransfer(
             // rewritten), so ours stops too.  Partials stay on disk, keyed by CRC.
             if (active) abort("locator armed or off the ground")
             slots = null
+            // A flight is under way, so the last run's "finished" no longer
+            // describes the locator (Frank, 2026-11-04: it still read complete
+            // after the next simulated flight).
+            if (status is Status.Finished) status = Status.Idle
+            publishPending()
         }
 
         // Signal: sustained over the threshold, measured on consecutive frames.
@@ -186,6 +209,9 @@ class FullRecordTransfer(
     fun onListing(locatorId: Long, list: List<Slot>) {
         if (this.locatorId != null && this.locatorId != locatorId) return
         slots = list.filter { it.timestampS > 0 }.sortedByDescending { it.timestampS }
+        publishPending()
+        // A record the last run did not cover makes its "finished" stale.
+        if (status is Status.Finished && (pending ?: 0) > 0) status = Status.Idle
         if (status is Status.Listing) {
             link.exitListing()
             plan()
@@ -321,6 +347,7 @@ class FullRecordTransfer(
         done++
         listener.log("slot ${s.record} finished: ${a.totalSamples} samples, ${a.recovered} rebuilt from parity")
         listener.onRecordFinished(f)
+        publishPending()
         nextRecord(failedOne = false)
     }
 
@@ -346,6 +373,7 @@ class FullRecordTransfer(
         pickedUpLast = false
         pickupFired = false
         lastPeriodicMs = 0L
+        publishPending()
     }
 
     private fun uplink(nowMs: Long) {

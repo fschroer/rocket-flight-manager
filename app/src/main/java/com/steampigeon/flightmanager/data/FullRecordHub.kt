@@ -57,6 +57,10 @@ object FullRecordHub : FullRecordTransfer.Listener, UsbLocatorLink.Sink {
     private val _status = MutableStateFlow<Status>(Status.Idle)
     val status: StateFlow<Status> = _status.asStateFlow()
 
+    private val _pending = MutableStateFlow<Int?>(null)
+    /** Records on the connected locator not yet on the phone; null until its flight list is known. */
+    val pending: StateFlow<Int?> = _pending.asStateFlow()
+
     private val _finished = MutableStateFlow<List<FullRecordStore.Finished>>(emptyList())
     /** Every complete, CRC-verified record on the phone, newest first. */
     val finished: StateFlow<List<FullRecordStore.Finished>> = _finished.asStateFlow()
@@ -162,6 +166,8 @@ object FullRecordHub : FullRecordTransfer.Listener, UsbLocatorLink.Sink {
     }
 
     // ---- FullRecordTransfer.Listener ------------------------------------------------
+
+    override fun onPending(count: Int?) { _pending.value = count }
 
     override fun onStatus(status: Status) {
         _status.value = status

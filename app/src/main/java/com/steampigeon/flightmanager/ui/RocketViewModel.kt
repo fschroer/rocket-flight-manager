@@ -332,6 +332,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private val _transferOnPickup = MutableStateFlow(true)
     val transferOnPickup: StateFlow<Boolean> = _transferOnPickup.asStateFlow()
     val fullRecordStatus: StateFlow<FullRecordTransfer.Status> get() = FullRecordHub.status
+    val fullRecordPending: StateFlow<Int?> get() = FullRecordHub.pending
 
     fun startFullRecordTransfer() { FullRecordHub.start() }
     fun stopFullRecordTransfer() { FullRecordHub.stop() }
@@ -3053,8 +3054,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             if (landingConcluded(newFlightState, parsed.msg.agl, parsed.msg.velNed.z))
                                 landingConcludedThisFlight = true
                             if (newFlightState == FlightStates.Landed) landedStatusReceived = true
+                            // A simulated flight's Landed frame is not drawn: by then the
+                            // locator has stopped simulating GPS, so it carries the real
+                            // position and the trace snapped from the simulated landing
+                            // area back to the pad (Frank, 2026-11-04).
+                            val endsSimTrace = endsSimulatedTrace(newFlightState,
+                                (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0)
                             if (_isFlightPathRecording.value &&
-                                records &&
+                                records && !endsSimTrace &&
                                 (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0) &&
                                 !repeatsLastPathPoint(parsed.msg)) {
                                 // Wall-clock, not elapsedRealtime: the path is
@@ -3070,11 +3077,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             // A simulated flight's trace ends at its landing (Frank,
                             // 2026-11-04).  A real one keeps recording, since wind
-                            // can carry a landed rocket.  After the landing fix
-                            // above, so the trace still ends on the ground.
-                            if (endsSimulatedTrace(newFlightState,
-                                    (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0))
-                                _isFlightPathRecording.value = false
+                            // can carry a landed rocket.
+                            if (endsSimTrace) _isFlightPathRecording.value = false
                             _previousFlightState = newFlightState
                             flightStateObserved = true
                             logTelemetryFrame(parsed.msg, currentTime, verdict)
