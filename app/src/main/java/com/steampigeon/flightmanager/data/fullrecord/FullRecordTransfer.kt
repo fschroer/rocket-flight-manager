@@ -215,10 +215,17 @@ class FullRecordTransfer(
     }
 
     /** A FullRecordData / FullRecordParity frame, from any locator. */
+    // Per-cycle tallies for the uplink log line (2026-11-04: a radio download
+    // stalled for minutes at one packet, and nothing said whether the window
+    // was arriving, arriving as duplicates, or not arriving at all).
+    private var cyNew = 0; private var cyDup = 0; private var cyOther = 0
+    private var cyForeign = 0; private var cyBad = 0; private var cyIgnored = 0
+
     fun onFrame(frame: ByteArray) {
-        val p = FullRecordPacket.parse(frame) ?: return
-        val s = cur ?: return
-        if (status !is Status.Transferring || p.record != s.record) return
+        val p = FullRecordPacket.parse(frame)
+        if (p == null) { cyBad++; return }
+        val s = cur ?: run { cyIgnored++; return }
+        if (status !is Status.Transferring || p.record != s.record) { cyIgnored++; return }
 
         if (p.isMarker) {
             if (p.totalSamples == 0) {                     // empty or missing slot
@@ -242,6 +249,7 @@ class FullRecordTransfer(
 
         when (a.onPacket(p)) {
             FullRecordAssembler.Result.Foreign -> {
+                cyForeign++
                 // Another CRC for this slot: it was rewritten.  A handful in a row
                 // with nothing of ours means ours is gone; start the slot over.
                 if (++foreignStreak >= FOREIGN_RESTART) {
@@ -250,10 +258,10 @@ class FullRecordTransfer(
                 }
                 return
             }
-            FullRecordAssembler.Result.OtherPage -> { foreignStreak = 0; return }
-            FullRecordAssembler.Result.Duplicate -> { foreignStreak = 0; rxSinceUplink = true; return }
-            FullRecordAssembler.Result.New -> { rxSinceUplink = true; dirty = true }
-            FullRecordAssembler.Result.PageComplete -> { pageDone = true; dirty = true; saveIfDirty() }
+            FullRecordAssembler.Result.OtherPage -> { cyOther++; foreignStreak = 0; return }
+            FullRecordAssembler.Result.Duplicate -> { cyDup++; foreignStreak = 0; rxSinceUplink = true; return }
+            FullRecordAssembler.Result.New -> { cyNew++; rxSinceUplink = true; dirty = true }
+            FullRecordAssembler.Result.PageComplete -> { cyNew++; pageDone = true; dirty = true; saveIfDirty() }
             FullRecordAssembler.Result.RecordComplete -> { finishRecord(); return }
             FullRecordAssembler.Result.CrcMismatch -> {
                 listener.log("slot ${s.record}: CRC mismatch after a full decode; discarding it")
@@ -364,11 +372,16 @@ class FullRecordTransfer(
         val s = cur ?: return
         val a = asm
         saveIfDirty()
-        when {
-            a == null -> link.sendRequest(s.record, resume?.page ?: 0)
-            pageDone || !rxSinceUplink || a.packetCount == 0 -> link.sendRequest(s.record, a.page)
-            else -> link.sendAck(a.recordCrc, a.page, a.packetCount, a.ackBitmap())
+        val sent = when {
+            a == null -> "request p${resume?.page ?: 0} ok=" + link.sendRequest(s.record, resume?.page ?: 0)
+            pageDone || !rxSinceUplink || a.packetCount == 0 ->
+                "request p${a.page} ok=" + link.sendRequest(s.record, a.page)
+            else -> "ack p${a.page} ok=" + link.sendAck(a.recordCrc, a.page, a.packetCount, a.ackBitmap())
         }
+        listener.log("cycle: new $cyNew dup $cyDup otherPage $cyOther foreign $cyForeign bad $cyBad " +
+            "ignored $cyIgnored; have ${a?.let { "${it.heldCount()}/${it.packetCount} of p${it.page}, " +
+                "decoded ${it.decoded}, decode failures ${it.decodeFailures} ${it.lastDecodeFailure}" } ?: "-"}; sent $sent")
+        cyNew = 0; cyDup = 0; cyOther = 0; cyForeign = 0; cyBad = 0; cyIgnored = 0
         rxSinceUplink = false
         pageDone = false
     }

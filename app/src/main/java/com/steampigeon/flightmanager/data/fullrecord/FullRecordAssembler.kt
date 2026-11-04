@@ -112,6 +112,11 @@ class FullRecordAssembler(
     private val held = arrayOfNulls<Held>(FullRecordCodec.MAX_PACKETS_PER_PAGE)
     private var nextPacket = 0          // the packet that decodes next
     private val parities = mutableListOf<FullRecordPacket>()
+    /** Packets that arrived intact but would not decode, and the last one. */
+    var decodeFailures = 0
+        private set
+    var lastDecodeFailure = ""
+        private set
     /** Packets rebuilt from parity, for the log. */
     var recovered = 0
         private set
@@ -229,6 +234,10 @@ class FullRecordAssembler(
                 h.payload.size, h.sampleCount, data, decoded * SAMPLE_SIZE) else 0
             if (n != h.sampleCount) {
                 // Corrupt or inconsistent: forget it so the next ACK asks again.
+                // Counted for the transfer log: the same packet failing every
+                // time is a codec disagreement, not a lossy link.
+                decodeFailures++
+                lastDecodeFailure = "p$page#$nextPacket fits=$fits n=$n of ${h.sampleCount}"
                 held[nextPacket] = null
                 return
             }
