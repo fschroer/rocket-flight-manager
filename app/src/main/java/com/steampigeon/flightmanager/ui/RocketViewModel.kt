@@ -3057,6 +3057,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                                 saveFlightPath()
                             }
+                            // A simulated flight's trace ends at its landing (Frank,
+                            // 2026-11-04).  A real one keeps recording, since wind
+                            // can carry a landed rocket.  After the landing fix
+                            // above, so the trace still ends on the ground.
+                            if (endsSimulatedTrace(newFlightState,
+                                    (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0))
+                                _isFlightPathRecording.value = false
                             _previousFlightState = newFlightState
                             flightStateObserved = true
                             logTelemetryFrame(parsed.msg, currentTime, verdict)
@@ -4339,6 +4346,14 @@ internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, a
         last.longitude == longitude &&
         last.altitudeM == altitudeM
 }
+
+/**
+ * True when this telemetry frame ends a simulated flight's trace: the locator
+ * reports Landed with the simulated bit set (locator ADR-0041, 2026-11-04
+ * amendment).  A real flight's trace keeps recording after landing.
+ */
+internal fun endsSimulatedTrace(flightState: FlightStates, simulated: Boolean): Boolean =
+    simulated && flightState == FlightStates.Landed
 
 /**
  * On the ground: waiting for a launch, or landed from the last one.
