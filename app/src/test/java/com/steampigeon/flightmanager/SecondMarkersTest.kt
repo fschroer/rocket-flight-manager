@@ -243,6 +243,21 @@ class SecondMarkersTest {
         assertTrue(secondMarkers(path).features()!!.size <= 600)
     }
 
+    @Test
+    fun theCapKeepsTheNewestMarks() {
+        // A trace carried over from earlier flights filled the cap with their
+        // marks and left the flight in the air with none (2026-11-03). The
+        // old flight here holds 700 s above the ground; the new one, 20 min
+        // later and 1 km north, must still carry its marks at the far end.
+        val old = listOf(fix(0, 0.0, 500f), fix(700_000, 500.0, 500f))
+        val new = listOf(fix(1_900_000, 1000.0, 0f), fix(1_910_000, 1000.0, 400f))
+        val fc = secondMarkers(old + new)
+        assertEquals(600, fc.features()!!.size)
+        val last = fc.features()!!.last().geometry() as Polygon
+        val northM = (last.coordinates()[0][0].latitude() - LAT) * METERS_PER_DEG_LAT
+        assertTrue("newest mark at $northM m north", northM > 990.0)
+    }
+
     // ── Geometry ────────────────────────────────────────────────────────────
 
     @Test

@@ -9,6 +9,8 @@ plugins {
 buildscript {
     dependencies {
         classpath("com.google.android.libraries.mapsplatform.secrets-gradle-plugin:secrets-gradle-plugin:2.0.1")
+        // Firebase config processing; applied by app/ only when google-services.json exists.
+        classpath("com.google.gms:google-services:4.4.2")
         //classpath("com.google.protobuf:protobuf-gradle-plugin:0.9.4")
     }
 }

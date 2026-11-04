@@ -10,6 +10,12 @@ plugins {
     alias(libs.plugins.protobuf)
 }
 
+// Firebase (locator ADR "The radio download becomes the primary data path",
+// decision 8).  google-services.json is gitignored like secrets.properties, so a
+// fresh clone has none: the plugin is applied only when it is there, and the app
+// then builds and runs with cloud upload switched off (FirebaseCloud.available).
+if (file("google-services.json").exists()) apply(plugin = "com.google.gms.google-services")
+
 /**
  * The same version stamp the two firmwares carry, computed the same way.
  *
@@ -238,13 +244,22 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
+    // Cloud upload of full records: Firebase Auth (Google + email) and Storage.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.storage)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.googleid)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.datastore)
     implementation(libs.protobuf.java)
     implementation(libs.protobuf.java.util)
     implementation(libs.protobuf.kotlin)
-    // jSerialComm / usb-serial-for-android removed with the unused USB-serial path.
+    // The full-record transfer over the locator's USB cable (CH340N), ADR-0040 decision 6c.
+    implementation(libs.usb.serial.for1.android)
     implementation(libs.androidx.material.icons.extended)
     // PROTOTYPE: MapLibre offline-satellite evaluation (see prototype/maplibre-offline)
     implementation(libs.maplibre.android)

@@ -30,6 +30,11 @@ message UserPreferences {
   // default was when they last saved — a later change to that default would
   // never reach them.
   optional int32 map_max_zoom = 8;
+  // Automatic starts of the background full-record transfer (ADR "The radio
+  // download becomes the primary data path", decision 6). `optional` so an
+  // install that never chose reads absent and gets the default, ON.
+  optional bool transfer_on_signal = 9;
+  optional bool transfer_on_pickup = 10;
 }
 
 message KnownLocator {

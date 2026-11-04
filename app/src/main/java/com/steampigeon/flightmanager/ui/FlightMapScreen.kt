@@ -156,12 +156,16 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentCharges
 import com.steampigeon.flightmanager.data.LinkQuality
 import com.steampigeon.flightmanager.data.FlightStates
+import com.steampigeon.flightmanager.data.FullRecordHub
+import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.Quaternionf
 import com.steampigeon.flightmanager.data.RocketState
 import com.steampigeon.flightmanager.data.SensorHealth
+import com.steampigeon.flightmanager.data.joinSensorNames
+import com.steampigeon.flightmanager.data.sensorFaults
 import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.G_FORCE_MS2
 import com.steampigeon.flightmanager.ui.RocketViewModel.Companion.RAD2DEG
 import com.steampigeon.flightmanager.ui.theme.TelemetryTextStyle
@@ -723,8 +727,12 @@ fun HomeScreen(
     // the app asked it for the record (#49), so its silence must not read as a
     // missing locator: the menu keeps the locator's screens, and opening one
     // pauses the download.
+    // The background full-record transfer (ADR-0040) is the same case: over the
+    // radio the locator sends its periodic frame once per burst cycle, about
+    // every 5.5 s, so a 2 s silence is the transfer, not a missing locator.
     val downloadingRecord =
-        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading
+        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading ||
+            FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime)
     val flightPath = viewModel.flightPath.collectAsState().value
     val isFlightPathRecording = viewModel.isFlightPathRecording.collectAsState().value
     // Whether the locator's reported position is one we can quote a distance or a
@@ -894,7 +902,7 @@ private fun FlightSpeechAnnouncer(
             // already — this is the number the user walks toward.
             if (!landingSpoken) {
                 announcer.flush("Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
-                        ?: ", location unknown."}")
+                        ?: ", location unknown."}", mark = true)
             }
             // Reset all announcement guards for the next flight
             previousAGL = 0
@@ -943,7 +951,7 @@ private fun FlightSpeechAnnouncer(
 
     // ── Prepped-and-disarmed alert (ADR-0021 Decision 5, #37) ────────────────
     // The locator judges the condition (vertical, still, e-matches wired, not
-    // armed) at 20 Hz and broadcasts the verdict; this only reacts to it, so the
+    // armed) every loop cycle and broadcasts the verdict; this only reacts to it, so the
     // buzzer at the pad and the voice here can never disagree.
     //
     // Speaks once on the rising edge, then repeats on a fixed cadence while the
@@ -1018,7 +1026,10 @@ private fun FlightSpeechAnnouncer(
             val now = System.currentTimeMillis()
             val messageAge = now - state.lastMessageTime
             val descentRate = state.velNed.z   // NED Down component: positive while descending
-            val linkLive = messageAge < linkLossTimeout
+            // A full-record transfer over the radio spaces the periodic frame
+            // about 5.5 s apart (ADR-0040); that is not a lost link.
+            val linkLive = messageAge < linkLossTimeout ||
+                FullRecordHub.radioTransferLive(now, state.lastMessageTime)
             val fromLaunch = launchRelativePhrase(state, vector)
 
             // Link health.  Announced only after the link has been live at least
@@ -1056,7 +1067,8 @@ private fun FlightSpeechAnnouncer(
                 val roundedAGL = (state.altitudeAboveGroundLevel / 100).toInt() * 100
                 if (roundedAGL > previousAGL) {
                     if (state.velocity > minimumSpokenAGLVelocity)
-                        announcer.add("$roundedAGL meters.")
+                        // A reading, not an event: dropped rather than said late.
+                        announcer.addCurrent("$roundedAGL meters.")
                     previousAGL = roundedAGL
                 }
             }
@@ -1072,7 +1084,7 @@ private fun FlightSpeechAnnouncer(
                         landingSpoken = true
                         flightConcluded = true
                         announcer.flush("Landing." + (fromLaunch?.let { " Last known$it" }
-                                ?: " Location unknown."))
+                                ?: " Location unknown."), mark = true)
                     }
                     // Everything below needs a live link: altitude and descent rate out of a
                     // stale packet describe where the rocket was, not where it is.
@@ -1080,7 +1092,7 @@ private fun FlightSpeechAnnouncer(
                     landingImminent(agl, descentRate) -> {
                         landingSpoken = true
                         flightConcluded = true
-                        announcer.flush("Landing${fromLaunch ?: ", location unknown."}")
+                        announcer.flush("Landing${fromLaunch ?: ", location unknown."}", mark = true)
                     }
                     descentRate >= freefallDescentRate &&
                             now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
@@ -1158,6 +1170,11 @@ private fun AppDrawerContent(
         // Ungated: the logs are files on the phone, so they are readable with the
         // receiver switched off and out of range — which is where they are read.
         add(DrawerItem(R.string.app_flight_logs, R.drawable.flight_log, NavDestination.AppFlightLogs))
+        // Heard and disarmed, like Flight Profiles and Locator Settings: the
+        // locator starts a simulation only while disarmed (locator ADR-0041), so
+        // a screen behind the armed gate would offer a button that never works.
+        if (locatorActive && !armedState)
+            add(DrawerItem(R.string.simulated_flight, R.drawable.rocket_md, NavDestination.SimulatedFlight))
         if (locatorActive && armedState)
             add(DrawerItem(R.string.deployment_test, R.drawable.bomb, NavDestination.DeploymentTest))
     }
@@ -1166,7 +1183,11 @@ private fun AppDrawerContent(
         items.forEach { item ->
             NavigationDrawerItem(
                 label = { Text(stringResource(item.labelRes), style = typography.titleLarge) },
-                icon = { Icon(painterResource(item.iconRes), contentDescription = stringResource(item.labelRes)) },
+                // Pinned to the Material icon size: a drawable's intrinsic size is
+                // whatever its XML says, and one drawn at 512 dp pushes the label
+                // off the drawer instead of sitting beside it.
+                icon = { Icon(painterResource(item.iconRes), contentDescription = stringResource(item.labelRes),
+                    modifier = Modifier.size(24.dp)) },
                 selected = false,
                 onClick = { onNavigate(item.screen) }
             )
@@ -1218,6 +1239,12 @@ private fun MapWithOverlays(
         val archivedFlightPath = viewModel.archivedFlightPath.collectAsState().value
         val showArchivedPath = viewModel.showArchivedPath.collectAsState().value
         val backgroundDownload = viewModel.backgroundDownload.collectAsState().value
+        // The full-record transfer's progress, shown in place of "No Locator"
+        // while it runs over the radio and the locator is heard (ADR-0040).
+        val fullRecordStatus = viewModel.fullRecordStatus.collectAsState().value
+        val fullRecordBusyPercent = (fullRecordStatus as? FullRecordTransfer.Status.Transferring)
+            ?.takeIf { FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime) }
+            ?.let { if (it.totalSamples > 0) (100L * it.decoded / it.totalSamples).toInt() else 0 }
         // Password gating: only the connected locator may be armed from the app.
         val locatorConnected = viewModel.locatorConnected.collectAsState().value
         // Warn from LOW downward — one step below the UNRELIABLE threshold that
@@ -1267,7 +1294,8 @@ private fun MapWithOverlays(
         val markerState = when {
             // Silent because it is sending us a record (#49), not lost: shown as
             // degraded (last known position), not stale.
-            !rocketFresh && backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
+            !rocketFresh && (backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ||
+                FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime)) ->
                 RocketMarkerState.Degraded
             !rocketFresh -> RocketMarkerState.Stale
             rocketState.gpsStatus != SensorHealth.Ok -> RocketMarkerState.Degraded
@@ -1451,7 +1479,11 @@ private fun MapWithOverlays(
                 // to notice. The color already carries the distinction; the motion
                 // now agrees with it.
                 pulse = padAlert != PadAlertState.Quiet,
-                text = (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
+                // A locator-computed simulated flight (locator ADR-0041) says so
+                // first, above everything else the banner carries, for as long as
+                // the locator's telemetry carries the simulated bit.
+                text = (if (rocketState.simulated) stringResource(R.string.simulated_banner) + "\n" else "") +
+                        (if (padAlert == PadAlertState.Alerting) stringResource(R.string.pad_alert_banner)
                         else if (padAlert == PadAlertState.Snoozed) stringResource(R.string.pad_alert_snoozed, padAlertSnoozeMinutes)
                         else if (!armedState) "Disarmed" else "") +
                         (if (!armedState && !locatorGPSLock) "\n" else "") +
@@ -1513,6 +1545,8 @@ private fun MapWithOverlays(
                         surveyInProgress -> stringResource(R.string.status_scanning)
                         backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
                             stringResource(R.string.status_downloading_record, backgroundDownload.percent)
+                        fullRecordBusyPercent != null ->
+                            stringResource(R.string.status_downloading_record, fullRecordBusyPercent)
                         else -> null
                     },
                     onToggleArmed = { viewModel.updateArmedState() },
@@ -2250,6 +2284,14 @@ private fun MapControlsColumn(
         // holder of the connection — an Arm must not reach a different rocket).
         val armActionEnabled = (locatorArmedMessageState == LocatorMessageState.Idle ||
             locatorArmedMessageState == LocatorMessageState.AckUpdated) && locatorConnected
+        // ADR-0038 — read here so the note under the readouts and the Arm button
+        // below answer from the same broadcast.
+        val sensorFaults = rocketState.sensorFaults()
+        val failedSensorNames = joinSensorNames(buildList {
+            if (sensorFaults.imuFailed) add(stringResource(R.string.sensor_name_imu))
+            if (sensorFaults.baroFailed) add(stringResource(R.string.sensor_name_baro))
+            if (sensorFaults.gpsFailed) add(stringResource(R.string.sensor_name_gps))
+        })
 
         Column(
             modifier = Modifier
@@ -2465,6 +2507,27 @@ private fun MapControlsColumn(
                 }
             }
 
+            // Sensor failure (ADR-0038). A locator whose IMU, barometer or GPS
+            // failed its power-on check used to restart, so it never stayed on the
+            // air long enough to be shown here; it now boots without the sensor and
+            // reports it. The statistics panel already turns that sensor's lines
+            // red, but red says "unhealthy", not "the locator will refuse to arm" —
+            // and the refusal is the part an operator on the pad needs to read.
+            //
+            // Gated on a live locator: the health bytes describe the boot that sent
+            // them, and a power cycle may have fixed what the last broadcast said.
+            if (lastMessageAge < messageTimeout && sensorFaults.any) {
+                LinkQualityNote(
+                    text = stringResource(R.string.sensor_fault_failed, failedSensorNames) + " " +
+                        stringResource(
+                            if (sensorFaults.armingAllowed) R.string.sensor_fault_gps_only
+                            else R.string.sensor_fault_arming_disabled
+                        ),
+                    color = MaterialTheme.colorScheme.error,
+                    width = noteWidth,
+                )
+            }
+
             // ── Descending action buttons ─────────────────────────────────────
             // Large, clearly labeled touch targets revealed by tapping the panel.
             AnimatedVisibility(
@@ -2570,6 +2633,23 @@ private fun MapControlsColumn(
                                 Toast.makeText(
                                     context,
                                     context.getString(R.string.disarm_in_flight_blocked),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else if (!disarming && !sensorFaults.armingAllowed) {
+                                // The locator refuses ArmRequest without its IMU and
+                                // barometer (ADR-0038). Sending it anyway would end in
+                                // the arm-pending blink timing out with no reason
+                                // given; say the reason instead. Named from the IMU
+                                // and baro only — a failed GPS is not why.
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.arm_blocked_sensor_fault,
+                                        joinSensorNames(buildList {
+                                            if (sensorFaults.imuFailed) add(context.getString(R.string.sensor_name_imu))
+                                            if (sensorFaults.baroFailed) add(context.getString(R.string.sensor_name_baro))
+                                        }),
+                                    ),
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {

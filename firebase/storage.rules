@@ -1,0 +1,24 @@
+rules_version = '2';
+
+// Cloud Storage rules for gs://steam-pigeon.firebasestorage.app
+// (locator ADR-0040, issue #60). Paste into Firebase console:
+// Build -> Storage -> Rules, then Publish. Keep this file and the console
+// in step; this file is the reference copy.
+//
+// Each signed-in user reads and writes only their own flights, under
+//   users/{uid}/locators/{locator_id}/{record_ts}_{crc}.{bin,csv}
+// A record is at most ~0.85 MB raw (9,000 x 94 B) and a few MB as CSV,
+// so 16 MB is a generous ceiling that still stops a runaway upload.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{uid}/{allPaths=**} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && request.resource.size < 16 * 1024 * 1024;
+    }
+    // Everything else is closed.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

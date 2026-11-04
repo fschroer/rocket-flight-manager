@@ -21,6 +21,9 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.simflight.SimMotor
+import com.steampigeon.flightmanager.data.simflight.SimRocket
+import com.steampigeon.flightmanager.data.SimFlightWire
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_PARITY_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
@@ -268,6 +271,20 @@ class BluetoothService : Service() {
                 // Parity frames always carry the full payload buffer → fixed size.
                 return FLIGHT_DATA_PARITY_SIZE
             }
+            MsgType.FullRecordData -> {
+                // Variable-length: the 25-byte header says how many payload bytes
+                // follow (payload_len at offset 23).  Until that byte is buffered,
+                // ask for the maximum and wait.
+                if (bytes.size <= Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN) return Protocol.MAX_PACKET_SIZE
+                return Protocol.FULL_RECORD_PACKET_HEADER_SIZE +
+                    (bytes[Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN].toInt() and 0xFF)
+            }
+            MsgType.FullRecordParity -> {
+                // Always the full payload buffer, so a fixed 255 B.  Its payload_len
+                // is the XOR of its members' lengths, NOT its own length, so reading
+                // it here would cut the frame short and fail its CRC.
+                return Protocol.FULL_RECORD_PARITY_SIZE
+            }
             else -> return Int.MAX_VALUE  // unknown type — skip
         }
         return Protocol.HEADER_SIZE + payloadSize
@@ -367,8 +384,58 @@ class BluetoothService : Service() {
         return btManager.sendData(frame)
     }
 
+    /**
+     * FullRecordRequest (ADR "The radio download becomes the primary data path"):
+     * page [page] of archive slot [record].  [page] 0xFFFF stops the transfer.
+     * Locator-directed, so it goes out addressed and only with a locator connected.
+     */
+    fun sendFullRecordRequest(record: Int, page: Int): Boolean =
+        sendMessage(MsgType.FullRecordRequest, byteArrayOf(
+            (page and 0xFF).toByte(), ((page shr 8) and 0xFF).toByte(), record.toByte(), 0))
+
+    /** FullRecordAck: the held-packet bitmap of [page] of the record [recordCrc] names. */
+    fun sendFullRecordAck(recordCrc: Long, page: Int, packetCount: Int, bitmap: ByteArray): Boolean {
+        if (bitmap.size != 32) return false
+        return sendMessage(MsgType.FullRecordAck, concatBytes(
+            u32le(recordCrc),
+            byteArrayOf((page and 0xFF).toByte(), ((page shr 8) and 0xFF).toByte(),
+                (packetCount and 0xFF).toByte(), ((packetCount shr 8) and 0xFF).toByte()),
+            bitmap,
+        ))
+    }
+
+    /**
+     * Show a background full-record transfer in the service's own notification,
+     * which is what keeps it running while the app is in the background (ADR
+     * decision 7).  [text] null restores the normal text.
+     */
+    fun showTransferProgress(text: String?, progress: Int = 0, max: Int = 0) {
+        val n = if (text == null) getNotification() else
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getString(R.string.full_record_notification_title))
+                .setContentText(text)
+                .setSmallIcon(R.drawable.rocket)
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .apply { if (max > 0) setProgress(max, progress, false) }
+                .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(1, n)
+    }
+
     fun deploymentTest(deploymentChannel: Int): Boolean =
         sendMessage(MsgType.DeploymentTestRequest, byteArrayOf(deploymentChannel.toByte()))
+
+    /** Start a simulated flight on the connected locator (locator ADR "An
+     *  app-started simulated flight computed on the locator").  The locator
+     *  refuses silently unless it is disarmed and still on the pad; the app sees
+     *  the result as the simulated bit in telemetry, or its absence. */
+    fun startSimulatedFlight(rocket: SimRocket, motor: SimMotor, seed: Int, originLat: Double?, originLon: Double?): Boolean =
+        rocket.problems(motor).isEmpty() &&
+            sendMessage(MsgType.SimFlightStart, SimFlightWire.start(rocket, motor, seed, originLat, originLon))
+
+    /** End a simulated flight.  Never refused by the locator. */
+    fun cancelSimulatedFlight(): Boolean =
+        sendMessage(MsgType.SimFlightRequest, SimFlightWire.cancel())
 
     /** Ask the receiver for its current LoRa channel and device name.
      *  Used when no locator PreLaunchData has been received recently. */

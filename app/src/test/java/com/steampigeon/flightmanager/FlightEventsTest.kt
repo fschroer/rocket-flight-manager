@@ -55,6 +55,7 @@ class FlightEventsTest {
             statByte(DeployMode.MainBackup),
         ),
         record: Int = RECORD,
+        flags: Int = 0,
     ): ByteArray {
         val frame = ByteArray(Protocol.HEADER_SIZE + Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE)
         val buf = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
@@ -66,7 +67,7 @@ class FlightEventsTest {
         buf.putShort(0)
 
         buf.put(record.toByte())
-        buf.put(0)                                   // reserved
+        buf.put(flags.toByte())                      // flags (was reserved): bit 0 simulated
         var mask = 0
         timestamps.keys.forEach { mask = mask or (1 shl it.ordinal) }
         buf.putShort(mask.toShort())
@@ -143,6 +144,14 @@ class FlightEventsTest {
         assertEquals(1, events.channelFor(DeployMode.DroguePrimary))
         assertEquals(3, events.channelFor(DeployMode.MainPrimary))
         assertNull(events.channelFor(DeployMode.Unused))
+    }
+
+    // ADR-0041: the byte that was reserved carries the simulated mark.
+    @Test
+    fun readsTheSimulatedFlag() {
+        assertEquals(false, requireNotNull(FlightEvents.parse(buildFrame(emptyMap()))).simulated)
+        assertEquals(true, requireNotNull(FlightEvents.parse(buildFrame(emptyMap(), flags = 1))).simulated)
+        assertEquals(false, requireNotNull(FlightEvents.parse(buildFrame(emptyMap(), flags = 0xFE))).simulated)
     }
 
     @Test

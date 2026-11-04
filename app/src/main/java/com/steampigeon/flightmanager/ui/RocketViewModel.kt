@@ -33,6 +33,9 @@ import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.DeploymentTestParsed
 import com.steampigeon.flightmanager.data.BackgroundDownloadController
 import com.steampigeon.flightmanager.data.FlightDataRepository
+import com.steampigeon.flightmanager.data.FirebaseCloud
+import com.steampigeon.flightmanager.data.FullRecordHub
+import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import com.steampigeon.flightmanager.data.DeployChannelStats
 import com.steampigeon.flightmanager.data.FlightEventIndex
 // Aliased: ParsedMessage.FlightEvents (the wire message) would otherwise shadow
@@ -126,6 +129,7 @@ sealed class ParsedMessage {
     data class FlightMetadata(val frame: ByteArray)          : ParsedMessage()
     data class FlightData(val frame: ByteArray)              : ParsedMessage()
     data class FlightDataParity(val frame: ByteArray)        : ParsedMessage()
+    data class FullRecord(val frame: ByteArray)              : ParsedMessage()
     data class ReceiverInfo(val msg: ReceiverInfoParsed)     : ParsedMessage()
     data class VersionInfo(val msg: VersionInfoParsed)       : ParsedMessage()
     data class FlightEvents(val msg: FlightEventsData)       : ParsedMessage()
@@ -189,7 +193,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // original cadence — those points are flagged synthetic and no marker
         // reads their time.
         const val LEGACY_PLACEHOLDER_INTERVAL_MS = 200L
-        const val SAMPLES_PER_SECOND = 20
+        // Locator super-loop rate (firmware SAMPLES_PER_SECOND).  50 since the
+        // locator ADR "50 Hz loop, variable-rate archive and magnetometer": the
+        // archive is 50 Hz around launch, main and landing and 5 Hz elsewhere, so
+        // archived samples are NOT evenly spaced — always use their timestampMs.
+        const val SAMPLES_PER_SECOND = 50
         const val HDOP_SCALE = 10
         const val ALTIMETER_SCALE = 10
         const val ACCELEROMETER_SCALE = 2048
@@ -316,7 +324,38 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     //private val _userPreferences = MutableStateFlow(UserPreferences.getDefaultInstance())
     //val userPreferences: StateFlow<UserPreferences> = _userPreferences.asStateFlow()
 
+    // ---- Background full-record transfer (ADR "The radio download becomes the
+    // primary data path").  The transfer itself lives in FullRecordHub so an
+    // Activity recreation can neither restart nor duplicate it.
+    private val _transferOnSignal = MutableStateFlow(true)
+    val transferOnSignal: StateFlow<Boolean> = _transferOnSignal.asStateFlow()
+    private val _transferOnPickup = MutableStateFlow(true)
+    val transferOnPickup: StateFlow<Boolean> = _transferOnPickup.asStateFlow()
+    val fullRecordStatus: StateFlow<FullRecordTransfer.Status> get() = FullRecordHub.status
+    val fullRecordPending: StateFlow<Int?> get() = FullRecordHub.pending
+
+    fun startFullRecordTransfer() { FullRecordHub.start() }
+    fun stopFullRecordTransfer() { FullRecordHub.stop() }
+
+    fun setTransferOnSignal(on: Boolean) {
+        _transferOnSignal.value = on
+        FullRecordHub.settings?.signalTrigger = on
+        viewModelScope.launch {
+            currentContext.userPreferencesDataStore.updateData { it.toBuilder().setTransferOnSignal(on).build() }
+        }
+    }
+
+    fun setTransferOnPickup(on: Boolean) {
+        _transferOnPickup.value = on
+        FullRecordHub.settings?.pickupTrigger = on
+        viewModelScope.launch {
+            currentContext.userPreferencesDataStore.updateData { it.toBuilder().setTransferOnPickup(on).build() }
+        }
+    }
+
     init {
+        FullRecordHub.init(application)
+        FirebaseCloud.init(application)
         viewModelScope.launch {
             application.userPreferencesDataStore.data.collect { preferences ->
                 //_userPreferences.value = preferences
@@ -331,6 +370,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 _remoteReceiverConfig.update { it.copy(deviceName = preferences.receiverName) }
                 _knownLocators.value = preferences.knownLocatorsMap.mapKeys { it.key.toLong() and 0xFFFFFFFFL }
                 knownLocatorsLoaded = true
+                // Absent = on: both automatic triggers default on (ADR "The radio
+                // download becomes the primary data path", decision 6).
+                _transferOnSignal.value = !preferences.hasTransferOnSignal() || preferences.transferOnSignal
+                _transferOnPickup.value = !preferences.hasTransferOnPickup() || preferences.transferOnPickup
+                FullRecordHub.settings?.signalTrigger = _transferOnSignal.value
+                FullRecordHub.settings?.pickupTrigger = _transferOnPickup.value
             }
         }
         // Reset receiver config whenever the user selects a *different* receiver so
@@ -1924,6 +1969,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun clearFlightProfileData() {
+        partialViewJob?.cancel()
+        _fullRecordSamples.value = emptyList()
+        _flightProfileAwaitingTransfer.value = false
         _flightProfileAglData.value = emptyList()
         _flightProfileAccelerometerData.value = emptyList()
         _flightEvents.value = FlightEventsData()
@@ -2116,7 +2164,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                     else -> null
                 }
             }
-            if (points.isNotEmpty()) _flightPath.value = points
+            // A point saved before positions were checked at parse time could be
+            // out of range, and MapLibre throws on it every launch.
+            val usable = points.filter { usableFix(it.latitude, it.longitude) == it.latitude to it.longitude }
+            if (usable.isNotEmpty()) _flightPath.value = usable
         } catch (_: Exception) {}
     }
 
@@ -2145,10 +2196,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     //
     // Distinct from the flight PATH above and from the locator's downloadable
     // archive.  The path is where the rocket went; the archive is what the locator
-    // measured at 20 Hz.  This is what the PHONE saw -- the same 1 Hz frames plus
-    // the receiver's RSSI/SNR/noise-floor reading of each one, plus what the app
-    // decided and said out loud about them.  None of that survives the flight
-    // anywhere else.
+    // measured at 50 Hz (5 Hz on the long descent).  This is what the PHONE
+    // saw -- the same 1 Hz frames plus the receiver's RSSI/SNR/noise-floor
+    // reading of each one, plus what the app decided and said out loud about
+    // them.  None of that survives the flight anywhere else.
 
     val flightLogStore = FlightLogStore(application)
     private val flightLogRecorder = FlightLogRecorder(flightLogStore.sink())
@@ -2583,6 +2634,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val versionInfoStale = MutableStateFlow(true)
 
+    /**
+     * When the last full-record packet arrived.  The version poll below counts it
+     * as the locator being on the air: while a transfer runs, the locator sends
+     * its periodic frame only once per ~5.4 s cycle, so `lastMessageTime` alone
+     * went more than 5 s stale every cycle and read as the link dropping and
+     * coming back, which re-requested the version.  That request's answer
+     * collided with the transfer's ACK on the radio, stalling the download for
+     * minutes (2026-11-04; locator ADR "full-record radio download").
+     */
+    @Volatile private var lastFullRecordRxMs = 0L
+
     fun startService() {
         val context = getApplication<Application>().applicationContext
         val intent = Intent(context, BluetoothService()::class.java)
@@ -2618,6 +2680,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         // toggles produced four collectors on one ViewModel instance, handling
         // 29/28/23/19 packets concurrently.
         inboundJobs.forEach { it.cancel() }
+        FullRecordHub.service = service
 
         // Keep the service's send gate in sync with the connection, so only the
         // locator we are connected to can be commanded.  BluetoothService.locatorConnected
@@ -2747,6 +2810,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
+                            // The background transfer is paced by the connected
+                            // locator's periodic frames: each allows one uplink.
+                            // PreLaunchData means WaitingLaunch (flight state 0).
+                            FullRecordHub.onPeriodic(currentTime, parsed.msg.locatorId, parsed.msg.armed,
+                                FullRecordTransfer.FLIGHT_STATE_WAITING_LAUNCH, parsed.msg.rssi, pickedUp = false)
+                            // The pad, seen.  PreLaunchData comes only from a disarmed
+                            // locator in WaitingLaunch, so an app started or restarted
+                            // with the rocket on the pad now counts it as grounded, and
+                            // the launch that follows clears the old trace.  Before,
+                            // only a TelemetryData frame counted, and the first one such
+                            // an app heard was already Launched.  A restart mid-flight
+                            // hears no PreLaunchData, so its protection stands.
+                            _previousFlightState = FlightStates.WaitingLaunch
+                            flightStateObserved = true
                             // Prepped-and-disarmed verdict (#37), inside the same
                             // connected-locator gate so a bystander cannot raise it.
                             BluetoothManagerRepository.updatePadAlert(parsed.msg.padAlert)
@@ -2761,6 +2838,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     // is what makes it usable for ageing the fields
                                     // only this message carries.
                                     lastPreLaunchDataTime = currentTime,
+                                    // PreLaunchData means no simulation is in flight.
+                                    simulated = false,
                                     // Back on the pad.  PreLaunchData is sent only by
                                     // a disarmed locator whose flight state is
                                     // WaitingLaunch, so its arrival is the locator
@@ -2883,6 +2962,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 BluetoothManagerRepository.updateLocatorArmedMessageState(
                                     LocatorMessageState.AckUpdated)
                             }
+                            // Pickup rides in bit 7 of physical_deployment_stats.
+                            FullRecordHub.onPeriodic(currentTime, parsed.msg.locatorId, parsed.msg.armed,
+                                parsed.msg.flightState.flightStates.toInt(), parsed.msg.rssi,
+                                pickedUp = parsed.msg.physicalDeploymentStats and
+                                    Protocol.TELEMETRY_PICKED_UP_BIT != 0,
+                                simulated = parsed.msg.physicalDeploymentStats and
+                                    Protocol.TELEMETRY_SIMULATED_BIT != 0)
                             // TelemetryData carries no pad_alert — it is an on-pad
                             // condition and this message means armed or in flight.
                             // Cleared explicitly because PreLaunchData stops arriving
@@ -2914,6 +3000,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     channel4Fired = DeployChannelStats.fromByte(parsed.msg.deploymentCh4Stats).fired,
                                     drogueDeployDetected = parsed.msg.physicalDeploymentStats.and(1) == 1,
                                     mainDeployDetected = parsed.msg.physicalDeploymentStats.and(2) == 2,
+                                    // A locator-computed simulated flight (locator ADR-0041).
+                                    simulated = (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0,
                                     // Guard against a non-finite AGL ever entering UI state:
                                     // it would render as "NaN" and feed NaN into tilt/descent math.
                                     altitudeAboveGroundLevel = parsed.msg.agl.takeIf { it.isFinite() }
@@ -2936,15 +3024,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             val newFlightState = parsed.msg.flightState
                             if (flightStateObserved &&
                                 startsNewFlight(_previousFlightState, newFlightState)) {
+                                // A launch erases every trace, as the map's Reset does
+                                // (Frank, 2026-11-03): the live track, a displayed
+                                // archived track, and a paused recording.  The record
+                                // itself is kept; Flight Profiles can draw it again.
                                 _flightPath.value = emptyList()
                                 saveFlightPath()
                                 landingConcludedThisFlight = false
                                 landedStatusReceived = false
-                                // Fall back to the live track. An archived record substitutes
-                                // for the live path while displayed, so a new flight left on
-                                // the archived source would draw the old record and none of
-                                // the flight now in the air.  The download itself is kept.
+                                _archivedFlightPath.value = emptyList()
                                 _showArchivedPath.value = false
+                                _isFlightPathRecording.value = true
                                 // Opened BEFORE this frame is logged, so the frame that
                                 // proved the launch lands after the launch marker rather
                                 // than in the pre-roll ahead of it.
@@ -2964,8 +3054,14 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             if (landingConcluded(newFlightState, parsed.msg.agl, parsed.msg.velNed.z))
                                 landingConcludedThisFlight = true
                             if (newFlightState == FlightStates.Landed) landedStatusReceived = true
+                            // A simulated flight's Landed frame is not drawn: by then the
+                            // locator has stopped simulating GPS, so it carries the real
+                            // position and the trace snapped from the simulated landing
+                            // area back to the pad (Frank, 2026-11-04).
+                            val endsSimTrace = endsSimulatedTrace(newFlightState,
+                                (parsed.msg.physicalDeploymentStats and Protocol.TELEMETRY_SIMULATED_BIT) != 0)
                             if (_isFlightPathRecording.value &&
-                                records &&
+                                records && !endsSimTrace &&
                                 (parsed.msg.latitude != 0.0 || parsed.msg.longitude != 0.0) &&
                                 !repeatsLastPathPoint(parsed.msg)) {
                                 // Wall-clock, not elapsedRealtime: the path is
@@ -2979,6 +3075,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 )
                                 saveFlightPath()
                             }
+                            // A simulated flight's trace ends at its landing (Frank,
+                            // 2026-11-04).  A real one keeps recording, since wind
+                            // can carry a landed rocket.
+                            if (endsSimTrace) _isFlightPathRecording.value = false
                             _previousFlightState = newFlightState
                             flightStateObserved = true
                             logTelemetryFrame(parsed.msg, currentTime, verdict)
@@ -3113,20 +3213,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                         is ParsedMessage.FlightMetadata -> {
                             val ok = FlightDataRepository.onFlightMetadata(parsed.frame)
                             if (ok) {
-                                _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
-                                // Expose parsed metadata to the UI via the existing _flightProfileMetadata flow.
-                                // FlightDataRepository.metadata maps directly to FlightProfileMetadata used by the UI.
-                                _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
-                                    FlightProfileMetadata(
-                                        position    = record.position,
-                                        date        = if (record.timestampS > 0L)
-                                                          java.time.Instant.ofEpochSecond(record.timestampS)
-                                                              .atZone(java.time.ZoneId.systemDefault())
-                                                      else null,
-                                        apogee      = record.apogeeM,
-                                        timeToDrogue = record.flightTimeMs / 1000f,
-                                    )
+                                // The background transfer chooses its records from
+                                // this list, however it was asked for.
+                                _connectedLocatorId.value?.let {
+                                    FullRecordHub.onListing(it, FlightDataRepository.metadata.value)
                                 }
+                                publishFlightMetadata()
                             }
                         }
 
@@ -3160,6 +3252,11 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     publishArchivedPath(samples)
                                 }
                             }
+                        }
+
+                        is ParsedMessage.FullRecord -> {
+                            lastFullRecordRxMs = System.currentTimeMillis()
+                            FullRecordHub.onFrame(parsed.frame)
                         }
 
                         is ParsedMessage.FlightDataParity -> {
@@ -3199,11 +3296,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // Seed from the live link rather than false: this function re-runs on
             // every Activity recreation, and a false seed would read the already-up
             // link as a rising edge and re-request on each theme or locale change.
+            fun lastLocatorRxMs() = maxOf(_rocketState.value.lastMessageTime, lastFullRecordRxMs)
             var linkWasUp =
-                System.currentTimeMillis() - _rocketState.value.lastMessageTime < 5_000L
+                System.currentTimeMillis() - lastLocatorRxMs() < 5_000L
             while (true) {
                 delay(1_000L)
-                val age = System.currentTimeMillis() - _rocketState.value.lastMessageTime
+                val age = System.currentTimeMillis() - lastLocatorRxMs()
                 val linkUp = age < 5_000L
                 if (linkUp && !linkWasUp) versionInfoStale.value = true
                 linkWasUp = linkUp
@@ -3716,6 +3814,24 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** The repository's flight list, published to the Flight Profiles screen. */
+    private fun publishFlightMetadata() {
+        _flightProfileMetadataMessageState.value = LocatorMessageState.AckUpdated
+        // Expose parsed metadata to the UI via the existing _flightProfileMetadata flow.
+        // FlightDataRepository.metadata maps directly to FlightProfileMetadata used by the UI.
+        _flightProfileMetadata.value = FlightDataRepository.metadata.value.map { record ->
+            FlightProfileMetadata(
+                position    = record.position,
+                date        = if (record.timestampS > 0L)
+                                  java.time.Instant.ofEpochSecond(record.timestampS)
+                                      .atZone(java.time.ZoneId.systemDefault())
+                              else null,
+                apogee      = record.apogeeM,
+                timeToDrogue = record.flightTimeMs / 1000f,
+            )
+        }
+    }
+
     /**
      * Fetch the flight-record list, re-requesting with exponential backoff until
      * the locator answers.
@@ -3733,6 +3849,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun fetchFlightProfileMetadata(service: BluetoothService) {
         var backoffMs = METADATA_RETRY_INITIAL_MS
         var attempt = 0
+
+        // A background full-record transfer is running, and it began from this
+        // locator's list, which the repository still holds.  Asking again would
+        // compete with the transfer for the receiver's one forwarding slot (each
+        // periodic frame carries one uplink, the transfer's ACK), and the request
+        // rarely got through.  Show the list it already has.
+        if (FullRecordHub.status.value is FullRecordTransfer.Status.Transferring &&
+            FlightDataRepository.metadata.value.isNotEmpty()) {
+            publishFlightMetadata()
+            return
+        }
 
         // Exits by cancellation, or by an explicit return below.
         while (true) {
@@ -3773,8 +3900,99 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ADR "The radio download becomes the primary data path", decision 6b: the
+    // history reads the nearest copy, and a background transfer is never joined by
+    // a second one.  True while the selected record is waiting its turn in it.
+    private val _flightProfileAwaitingTransfer = MutableStateFlow(false)
+    val flightProfileAwaitingTransfer: StateFlow<Boolean> = _flightProfileAwaitingTransfer.asStateFlow()
+    private var partialViewJob: Job? = null
+
+    // Samples of a full record shown in the chart; the chart prefers these over
+    // the quick-look transfer's when present.
+    private val _fullRecordSamples = MutableStateFlow<List<FlightSample>>(emptyList())
+    val fullRecordSamples: StateFlow<List<FlightSample>> = _fullRecordSamples.asStateFlow()
+
+    private fun showFullRecord(raw: ByteArray, count: Int) {
+        val samples = FullRecordHub.toProfileSamples(raw, count)
+        _fullRecordSamples.value = samples
+        _flightProfileAglData.value = samples.map { (it.altitudeM * 10).toInt().toUShort() }
+        _flightProfileAccelerometerData.value = samples.map { it.accel }
+        publishArchivedPath(samples)
+    }
+
+    /** True when the selected record was served from the phone or the running transfer. */
+    private fun showNearestCopy(): Boolean {
+        partialViewJob?.cancel()
+        _flightProfileAwaitingTransfer.value = false
+        _fullRecordSamples.value = emptyList()
+        val locatorId = _connectedLocatorId.value ?: return false
+        val position = _flightProfileArchivePosition.value
+        val ts = FlightDataRepository.metadata.value.firstOrNull { it.position == position }?.timestampS ?: 0L
+        if (ts <= 0L) return false
+        FullRecordHub.finishedRecord(locatorId, ts)?.let { f ->
+            val raw = FullRecordHub.bytes(f) ?: return false
+            showFullRecord(raw, f.samples)
+            updateFlightProfileDataMessageState(LocatorMessageState.AckUpdated)
+            return true
+        }
+        if (!FullRecordHub.active) return false
+        // Listing the records put the locator in its listing mode, which holds
+        // the transfer.  Nothing more is needed from that mode, so hand the link
+        // straight back rather than wait out the locator's 30 s timeout.
+        FullRecordHub.service?.exitFlightProfileMode()
+        // Pages arrive in time order, so the chart grows from launch onward.
+        partialViewJob = viewModelScope.launch {
+            var shown = -1
+            FullRecordHub.status.collect {
+                if (!_flightProfileDataDisplayState.value || _flightProfileArchivePosition.value != position) {
+                    partialViewJob?.cancel(); return@collect
+                }
+                FullRecordHub.finishedRecord(locatorId, ts)?.let { f ->
+                    FullRecordHub.bytes(f)?.let { raw -> showFullRecord(raw, f.samples) }
+                    _flightProfileAwaitingTransfer.value = false
+                    updateFlightProfileDataMessageState(LocatorMessageState.AckUpdated)
+                    partialViewJob?.cancel(); return@collect
+                }
+                val partial = FullRecordHub.partial(locatorId, ts)
+                _flightProfileAwaitingTransfer.value = partial == null
+                // Redraw per 64 samples, not per packet: the chart is not free.
+                if (partial != null && partial.first - shown >= 64) {
+                    shown = partial.first
+                    showFullRecord(partial.second, partial.first)
+                    updateFlightProfileDataMessageState(LocatorMessageState.Sent)
+                }
+            }
+        }
+        return true
+    }
+
     fun getFlightProfileData(service: BluetoothService) {
         _flightProfileDataDisplayState.value = true
+        if (showNearestCopy()) return
+        // Not on the phone and no transfer running: the web store next, then the
+        // locator (decision 6b).  Only when signed in; otherwise straight to the locator.
+        val locatorId = _connectedLocatorId.value
+        val position = _flightProfileArchivePosition.value
+        val meta = FlightDataRepository.metadata.value.firstOrNull { it.position == position }
+        if (locatorId != null && meta != null && meta.timestampS > 0 && FirebaseCloud.account.value != null) {
+            _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
+            viewModelScope.launch {
+                val f = FirebaseCloud.fetch(locatorId, meta.timestampS, position, meta.apogeeM)
+                if (!_flightProfileDataDisplayState.value || _flightProfileArchivePosition.value != position) return@launch
+                val raw = f?.let { FullRecordHub.bytes(it) }
+                if (f != null && raw != null) {
+                    showFullRecord(raw, f.samples)
+                    updateFlightProfileDataMessageState(LocatorMessageState.AckUpdated)
+                } else {
+                    requestQuickLook(service)
+                }
+            }
+            return
+        }
+        requestQuickLook(service)
+    }
+
+    private fun requestQuickLook(service: BluetoothService) {
         _flightProfileDataMessageState.value = LocatorMessageState.SendRequested
         SpLog.d(TAG, "Requesting flight data for archive position ${_flightProfileArchivePosition.value}")
         // The same record as a held, unfinished download resumes it; any other
@@ -3801,6 +4019,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 FlightEventsData.parse(frame)?.let { ParsedMessage.FlightEvents(it) }
             MsgType.FlightData       -> ParsedMessage.FlightData(frame)
             MsgType.FlightDataParity -> ParsedMessage.FlightDataParity(frame)
+            MsgType.FullRecordData, MsgType.FullRecordParity -> ParsedMessage.FullRecord(frame)
             MsgType.ChannelSurvey    -> ParsedMessage.ChannelSurvey(parseChannelSurvey(frame))
             MsgType.LocatorSearchResult -> ParsedMessage.LocatorSearch(parseLocatorSearch(frame))
             else                     -> null
@@ -3821,10 +4040,9 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     private fun parsePrelaunch(frame: ByteArray): PrelaunchParsed {
         var o = 6 // start after PacketHeader
 
-        val latitude = Bytes.f64(frame, o); o += 8
-        val longitude = Bytes.f64(frame, o); o += 8
-        val rawLatitude = Bytes.f64(frame, o); o += 8
-        val rawLongitude = Bytes.f64(frame, o); o += 8
+        // Out-of-range positions become the 0,0 "no fix" placeholder: see usableFix.
+        val (latitude, longitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
+        val (rawLatitude, rawLongitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
         val satellites = Bytes.u8(frame[o]); o += 1
         val hacc = Bytes.f32(frame, o); o += 4
 
@@ -3893,8 +4111,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
     fun parseTelemetry(frame: ByteArray): TelemetryParsed {
         var o = 6
 
-        val latitude = Bytes.f64(frame, o); o += 8
-        val longitude = Bytes.f64(frame, o); o += 8
+        val (latitude, longitude) = usableFix(Bytes.f64(frame, o), Bytes.f64(frame, o + 8)); o += 16
         val satellites = Bytes.u8(frame[o]); o += 1
         val hacc = Bytes.f32(frame, o); o += 4
 
@@ -4078,9 +4295,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
  * **What this does NOT defend against, despite what it used to say here.**  The
  * original rationale had the locator transmitting at ~5 Hz against a ~1 Hz payload
  * refresh, so that four frames in five repeated a fix bit-for-bit.  That is wrong:
- * the locator transmits exactly **once per second**.  `main.c`'s 20 Hz superloop
+ * the locator transmits exactly **once per second**.  `main.c`'s 50 Hz superloop
  * wraps `rocket_service_count` at `SAMPLES_PER_SECOND`, and `Factory.cpp`'s
- * `case 2` is the only branch that reaches the radio — one frame per second,
+ * telemetry slot (`kSlotTelemetry`, 100 ms into the second) is the only branch
+ * that reaches the radio — one frame per second,
  * pre-launch or telemetry, armed or not.  There is no 5x stream and there never
  * was one.
  *
@@ -4149,6 +4367,14 @@ internal fun repeatsFix(last: PathPoint?, latitude: Double, longitude: Double, a
 }
 
 /**
+ * True when this telemetry frame ends a simulated flight's trace: the locator
+ * reports Landed with the simulated bit set (locator ADR-0041, 2026-11-04
+ * amendment).  A real flight's trace keeps recording after landing.
+ */
+internal fun endsSimulatedTrace(flightState: FlightStates, simulated: Boolean): Boolean =
+    simulated && flightState == FlightStates.Landed
+
+/**
  * On the ground: waiting for a launch, or landed from the last one.
  *
  * NoSignal is deliberately NOT grounded.  [FlightStates.fromUByte] falls back to
@@ -4187,6 +4413,20 @@ internal fun FlightStates.isAirborne() =
  * ordinary use — that was the recognition gate dropping all telemetry (see
  * restoreProvisionalRecognition), not this rule.
  */
+/**
+ * A received position, or the 0,0 "no fix" placeholder if it could not be one.
+ *
+ * MapLibre's LatLng throws on a latitude outside -90..90 (NaN included), and
+ * the map built one straight from telemetry: a single bad frame killed the app
+ * ("latitude must be between -90 and 90", Frank, 2026-11-03). Every screen
+ * already treats 0,0 as no fix, so the frame keeps its other fields and the map
+ * waits for the next good position. Both halves go together: a good longitude
+ * with a NaN latitude is not half a fix.
+ */
+internal fun usableFix(lat: Double, lon: Double): Pair<Double, Double> =
+    if (lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0) lat to lon
+    else 0.0 to 0.0
+
 internal fun startsNewFlight(previous: FlightStates, current: FlightStates) =
     previous.isGrounded() && current.isAirborne()
 

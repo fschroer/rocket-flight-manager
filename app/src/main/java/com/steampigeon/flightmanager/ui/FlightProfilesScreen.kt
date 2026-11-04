@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,7 +46,11 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import com.steampigeon.flightmanager.data.FullRecordHub
+import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -127,8 +133,9 @@ private const val CHART_GRID_COUNT     = 5    // target gridlines per axis
 private const val MAX_EVENT_TEXT_SCALE = 2f
 
 // Upper bound on pinch zoom.  At 25x a 60 s flight shows ~2.4 s across the
-// plot, which is ~48 samples at the 20 Hz archive cadence — past that the
-// trace is just line segments between adjacent samples.
+// plot, which is ~120 samples at the 50 Hz ascent cadence (~48 on a pre-v8,
+// 20 Hz record) — past that the trace is just line segments between adjacent
+// samples.
 private const val MAX_CHART_ZOOM = 25f
 
 /**
@@ -256,7 +263,8 @@ private fun FlightSample.isSane(): Boolean {
 // ============================================================================
 
 // How far an event timestamp may sit from the nearest sample before the event is
-// dropped as unplottable.  Samples are 50 ms apart, so the nearest is normally
+// dropped as unplottable.  Every event the chart marks sits inside a full-rate window of the
+// download plan, where samples are 20–50 ms apart, so the nearest is normally
 // within 25 ms; the slack covers a gap left by packets still in flight (one lost
 // packet = 8 samples = 400 ms).
 private const val EVENT_MATCH_TOLERANCE_MS = 1_000L
@@ -340,8 +348,16 @@ fun FlightProfilesScreen(
 
     // Observe samples and progress directly from the repository so the chart
     // reacts to partial data arriving during a live transfer.
-    val samples   by FlightDataRepository.samples.collectAsState()
+    val quickLookSamples by FlightDataRepository.samples.collectAsState()
     val progress  by FlightDataRepository.progress.collectAsState()
+    // A full record from the phone, or the part of one the background transfer
+    // has delivered so far (ADR "The radio download becomes the primary data
+    // path", decision 6b), takes the place of the quick-look samples.
+    val fullSamples by viewModel.fullRecordSamples.collectAsState()
+    val samples = if (fullSamples.isNotEmpty()) fullSamples else quickLookSamples
+    val awaitingTransfer by viewModel.flightProfileAwaitingTransfer.collectAsState()
+    val transferStatus by viewModel.fullRecordStatus.collectAsState()
+    val transferPending by viewModel.fullRecordPending.collectAsState()
 
     // Filter to sane samples only — done once here so every downstream
     // calculation works from a validated list.
@@ -465,18 +481,55 @@ fun FlightProfilesScreen(
                 }
                 Spacer(modifier = modifier.weight(1f))
             }
+            FullRecordTransferStatus(transferStatus)
+            // The row is as tall as its taller button and both fill it, so the two
+            // match whatever their labels wrap to (Frank, 2026-11-04).
             Row(
-                modifier = modifier,
+                modifier = modifier.height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.padding_medium)),
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Available whatever the automatic triggers are set to (ADR
+                // decision 6), except when the locator's list shows nothing left
+                // to transfer.  The locator still refuses unless it is disarmed on
+                // the ground, so the button only asks.
+                val running = transferStatus.isRunning()
+                val pending = transferPending
                 OutlinedButton(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    enabled = running || pending != 0,
+                    onClick = {
+                        if (running) viewModel.stopFullRecordTransfer() else viewModel.startFullRecordTransfer()
+                    }
+                ) {
+                    Text(
+                        when {
+                            running -> stringResource(R.string.full_record_stop)
+                            pending == null -> stringResource(R.string.full_record_start)
+                            pending == 0 -> stringResource(R.string.full_record_none_pending)
+                            else -> pluralStringResource(R.plurals.full_record_start_pending, pending, pending)
+                        },
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                OutlinedButton(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
                     onClick = onCancelButtonClicked
                 ) {
-                    Text(stringResource(R.string.return_to_main))
+                    Text(stringResource(R.string.return_to_main), textAlign = TextAlign.Center)
                 }
             }
+        }
+    } else if (awaitingTransfer && fullSamples.isEmpty()) {
+        // Selected while the background transfer works on another record: it is
+        // never joined by a second transfer, so say so instead of starting one.
+        Column(
+            modifier = modifier.fillMaxHeight().padding(16.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(stringResource(R.string.full_record_awaiting))
+            FullRecordTransferStatus(transferStatus)
         }
     } else {
         // ── Chart view ───────────────────────────────────────────────────
@@ -596,6 +649,15 @@ fun FlightProfilesScreen(
                 .fillMaxHeight()
                 .padding(16.dp)
         ) {
+            // A record the locator flew from a formula (locator ADR-0041), marked
+            // by FlightEvents' flags so it is never read as a real flight.
+            if (flightEvents.simulated && flightEvents.record == flightProfileArchivePosition) {
+                Text(
+                    text = stringResource(R.string.simulated_label),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
             // Transfer progress indicator — visible until transfer is complete
             if (!progress.complete && progress.packetCount > 0) {
                 Text(
@@ -1041,4 +1103,26 @@ private fun DrawScope.chartDeploymentIndicators(
     indicator(8f,  stats.preFireContinuity)
     indicator(24f, stats.fired)
     indicator(40f, stats.postFireContinuity)
+}
+private fun FullRecordTransfer.Status.isRunning() =
+    this is FullRecordTransfer.Status.Waiting || this is FullRecordTransfer.Status.Listing ||
+        this is FullRecordTransfer.Status.Transferring
+
+/** One line on the background full-record transfer, or nothing when it is idle. */
+@Composable
+private fun FullRecordTransferStatus(status: FullRecordTransfer.Status) {
+    val onCable by FullRecordHub.onCable.collectAsState()
+    val text = when (status) {
+        is FullRecordTransfer.Status.Waiting -> stringResource(R.string.full_record_status_waiting)
+        is FullRecordTransfer.Status.Listing -> stringResource(R.string.full_record_status_listing)
+        is FullRecordTransfer.Status.Transferring -> stringResource(
+            if (onCable) R.string.full_record_status_progress_cable else R.string.full_record_status_progress,
+            status.recordIndex, status.recordCount,
+            if (status.totalSamples > 0) status.decoded * 100 / status.totalSamples else 0)
+        is FullRecordTransfer.Status.Finished ->
+            if (status.failed == 0) pluralStringResource(R.plurals.full_record_status_done, status.records, status.records)
+            else stringResource(R.string.full_record_status_done_failed, status.records, status.failed)
+        FullRecordTransfer.Status.Idle -> return
+    }
+    Text(text, modifier = Modifier.padding(vertical = 8.dp))
 }

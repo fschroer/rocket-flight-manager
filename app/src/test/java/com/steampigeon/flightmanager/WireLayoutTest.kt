@@ -1,5 +1,6 @@
 package com.steampigeon.flightmanager
 
+import com.steampigeon.flightmanager.data.SimFlightWire
 import com.steampigeon.flightmanager.data.FLIGHT_DATA_ACK_SIZE
 import com.steampigeon.flightmanager.data.FLIGHT_METADATA_PAYLOAD_SIZE
 import com.steampigeon.flightmanager.data.FlightEventIndex
@@ -150,10 +151,44 @@ class WireLayoutTest {
     // 9, was 10, since locator ARCHIVE_VERSION 6 (#38) — see METADATA_RECORD_COUNT.
     @Test fun flightMetadataPayloadSize() = assertEquals(90, FLIGHT_METADATA_PAYLOAD_SIZE)
 
-    // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + reserved 1 +
+    // FlightEvents: C++ sizeof 66 → payload 60 (record 1 + flags 1 +
     // present_mask 2 + flight_timestamp_s 4 + event_timestamp_ms[11] 44 +
     // max_altitude_m 4 + deployment_ch_stats[4] 4)
     @Test fun flightEventsPayloadSize() = assertEquals(60, Protocol.FLIGHT_EVENTS_PAYLOAD_SIZE)
+
+    // ── App-started simulated flight (locator ADR-0041) ─────────────────────────
+    // Firmware: static_assert(sizeof(SimFlightRequest) == 30), MsgType 30, offsetof
+    // asserts for every field, FlightEventsMessage::flags at 7, and the telemetry
+    // bit 0x40 beside the picked-up bit 0x80.  The iOS copy owes these (UI_PARITY).
+    @Test fun simFlightRequestType() = assertEquals(30.toUByte(), MsgType.SimFlightRequest.value)
+    @Test fun simFlightRequestSize() =
+        assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.CANCEL_PAYLOAD_SIZE)
+    @Test fun simFlightCancelOffset() = assertEquals(24, SimFlightWire.OFFSET_CANCEL_ACTION)
+
+    // Firmware: static_assert(sizeof(SimFlightStart) == 199), MsgType 31, and the
+    // offsetof asserts below (ADR-0041 amendment, 2026-11-03).
+    @Test fun simFlightStartType() = assertEquals(31.toUByte(), MsgType.SimFlightStart.value)
+    @Test fun simFlightStartSize() =
+        assertEquals(Protocol.SIM_FLIGHT_START_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.START_PAYLOAD_SIZE)
+    @Test fun simFlightStartOffsets() {
+        assertEquals(10, SimFlightWire.OFFSET_ORIGIN_LAT)
+        assertEquals(18, SimFlightWire.OFFSET_SEED)
+        assertEquals(24, SimFlightWire.OFFSET_RAIL_LEN_CM)
+        assertEquals(26, SimFlightWire.OFFSET_RAIL_ANGLE_DDEG)
+        assertEquals(30, SimFlightWire.OFFSET_TEMP_C)
+        assertEquals(31, SimFlightWire.OFFSET_N_POINTS)
+        assertEquals(32, SimFlightWire.OFFSET_PEAK_THRUST_N)
+        assertEquals(48, SimFlightWire.OFFSET_REF_DIAMETER_M)
+        assertEquals(52, SimFlightWire.OFFSET_CD_MILLI)
+        assertEquals(68, SimFlightWire.OFFSET_T_MS)
+        assertEquals(132, SimFlightWire.OFFSET_THRUST_FRAC)
+        assertEquals(196, SimFlightWire.OFFSET_LENGTH_MM)
+        assertEquals(198, SimFlightWire.OFFSET_STABILITY_DCAL)
+    }
+    @Test fun simulatedBits() {
+        assertEquals(0x40, Protocol.TELEMETRY_SIMULATED_BIT)
+        assertEquals(0x01, Protocol.FLIGHT_EVENTS_FLAG_SIMULATED)
+    }
 
     // The event count is baked into the payload size above and into the wire
     // order shared with the firmware's Communication::FlightEvent enum.
@@ -161,6 +196,48 @@ class WireLayoutTest {
 
     // FlightDataPacket: max LoRa frame = 256 on the app side
     @Test fun maxPacketSize() = assertEquals(256, Protocol.MAX_PACKET_SIZE)
+
+    // ── Paged full-record transfer ──────────────────────────────────────────────
+    // Firmware: static_assert(sizeof(FullRecordRequest) == 14), (FullRecordPacketHeader
+    // == 25), (kFullRecordPayloadSize == 230), (FullRecordAck == 50), plus offsetof
+    // asserts for every header field.  The iOS WireLayoutTests.swift pins the same.
+    @Test fun fullRecordMessageTypeValues() {
+        assertEquals(26.toUByte(), MsgType.FullRecordRequest.value)
+        assertEquals(27.toUByte(), MsgType.FullRecordData.value)
+        assertEquals(28.toUByte(), MsgType.FullRecordParity.value)
+        assertEquals(29.toUByte(), MsgType.FullRecordAck.value)
+    }
+    @Test fun fullRecordRequestSize() =
+        assertEquals(Protocol.FULL_RECORD_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + 2 + 1 + 1)
+    @Test fun fullRecordRequestSizeMatchesFirmware() = assertEquals(14, Protocol.FULL_RECORD_REQUEST_SIZE)
+    @Test fun fullRecordAckSize() =
+        assertEquals(Protocol.FULL_RECORD_ACK_SIZE, Protocol.HEADER_SIZE + targetIdSize + 4 + 2 + 2 + 32)
+    @Test fun fullRecordAckSizeMatchesFirmware() = assertEquals(50, Protocol.FULL_RECORD_ACK_SIZE)
+    @Test fun fullRecordPacketHeaderSize() = assertEquals(25, Protocol.FULL_RECORD_PACKET_HEADER_SIZE)
+    @Test fun fullRecordPacketFillsOneLoRaFrame() =
+        assertEquals(255, Protocol.FULL_RECORD_PACKET_HEADER_SIZE + Protocol.FULL_RECORD_PAYLOAD_CAPACITY)
+    // A parity frame is always the full buffer: its payload_len is an XOR of its
+    // members' lengths, so the BLE framer must not read it.
+    @Test fun fullRecordParityIsFixedSize() = assertEquals(255, Protocol.FULL_RECORD_PARITY_SIZE)
+    @Test fun fullRecordHeaderOffsets() {
+        assertEquals(6, Protocol.FULL_RECORD_OFFSET_RECORD_CRC)
+        assertEquals(10, Protocol.FULL_RECORD_OFFSET_TOTAL_SAMPLES)
+        assertEquals(14, Protocol.FULL_RECORD_OFFSET_PAGE)
+        assertEquals(16, Protocol.FULL_RECORD_OFFSET_PACKET_COUNT)
+        assertEquals(18, Protocol.FULL_RECORD_OFFSET_PACKET_INDEX)
+        assertEquals(19, Protocol.FULL_RECORD_OFFSET_PARITY_MASK)
+        assertEquals(20, Protocol.FULL_RECORD_OFFSET_FIRST_IN_PAGE)
+        assertEquals(22, Protocol.FULL_RECORD_OFFSET_SAMPLE_COUNT)
+        assertEquals(23, Protocol.FULL_RECORD_OFFSET_PAYLOAD_LEN)
+        assertEquals(24, Protocol.FULL_RECORD_OFFSET_RECORD)
+    }
+    @Test fun fullRecordPageAndStop() {
+        assertEquals(512, Protocol.FULL_RECORD_SAMPLES_PER_PAGE)
+        assertEquals(0xFFFF, Protocol.FULL_RECORD_STOP_PAGE)
+    }
+    // Rides in a spare bit of physical_deployment_stats, so TelemetryData keeps its
+    // size (77) and every existing parser keeps working; bits 0/1 are deployments.
+    @Test fun pickedUpBitIsSpare() = assertEquals(0x80, Protocol.TELEMETRY_PICKED_UP_BIT)
 
     // ---------------------------------------------------------------------
     //  LocatorCfgChgRequest body — the one message the app builds byte by byte

@@ -58,7 +58,7 @@ object Protocol {
     const val RECEIVER_INFO_PAYLOAD_SIZE = 24
     const val VERSION_INFO_PAYLOAD_SIZE = 128 // locator version (64) + receiver version (64)
     const val FLIGHT_PROFILE_METADATA_PAYLOAD_MESSAGE_SIZE = 128
-    // FlightEvents payload: record (1) + reserved (1) + present_mask (2) +
+    // FlightEvents payload: record (1) + flags (1) + present_mask (2) +
     // flight_timestamp_s (4) + event_timestamp_ms[11] (44) + max_altitude_m (4)
     // + deployment_ch_stats[4] (4) = 60.  On-wire struct is 66 with the header.
     const val FLIGHT_EVENTS_PAYLOAD_SIZE = 60
@@ -66,6 +66,47 @@ object Protocol {
     const val DEPLOYMENT_TEST_MESSAGE_PAYLOAD_SIZE = 1
     const val MAX_PACKET_SIZE = 256
     const val DEVICE_NAME_LENGTH = 20
+
+    // ── Paged full-record transfer (firmware FullRecord* in MessageProtocol.hpp,
+    // pinned there by static_assert and here by WireLayoutTest) ───────────────
+    // FullRecordRequest: header 6 + target_locator_id 4 + page 2 + record 1 + reserved 1.
+    const val FULL_RECORD_REQUEST_SIZE = 14
+    const val FULL_RECORD_STOP_PAGE = 0xFFFF
+    // FullRecordData / FullRecordParity: a 25-byte header, then payload_len bytes.
+    // Header offsets: record_crc 6, total_samples 10, page 14, packet_count 16,
+    // packet_index 18, parity_mask 19, first_in_page 20, sample_count 22,
+    // payload_len 23, record 24.
+    const val FULL_RECORD_PACKET_HEADER_SIZE = 25
+    const val FULL_RECORD_PAYLOAD_CAPACITY = 230
+    // A parity frame always carries the whole payload buffer (its payload_len is
+    // an XOR of its members' lengths), so it is a fixed 25 + 230 = 255 B.
+    const val FULL_RECORD_PARITY_SIZE = FULL_RECORD_PACKET_HEADER_SIZE + FULL_RECORD_PAYLOAD_CAPACITY
+    const val FULL_RECORD_OFFSET_RECORD_CRC = 6
+    const val FULL_RECORD_OFFSET_TOTAL_SAMPLES = 10
+    const val FULL_RECORD_OFFSET_PAGE = 14
+    const val FULL_RECORD_OFFSET_PACKET_COUNT = 16
+    const val FULL_RECORD_OFFSET_PACKET_INDEX = 18
+    const val FULL_RECORD_OFFSET_PARITY_MASK = 19
+    const val FULL_RECORD_OFFSET_FIRST_IN_PAGE = 20
+    const val FULL_RECORD_OFFSET_SAMPLE_COUNT = 22
+    const val FULL_RECORD_OFFSET_PAYLOAD_LEN = 23
+    const val FULL_RECORD_OFFSET_RECORD = 24
+    // FullRecordAck: header 6 + target 4 + record_crc 4 + page 2 + packet_count 2 + bitmap 32.
+    const val FULL_RECORD_ACK_SIZE = 50
+    const val FULL_RECORD_SAMPLES_PER_PAGE = 512
+    // TelemetryData.physical_deployment_stats bit 7: picked up after landing (bits
+    // 0 and 1 stay drogue / main detected).  A background-transfer trigger.
+    const val TELEMETRY_PICKED_UP_BIT = 0x80
+    // Bit 6: the locator is flying an app-started simulated flight (locator ADR
+    // "An app-started simulated flight computed on the locator", 0041).
+    const val TELEMETRY_SIMULATED_BIT = 0x40
+    // FlightEventsMessage::flags (was reserved): bit 0 = a simulated record.
+    const val FLIGHT_EVENTS_FLAG_SIMULATED = 0x01
+    // SimFlightRequest: header 6 + target 4 + 20 bytes (SimFlightWire).  Cancel only
+    // since the ADR-0041 amendment.
+    const val SIM_FLIGHT_REQUEST_SIZE = 30
+    // SimFlightStart: header 6 + target 4 + the 189-byte rocket profile.
+    const val SIM_FLIGHT_START_SIZE = 199
 }
 
 /**
@@ -112,6 +153,8 @@ data class RocketState(
     val channel4Fired: Boolean = false,
     val drogueDeployDetected: Boolean = false,
     val mainDeployDetected: Boolean = false,
+    /** TelemetryData says the locator is flying a simulated flight (ADR-0041). */
+    val simulated: Boolean = false,
     val altitudeAboveGroundLevel: Float = 0f,
     val accelerometer: Vec3f = Vec3f(0f, 0f, 0f),
     val gyro: Vec3f = Vec3f(0f, 0f, 0f),
@@ -307,6 +350,8 @@ data class FlightEvents(
     val eventTimestampMs: List<Long> = emptyList(),
     val maxAltitudeM: Float = 0f,
     val channelStats: List<DeployChannelStats> = emptyList(),
+    /** An app-started simulated flight (locator ADR-0041): every sensor was synthetic. */
+    val simulated: Boolean = false,
 ) {
     /** Launch wall-clock time, or null if the locator had no GPS fix. */
     val launchDate: ZonedDateTime?
@@ -345,7 +390,7 @@ data class FlightEvents(
             var o = Protocol.HEADER_SIZE
 
             val record      = frame[o].toInt() and 0xFF;  o += 1
-            o += 1                                        // reserved
+            val flags       = frame[o].toInt() and 0xFF;  o += 1   // was reserved, always 0
             val presentMask = le16(frame, o);             o += 2
             val flightTsS   = le32(frame, o);             o += 4
 
@@ -364,6 +409,7 @@ data class FlightEvents(
                 eventTimestampMs = timestamps,
                 maxAltitudeM     = maxAltitude,
                 channelStats     = channelStats,
+                simulated        = (flags and Protocol.FLIGHT_EVENTS_FLAG_SIMULATED) != 0,
             )
         }
 
@@ -491,7 +537,20 @@ enum class MsgType(val value: UByte) {
     // receiver sizes payloads from msg_type alone, so growing it would desync a
     // receiver predating the change on the ordinary scan too. See the firmware's
     // MessageProtocol.hpp, which carries the same note.
-    ChannelSurveyCancelRequest(25u);
+    ChannelSurveyCancelRequest(25u),
+    // Paged, bit-exact full-record transfer (locator ADR "The radio download
+    // becomes the primary data path").  Layouts in Protocol.FULL_RECORD_*.
+    // Framed and relayed now; the background transfer that sends and handles
+    // them is the next step and is not in this app yet.
+    FullRecordRequest(26u),     // App→locator: send page N of a record (0xFFFF stops).
+    FullRecordData(27u),        // Locator→app: one packet of a page.
+    FullRecordParity(28u),      // Locator→app: XOR of up to four data packets.
+    FullRecordAck(29u),         // App→locator: bitmap of the page's packets received.
+    // Cancel a simulated flight (locator ADR-0041; its start was retired by the
+    // 2026-11-03 amendment).
+    SimFlightRequest(30u),
+    // Start a simulated flight from a rocket profile (ADR-0041 amendment).
+    SimFlightStart(31u);
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }
@@ -565,7 +624,7 @@ data class PrelaunchParsed(
     val noseAxis: NoseAxis,       // uint8_t enum — mounting config (ADR-0021, #36)
     val armed: Boolean,           // uint8_t — stated arm state (ADR-0021, #35)
     // uint8_t — locator's prepped-and-disarmed verdict (ADR-0021 Decision 5, #37).
-    // A verdict, not raw inputs: the locator judges it at 20 Hz, this message
+    // A verdict, not raw inputs: the locator judges it every loop cycle (50 Hz), this message
     // arrives at 1 Hz, and re-deriving quiescence from that would be guesswork.
     val padAlert: PadAlertState,
     val padAlertSnoozeMinutes: Int,   // uint8_t, decoded from the same byte
