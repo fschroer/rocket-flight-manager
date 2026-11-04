@@ -2633,6 +2633,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val versionInfoStale = MutableStateFlow(true)
 
+    /**
+     * When the last full-record packet arrived.  The version poll below counts it
+     * as the locator being on the air: while a transfer runs, the locator sends
+     * its periodic frame only once per ~5.4 s cycle, so `lastMessageTime` alone
+     * went more than 5 s stale every cycle and read as the link dropping and
+     * coming back, which re-requested the version.  That request's answer
+     * collided with the transfer's ACK on the radio, stalling the download for
+     * minutes (2026-11-04; locator ADR "full-record radio download").
+     */
+    @Volatile private var lastFullRecordRxMs = 0L
+
     fun startService() {
         val context = getApplication<Application>().applicationContext
         val intent = Intent(context, BluetoothService()::class.java)
@@ -3239,7 +3250,10 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         }
 
-                        is ParsedMessage.FullRecord -> FullRecordHub.onFrame(parsed.frame)
+                        is ParsedMessage.FullRecord -> {
+                            lastFullRecordRxMs = System.currentTimeMillis()
+                            FullRecordHub.onFrame(parsed.frame)
+                        }
 
                         is ParsedMessage.FlightDataParity -> {
                             lastTransferFrameMs = currentTime
@@ -3278,11 +3292,12 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             // Seed from the live link rather than false: this function re-runs on
             // every Activity recreation, and a false seed would read the already-up
             // link as a rising edge and re-request on each theme or locale change.
+            fun lastLocatorRxMs() = maxOf(_rocketState.value.lastMessageTime, lastFullRecordRxMs)
             var linkWasUp =
-                System.currentTimeMillis() - _rocketState.value.lastMessageTime < 5_000L
+                System.currentTimeMillis() - lastLocatorRxMs() < 5_000L
             while (true) {
                 delay(1_000L)
-                val age = System.currentTimeMillis() - _rocketState.value.lastMessageTime
+                val age = System.currentTimeMillis() - lastLocatorRxMs()
                 val linkUp = age < 5_000L
                 if (linkUp && !linkWasUp) versionInfoStale.value = true
                 linkWasUp = linkUp
