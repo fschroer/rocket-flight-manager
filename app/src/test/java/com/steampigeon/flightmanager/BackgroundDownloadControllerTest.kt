@@ -30,13 +30,14 @@ class BackgroundDownloadControllerTest {
         held: Boolean = true,
         onChart: Boolean = false,
         linkHeld: Boolean = false,
+        fullRecord: Boolean = false,
         free: Boolean = false,
         broadcasting: Boolean = false,
         lastFrame: Long = 0L,
         percent: Int = 40,
     ) = Inputs(
         nowMs = now, onChart = onChart, held = if (held) RECORD to LOCATOR else null,
-        percent = percent, linkHeld = linkHeld, locatorFree = free,
+        percent = percent, linkHeld = linkHeld, fullRecordRunning = fullRecord, locatorFree = free,
         locatorBroadcasting = broadcasting, lastTransferFrameMs = lastFrame,
     )
 
@@ -157,6 +158,27 @@ class BackgroundDownloadControllerTest {
         c.tick(inputs(now = 1_000, free = true, broadcasting = true))
         c.requestNotSent()
         val out = c.tick(inputs(now = 2_000, free = true, broadcasting = true))
+        assertEquals(listOf(Action.RequestRecord(RECORD, LOCATOR)), out.actions)
+    }
+
+    @Test
+    fun aRunningFullRecordTransferIsNeverInterruptedByTheQuickLook() {
+        // 2026-11-05: a held quick look re-requested itself while a full-record
+        // transfer ran. Each FlightDataRequest put the locator in DataRequested,
+        // which pauses the full record, and the map showed the quick look's
+        // packet percent, lower than Flight Profiles' full-record percent.
+        val c = BackgroundDownloadController()
+        var out = c.tick(inputs(now = 1_000, fullRecord = true, free = true, broadcasting = true))
+        assertTrue("must not request a quick look over a full record", out.actions.isEmpty())
+        assertEquals(Phase.Paused, out.status!!.phase)
+        // Still not after a stall window has passed.
+        out = c.tick(inputs(now = 20_000, fullRecord = true, free = true, broadcasting = true))
+        assertTrue(out.actions.isEmpty())
+        // A quick look already streaming is asked to stop, so the full record can run.
+        out = c.tick(inputs(now = 21_000, fullRecord = true, lastFrame = 20_900))
+        assertEquals(listOf(Action.HandBack), out.actions)
+        // The full record finished: the quick look may resume.
+        out = c.tick(inputs(now = 40_000, free = true, broadcasting = true, lastFrame = 20_900))
         assertEquals(listOf(Action.RequestRecord(RECORD, LOCATOR)), out.actions)
     }
 }

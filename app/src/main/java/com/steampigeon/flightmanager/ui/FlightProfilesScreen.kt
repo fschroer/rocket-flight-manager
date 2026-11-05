@@ -1117,8 +1117,7 @@ private fun FullRecordTransferStatus(status: FullRecordTransfer.Status) {
         is FullRecordTransfer.Status.Listing -> stringResource(R.string.full_record_status_listing)
         is FullRecordTransfer.Status.Transferring -> stringResource(
             if (onCable) R.string.full_record_status_progress_cable else R.string.full_record_status_progress,
-            status.recordIndex, status.recordCount,
-            if (status.totalSamples > 0) status.decoded * 100 / status.totalSamples else 0)
+            status.recordIndex, status.recordCount, status.percent)
         is FullRecordTransfer.Status.Finished ->
             if (status.failed == 0) pluralStringResource(R.plurals.full_record_status_done, status.records, status.records)
             else stringResource(R.string.full_record_status_done_failed, status.records, status.failed)

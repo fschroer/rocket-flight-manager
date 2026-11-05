@@ -19,6 +19,12 @@ package com.steampigeon.flightmanager.data
  *    One `DisarmRequest` can be lost for the same reason. The locator's own
  *    safety net after a *completed* transfer is 5 minutes of silence, far too
  *    long to rely on.
+ * 3. **A running full-record transfer (ADR-0040) holds the link like a screen
+ *    does.** A quick-look `FlightDataRequest` puts the locator in DataRequested,
+ *    and its full-record sender pauses in any mode but Disarmed. So a held quick
+ *    look that kept re-requesting itself stalled the full record, and the map
+ *    showed the quick look's packet count as "Downloading N%", below the
+ *    full record's percent on Flight Profiles (2026-11-05).
  */
 class BackgroundDownloadController(
     /** Transfer frames this recent mean the locator is sending now. Bursts
@@ -47,6 +53,8 @@ class BackgroundDownloadController(
         val percent: Int,
         /** A screen that uses the locator link, or an arm attempt, holds it. */
         val linkHeld: Boolean,
+        /** A full-record transfer is running (rule 3): yield to it as to [linkHeld]. */
+        val fullRecordRunning: Boolean = false,
         /** Phone connected, the held record's locator is the connected one,
          *  it is disarmed and its PreLaunchData is fresh. */
         val locatorFree: Boolean,
@@ -107,7 +115,7 @@ class BackgroundDownloadController(
         // Rule 1: a transfer already arriving is in flight, whoever started it.
         if (sending) inFlight = true
 
-        if (i.linkHeld) {
+        if (i.linkHeld || i.fullRecordRunning) {
             // Something else needs the link. Ask the locator to stop sending —
             // but only while it is: once it has stopped, a DisarmRequest could
             // knock it out of what the holding screen asked for (the Flight

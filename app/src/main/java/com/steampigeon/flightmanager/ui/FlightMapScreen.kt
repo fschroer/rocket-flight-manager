@@ -1244,7 +1244,7 @@ private fun MapWithOverlays(
         val fullRecordStatus = viewModel.fullRecordStatus.collectAsState().value
         val fullRecordBusyPercent = (fullRecordStatus as? FullRecordTransfer.Status.Transferring)
             ?.takeIf { FullRecordHub.radioTransferLive(System.currentTimeMillis(), rocketState.lastMessageTime) }
-            ?.let { if (it.totalSamples > 0) (100L * it.decoded / it.totalSamples).toInt() else 0 }
+            ?.percent
         // Password gating: only the connected locator may be armed from the app.
         val locatorConnected = viewModel.locatorConnected.collectAsState().value
         // Warn from LOW downward — one step below the UNRELIABLE threshold that
@@ -1543,10 +1543,14 @@ private fun MapWithOverlays(
                     busyStatus = when {
                         locatorSearchRunning -> stringResource(R.string.status_searching)
                         surveyInProgress -> stringResource(R.string.status_scanning)
-                        backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
-                            stringResource(R.string.status_downloading_record, backgroundDownload.percent)
+                        // The full-record transfer before a quick-look download: the
+                        // quick look yields to it (BackgroundDownloadController), and
+                        // its packet count was being shown here as the transfer's
+                        // percent, below what Flight Profiles showed.
                         fullRecordBusyPercent != null ->
                             stringResource(R.string.status_downloading_record, fullRecordBusyPercent)
+                        backgroundDownload?.phase == RocketViewModel.DownloadPhase.Downloading ->
+                            stringResource(R.string.status_downloading_record, backgroundDownload.percent)
                         else -> null
                     },
                     onToggleArmed = { viewModel.updateArmedState() },

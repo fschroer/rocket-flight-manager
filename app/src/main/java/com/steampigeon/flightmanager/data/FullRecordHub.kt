@@ -190,10 +190,9 @@ object FullRecordHub : FullRecordTransfer.Listener, UsbLocatorLink.Sink {
                 // The status changes with every packet; the notification need not.
                 if (now - lastNotifyMs < 2_000L) return
                 lastNotifyMs = now
-                val pct = if (status.totalSamples > 0) status.decoded * 100 / status.totalSamples else 0
                 svc.showTransferProgress(
                     ctx.getString(R.string.full_record_notification_progress,
-                        status.recordIndex, status.recordCount, pct),
+                        status.recordIndex, status.recordCount, status.percent),
                     status.decoded, status.totalSamples)
             }
             is Status.Listing, is Status.Waiting ->
