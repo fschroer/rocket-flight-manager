@@ -62,6 +62,14 @@ object FirebaseCloud : FlightUploader {
     var available = false
         private set
 
+    /**
+     * The name the locator calls itself, for the web viewer's list (locator ADR-0042,
+     * amendment 2026-11-05).  The ViewModel owns the remembered names and sets this;
+     * null or blank means the upload simply carries no name.
+     */
+    @Volatile
+    var locatorName: (Long) -> String? = { null }
+
     fun init(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
@@ -159,6 +167,7 @@ object FirebaseCloud : FlightUploader {
 
     private fun meta(r: FullRecordStore.Finished, type: String) = StorageMetadata.Builder()
         .setContentType(type)
+        .apply { locatorName(r.key.locatorId)?.takeIf { it.isNotBlank() }?.let { setCustomMetadata("locator_name", it) } }
         .setCustomMetadata("locator_id", r.key.locatorId.toString())
         .setCustomMetadata("record_ts", r.key.recordTs.toString())
         .setCustomMetadata("record_crc", "%08x".format(r.key.crc))

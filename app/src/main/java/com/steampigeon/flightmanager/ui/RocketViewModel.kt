@@ -784,6 +784,13 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      *  can offer "which of my locators am I looking for". */
     val knownLocators: StateFlow<Map<Long, KnownLocator>> = _knownLocators.asStateFlow()
 
+    // Uploads carry the locator's remembered name for the web viewer (ADR-0042
+    // amendment).  Declared after _knownLocators on purpose: the lambda only reads
+    // it later, but keeping it below the field rules out an init-order surprise.
+    init {
+        FirebaseCloud.locatorName = { id -> _knownLocators.value[id]?.label?.takeIf { it.isNotEmpty() } }
+    }
+
     // The locator_id the app is currently connected to (null = none → sending gated off).
     private val _connectedLocatorId = MutableStateFlow<Long?>(null)
     val connectedLocatorId: StateFlow<Long?> = _connectedLocatorId.asStateFlow()
