@@ -222,6 +222,50 @@ class UnitsTest {
         assertEquals("0.5m", Units.gridLabel(0.5f, 0.5f, Metric))
     }
 
+    // ── Simulated-flight inputs ───────────────────────────────────────────────
+
+    private fun roundTrip(q: Units.SimQuantity, shown: Double, stored: (Double) -> Double): Double =
+        Math.round(q.toShown(stored(q.fromShown(shown))) * Math.pow(10.0, q.decimals.toDouble())) / Math.pow(10.0, q.decimals.toDouble())
+
+    @Test
+    fun fineSimInputsKeepWhatWasTyped() {
+        val whole: (Double) -> Double = { Math.round(it).toDouble() }
+        val tenths: (Double) -> Double = { Math.round(it * 10.0) / 10.0 }
+        // Every displayed step of each fine input survives its storage grain.
+        for (oz in 4..2000) assertEquals(oz / 10.0, roundTrip(Units.simMass(English), oz / 10.0, whole), 1e-9)
+        for (i in 40..1960) assertEquals(i / 10.0, roundTrip(Units.simLength(English), i / 10.0, whole), 1e-9)
+        for (i in 0..650) assertEquals(i / 10.0, roundTrip(Units.simRailLength(English), i / 10.0, whole), 1e-9)
+        for (i in 20..1960) assertEquals(i / 100.0, roundTrip(Units.simDiameter(English), i / 100.0, tenths), 1e-9)
+        // The main rate is tenths of a m/s on the wire: whole ft/s survive.
+        for (fps in 7..49) assertEquals(fps.toDouble(), roundTrip(Units.simMainRate(English), fps.toDouble(), tenths), 1e-9)
+        // Which a whole-m/s main did not: 15 ft/s became 5 m/s, read back as 16.
+        assertEquals(16.0, roundTrip(Units.simMainRate(English), 15.0, whole), 1e-9)
+    }
+
+    @Test
+    fun coarseSimInputsSnapToWhatTheLocatorHolds() {
+        val whole: (Double) -> Double = { Math.round(it).toDouble() }
+        assertTrue(Units.simWind(English).snapped)
+        assertEquals(9.0, roundTrip(Units.simWind(English), 10.0, whole), 1e-9)       // 10 mph -> 4 m/s
+        assertEquals(4.0, whole(Units.simWind(English).fromShown(10.0)), 1e-9)
+        assertEquals(69.8, Units.simTemperature(English).toShown(21.0), 1e-9)
+        assertTrue(Units.simDrogueRate(English).snapped)
+        assertTrue(!Units.simMainRate(English).snapped && !Units.simMass(English).snapped)
+        assertTrue(!Units.simWind(Metric).snapped)
+    }
+
+    @Test
+    fun simLimitsAreRoundedInward() {
+        assertEquals(17.0 to 196.0, Units.simDrogueRate(English).shownRange(5.0, 60.0))
+        assertEquals(0.0 to 44.0, Units.simWind(English).shownRange(0.0, 20.0))
+        assertEquals(-40.0 to 122.0, Units.simTemperature(English).shownRange(-40.0, 50.0))
+        assertEquals(7.0 to 49.0, Units.simMainRate(English).shownRange(2.0, 15.0))
+        assertEquals(2.0 to 15.0, Units.simMainRate(Metric).shownRange(2.0, 15.0))
+        // And the inward limits are accepted by the SI bounds.
+        val w = Units.simDrogueRate(English)
+        assertTrue(Math.round(w.fromShown(17.0)) >= 5 && Math.round(w.fromShown(196.0)) <= 60)
+    }
+
     // ── The default ───────────────────────────────────────────────────────────
 
     @Test

@@ -312,9 +312,9 @@
     <string name="sim_flight_section_wind">Wind</string>
     <string name="sim_flight_saved_rockets">Saved rockets</string>
     <string name="sim_flight_name">Name</string>
-    <string name="sim_flight_dry_mass">Mass without motor (g)</string>
-    <string name="sim_flight_diameter">Body diameter (mm)</string>
-    <string name="sim_flight_length">Length (mm)</string>
+    <string name="sim_flight_dry_mass">Mass without motor (%1$s)</string>
+    <string name="sim_flight_diameter">Body diameter (%1$s)</string>
+    <string name="sim_flight_length">Length (%1$s)</string>
     <string name="sim_flight_stability">Stability margin (calibers)</string>
     <string name="sim_flight_stability_help">The margin OpenRocket shows with the motor loaded. With the length, it sets how quickly the rocket turns into the wind off the rail.</string>
     <string name="sim_flight_drag_help">Type one Cd and press Spread to fill the Mach points with a typical rise near Mach 1, type each point, or fit them from an OpenRocket simulation exported as CSV.</string>
@@ -331,17 +331,17 @@
     <string name="sim_flight_motor_none_found">Nothing found, or no connection.</string>
     <string name="sim_flight_motor_import">Import .eng or .rse file</string>
     <string name="sim_flight_motor_file_failed">That motor could not be read.</string>
-    <string name="sim_flight_rail_length">Rail length (cm)</string>
+    <string name="sim_flight_rail_length">Rail length (%1$s)</string>
     <string name="sim_flight_rail_angle">Rail angle from vertical (degrees)</string>
     <string name="sim_flight_launch_direction">Rail leans toward (degrees)</string>
     <string name="sim_flight_temp_from_baro">Use the locator\'s barometer temperature</string>
-    <string name="sim_flight_temperature">Ground temperature (°C)</string>
+    <string name="sim_flight_temperature">Ground temperature (%1$s)</string>
     <string name="sim_flight_canopy_calculate">Calculate</string>
     <string name="sim_flight_canopy_title">Descent rate from a canopy</string>
-    <string name="sim_flight_canopy_mass">Rocket after burnout: %1$s g</string>
-    <string name="sim_flight_canopy_diameter">Canopy diameter (cm)</string>
+    <string name="sim_flight_canopy_mass">Rocket after burnout: %1$s</string>
+    <string name="sim_flight_canopy_diameter">Canopy diameter (%1$s)</string>
     <string name="sim_flight_canopy_cd">Canopy Cd</string>
-    <string name="sim_flight_canopy_result">About %1$s m/s</string>
+    <string name="sim_flight_canopy_result">About %1$s</string>
     <string name="sim_flight_canopy_incomplete">Enter a diameter and Cd.</string>
     <string name="sim_flight_canopy_use">Use</string>
     <string name="sim_flight_save_rocket">Save Rocket</string>
@@ -349,9 +349,12 @@
     <string name="sim_flight_delete_title">Delete saved rocket?</string>
     <string name="sim_flight_delete_text">\"%1$s\" is removed from the saved rockets on this phone. Its values stay on screen until you pick another rocket.</string>
     <string name="sim_flight_range_decimal">Must be %1$s to %2$s</string>
-    <string name="sim_flight_drogue">Drogue descent rate (m/s)</string>
-    <string name="sim_flight_main">Main descent rate (m/s)</string>
-    <string name="sim_flight_wind">Wind speed (m/s)</string>
+    <string name="sim_flight_drogue">Drogue descent rate (%1$s)</string>
+    <string name="sim_flight_main">Main descent rate (%1$s)</string>
+    <!-- Under a simulated-flight field shown in English whose value the locator
+         holds only to a whole m/s or °C: what it will actually use. -->
+    <string name="sim_flight_locator_uses">Locator uses %1$s</string>
+    <string name="sim_flight_wind">Wind speed (%1$s)</string>
     <string name="sim_flight_wind_from">Wind from (degrees)</string>
     <string name="sim_flight_start">Start Simulated Flight</string>
     <string name="sim_flight_starting">Starting…</string>

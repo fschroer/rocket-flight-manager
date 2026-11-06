@@ -237,6 +237,81 @@ object Units {
     fun formatDeployAltitude(m: Int, u: UnitSystem): String =
         if (u == UnitSystem.English) "${deployMetersToFeet(m)} ft" else "$m m"
 
+    // ── Simulated-flight inputs ─────────────────────────────────────────────
+    //
+    // The simulated-flight screen (locator ADR-0041) takes the rocket in the
+    // display unit and stores SI. Each input is a [SimQuantity]: how to show an SI
+    // value, and how to turn a shown value back into what the app stores. Three of
+    // them are stored too coarsely to keep every English value (drogue rate and
+    // wind are whole m/s on the wire, temperature whole °C): those are [snapped]
+    // and the screen shows what the locator will actually use.
+
+    /**
+     * One simulated-flight input in one unit system. [toShown] and [fromShown]
+     * convert between SI and the displayed number; [decimals] is how it is shown;
+     * [unit] its label. [snapped] means the stored value is coarser than the
+     * displayed one, so a typed value moves to the nearest one the locator holds.
+     */
+    data class SimQuantity(
+        val unit: String,
+        val decimals: Int,
+        val snapped: Boolean,
+        val toShown: (Double) -> Double,
+        val fromShown: (Double) -> Double,
+    ) {
+        /** SI [min]..[max] as displayed limits, rounded inward so both ends are accepted. */
+        fun shownRange(min: Double, max: Double): Pair<Double, Double> {
+            val f = Math.pow(10.0, decimals.toDouble())
+            val a = toShown(min); val b = toShown(max)
+            val lo = kotlin.math.ceil(minOf(a, b) * f - 1e-9) / f
+            val hi = floor(maxOf(a, b) * f + 1e-9) / f
+            // + 0.0 turns ceil(-1e-9) = -0.0 into 0.0, which would print "-0".
+            return (lo + 0.0) to (hi + 0.0)
+        }
+    }
+
+    private val identity: (Double) -> Double = { it }
+    private fun si(unit: String, decimals: Int) = SimQuantity(unit, decimals, false, identity, identity)
+
+    const val GRAMS_PER_OUNCE = 28.349523125
+    const val MM_PER_INCH = 25.4
+
+    /** Mass without motor: g, or oz to a tenth (2.8 g, finer than the 1 g stored). */
+    fun simMass(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("oz", 1, false, { it / GRAMS_PER_OUNCE }, { it * GRAMS_PER_OUNCE }) else si("g", 0)
+
+    /** Body diameter (stored mm, fractional): mm, or inches to a hundredth. */
+    fun simDiameter(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("in", 2, false, { it / MM_PER_INCH }, { it * MM_PER_INCH }) else si("mm", 1)
+
+    /** Length (stored whole mm): mm, or inches to a tenth (2.5 mm). */
+    fun simLength(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("in", 1, false, { it / MM_PER_INCH }, { it * MM_PER_INCH }) else si("mm", 0)
+
+    /** Rail length (stored whole cm): cm, or feet to a tenth (3 cm). */
+    fun simRailLength(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("ft", 1, false, { it / 30.48 }, { it * 30.48 }) else si("cm", 0)
+
+    /** Canopy diameter for the calculator (cm): cm, or inches. Never stored. */
+    fun simCanopyDiameter(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("in", 0, false, { it / 2.54 }, { it * 2.54 }) else si("cm", 0)
+
+    /** Main descent rate (tenths of m/s on the wire): m/s to a tenth, or whole ft/s. */
+    fun simMainRate(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("ft/s", 0, false, { it * FEET_PER_METER }, { it * METERS_PER_FOOT }) else si("m/s", 1)
+
+    /** Drogue descent rate (whole m/s on the wire): snapped in ft/s. */
+    fun simDrogueRate(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("ft/s", 0, true, { it * FEET_PER_METER }, { it * METERS_PER_FOOT }) else si("m/s", 0)
+
+    /** Wind (whole m/s on the wire): snapped in mph, which is what a forecast gives. */
+    fun simWind(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("mph", 0, true, { it / MPS_PER_MPH }, { it * MPS_PER_MPH }) else si("m/s", 0)
+
+    /** Ground temperature (whole °C on the wire): snapped in °F. */
+    fun simTemperature(u: UnitSystem) = if (u == UnitSystem.English)
+        SimQuantity("°F", 0, true, { it * 9.0 / 5.0 + 32.0 }, { (it - 32.0) * 5.0 / 9.0 }) else si("°C", 0)
+
     // ── Default ──────────────────────────────────────────────────────────────
 
     /**

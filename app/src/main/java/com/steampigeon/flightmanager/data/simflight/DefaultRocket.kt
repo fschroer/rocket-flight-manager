@@ -32,7 +32,7 @@ object DefaultRocket {
         cd = listOf(0.661f, 0.665f, 0.691f, 0.705f, 0.774f, 1.071f, 1.002f, 0.898f),
         motorId = MOTOR_ID,
         drogueMps = 7,
-        mainMps = 7,
+        mainMps = 7f,
         railLengthCm = 100,
         railAngleTenths = 0,
         launchAzDeg = 0,

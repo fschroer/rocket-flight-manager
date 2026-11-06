@@ -105,7 +105,7 @@ class SimRocketTest {
     @Test fun rocketProblemsMirrorTheLocatorsRanges() {
         val m = MotorFiles.parseEng(eng, "f")!!
         assertTrue(SimRocket().problems(m).isEmpty())
-        assertFalse(SimRocket(mainMps = 1).problems(m).isEmpty())
+        assertFalse(SimRocket(mainMps = 1f).problems(m).isEmpty())
         assertFalse(SimRocket(dryMassG = 30_000).problems(m).isEmpty())   // cannot lift
         assertFalse(SimRocket(railAngleTenths = 201).problems(m).isEmpty())
         assertFalse(SimRocket().problems(null).isEmpty())
