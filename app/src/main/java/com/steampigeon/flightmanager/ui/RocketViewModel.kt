@@ -23,6 +23,8 @@ import com.steampigeon.flightmanager.data.ChannelMoveRunner
 import com.steampigeon.flightmanager.data.ChannelSurvey as ChannelSurveyData
 import com.steampigeon.flightmanager.data.LocatorSearch as LocatorSearchData
 import com.steampigeon.flightmanager.data.LinkQuality
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 import com.steampigeon.flightmanager.data.LocatorAuth
 import com.steampigeon.flightmanager.data.LocatorConnection
 import com.steampigeon.flightmanager.data.LocatorNames
@@ -354,6 +356,19 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ---- Display units (locator ADR "Units are SI underneath; English is a
+    // display choice").  Declared above init: Kotlin runs property initializers
+    // and init blocks in declaration order, and the collector below writes this.
+    private val _unitSystem = MutableStateFlow(UnitSystem.Metric)
+    val unitSystem: StateFlow<UnitSystem> = _unitSystem.asStateFlow()
+
+    fun setUnitSystem(u: UnitSystem) {
+        _unitSystem.value = u
+        viewModelScope.launch {
+            currentContext.userPreferencesDataStore.updateData { it.toBuilder().setUnits(u.ordinal).build() }
+        }
+    }
+
     init {
         FullRecordHub.init(application)
         FirebaseCloud.init(application)
@@ -377,6 +392,28 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 _transferOnPickup.value = !preferences.hasTransferOnPickup() || preferences.transferOnPickup
                 FullRecordHub.settings?.signalTrigger = _transferOnSignal.value
                 FullRecordHub.settings?.pickupTrigger = _transferOnPickup.value
+                if (preferences.hasUnits()) {
+                    _unitSystem.value = UnitSystem.entries.getOrElse(preferences.units) { UnitSystem.Metric }
+                } else {
+                    // Never chosen: decide once and write it down, so the default
+                    // cannot change under the flyer later (pairing a locator would
+                    // otherwise turn a "fresh" install into one "in use").  An
+                    // install with anything already saved stays metric.
+                    val priorUse = preferences.knownLocatorsCount > 0 ||
+                        preferences.receiverName.isNotEmpty() || preferences.voiceName.isNotEmpty() ||
+                        preferences.voiceEnabled || preferences.hasMapMaxZoom() ||
+                        preferences.hasTransferOnSignal() || preferences.hasTransferOnPickup() ||
+                        preferences.locatorStatisticsOffsetX != 0 || preferences.locatorStatisticsOffsetY != 0
+                    val chosen = Units.defaultFor(priorUse, java.util.Locale.getDefault().country)
+                    _unitSystem.value = chosen
+                    // Its own coroutine: this collector is the data flow's, and
+                    // the write lands back here as the next emission.
+                    viewModelScope.launch {
+                        application.userPreferencesDataStore.updateData {
+                            if (it.hasUnits()) it else it.toBuilder().setUnits(chosen.ordinal).build()
+                        }
+                    }
+                }
             }
         }
         // Reset receiver config whenever the user selects a *different* receiver so

@@ -49,6 +49,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 import com.steampigeon.flightmanager.data.FullRecordHub
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import androidx.compose.ui.unit.dp
@@ -345,6 +347,9 @@ fun FlightProfilesScreen(
     val flightEvents                      by viewModel.flightEvents.collectAsState()
     val flightProfileArchivePosition      by viewModel.flightProfileArchivePosition.collectAsState()
     val locatorConfig                     by viewModel.remoteLocatorConfig.collectAsState()
+    // Display units (locator ADR "Units are SI underneath; English is a display
+    // choice"). Samples stay in meters; the axis labels and readouts convert.
+    val units                             by viewModel.unitSystem.collectAsState()
 
     // Observe samples and progress directly from the repository so the chart
     // reacts to partial data arriving during a live transfer.
@@ -457,7 +462,9 @@ fun FlightProfilesScreen(
                                             com.steampigeon.flightmanager.data.TimeText.format(it)
                                         }?.let { Text(it) }
                                         Text(
-                                            "Apogee: ${
+                                            if (units == UnitSystem.English)
+                                                "Apogee: ${Units.formatAltitude(item.apogee, units)}"
+                                            else "Apogee: ${
                                                 item.apogee.toBigDecimal()
                                                     .setScale(1, RoundingMode.UP).toFloat()
                                             }m"
@@ -772,10 +779,14 @@ fun FlightProfilesScreen(
                 }
 
                 // ── Horizontal grid lines (altitude axis) ─────────────────
-                val yGridInterval = niceInterval(visibleAltHigh - visibleAltLow, targetGridCount)
-                var gridAlt = floor(visibleAltLow / yGridInterval) * yGridInterval
-                while (gridAlt <= visibleAltHigh) {
-                    val gy = yOfAlt(gridAlt)
+                // Gridlines fall on nice values in the DISPLAY unit (100 ft, not
+                // 30.48 m), and are placed by converting each back to meters.
+                val shownLow  = Units.altitude(visibleAltLow, units)
+                val shownHigh = Units.altitude(visibleAltHigh, units)
+                val yGridInterval = niceInterval(shownHigh - shownLow, targetGridCount)
+                var gridAlt = floor(shownLow / yGridInterval) * yGridInterval
+                while (gridAlt <= shownHigh) {
+                    val gy = yOfAlt(Units.altitudeToMeters(gridAlt, units))
                     if (gy >= -0.5f && gy <= canvasHeight + 0.5f) {
                         drawLine(
                             color = gridColor,
@@ -791,9 +802,7 @@ fun FlightProfilesScreen(
                                 }
                                 // Sub-meter gridlines need a decimal, or a zoomed
                                 // axis reads as several identical labels.
-                                val label = if (yGridInterval < 1f)
-                                    "${gridAlt.toBigDecimal().setScale(1, RoundingMode.HALF_UP)}m"
-                                else "${gridAlt.roundToInt()}m"
+                                val label = Units.gridLabel(gridAlt, yGridInterval, units)
                                 // Clamped so a label too wide for the gutter is
                                 // pushed right rather than cut off at x = 0.
                                 val tx = (chartMarginX - paint.measureText(label) - 8f)
@@ -943,7 +952,8 @@ fun FlightProfilesScreen(
                             else                                     -> chartBodyColor
                         }
                         val label = "${event.label}: " +
-                                "${event.altitudeM.toBigDecimal().setScale(1, RoundingMode.HALF_UP)}m"
+                                if (units == UnitSystem.English) Units.formatAltitude(event.altitudeM, units).replace(" ", "")
+                                else "${event.altitudeM.toBigDecimal().setScale(1, RoundingMode.HALF_UP)}m"
 
                         // Indicator circles precede the text for deployment events,
                         // and scale with it so the annotation reads as one unit.

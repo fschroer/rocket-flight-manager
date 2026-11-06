@@ -77,7 +77,7 @@ object SimFlightWire {
         b[at(OFFSET_RAIL_ANGLE_DDEG)] = r.railAngleTenths.toByte()
         b[at(OFFSET_WIND_MPS)] = r.windMps.toByte()
         b[at(OFFSET_DROGUE_MPS)] = r.drogueMps.toByte()
-        b[at(OFFSET_MAIN_DMPS)] = (r.mainMps * 10).toByte()
+        b[at(OFFSET_MAIN_DMPS)] = Math.round(r.mainMps * 10f).toByte()
         b[at(OFFSET_TEMP_C)] = (r.tempC ?: TEMP_FROM_BARO).toByte()
         b[at(OFFSET_N_POINTS)] = curve.size.toByte()
         putF(b, at(OFFSET_PEAK_THRUST_N), peak)

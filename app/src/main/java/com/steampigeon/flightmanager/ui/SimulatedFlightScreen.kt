@@ -56,6 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.BluetoothService
 import com.steampigeon.flightmanager.R
+import androidx.compose.ui.focus.onFocusChanged
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.simflight.Canopy
 import com.steampigeon.flightmanager.data.simflight.DefaultRocket
@@ -141,6 +144,11 @@ fun SimulatedFlightScreen(
     var cancelSent by remember { mutableStateOf(false) }
     var importMessage by remember { mutableStateOf<String?>(null) }
     var canopyFor by remember { mutableStateOf<String?>(null) }   // "drogue" or "main"
+    // Display units (locator ADR "Units are SI underneath; English is a display
+    // choice"). The rocket is stored and sent in SI either way; in English each
+    // field converts through Units.sim*, and the metric fields are unchanged.
+    val units by viewModel.unitSystem.collectAsState()
+    val english = units == UnitSystem.English
     val currentOnStarted by rememberUpdatedState(onStarted)
     val editable = !simulated && !waitingForStart
 
@@ -212,14 +220,23 @@ fun SimulatedFlightScreen(
             SimTextField(stringResource(R.string.sim_flight_name), rocket.name, editable) {
                 rocket = rocket.copy(name = it)
             }
-            SimIntField(R.string.sim_flight_dry_mass, rocket.dryMassG, 10..200_000, editable, refused) {
+            if (english) {
+                SimUnitField(R.string.sim_flight_dry_mass, Units.simMass(units), rocket.dryMassG.toDouble(), 10.0, 200_000.0,
+                    { Math.round(it).toDouble() }, "g", editable, refused) { rocket = rocket.copy(dryMassG = it.toInt()) }
+                SimUnitField(R.string.sim_flight_diameter, Units.simDiameter(units), rocket.diameterMm.toDouble(), 5.0, 500.0,
+                    { Math.round(it * 10.0) / 10.0 }, "mm", editable, refused) { rocket = rocket.copy(diameterMm = it.toFloat()) }
+                SimUnitField(R.string.sim_flight_length, Units.simLength(units), rocket.lengthMm.toDouble(), 100.0, 5000.0,
+                    { Math.round(it).toDouble() }, "mm", editable, refused) { rocket = rocket.copy(lengthMm = it.toInt()) }
+            } else {
+            SimIntField(stringResource(R.string.sim_flight_dry_mass, "g"), rocket.dryMassG, 10..200_000, editable, refused) {
                 rocket = rocket.copy(dryMassG = it)
             }
-            SimDecimalField(stringResource(R.string.sim_flight_diameter), rocket.diameterMm, 5f, 500f, 1, editable, refused) {
+            SimDecimalField(stringResource(R.string.sim_flight_diameter, "mm"), rocket.diameterMm, 5f, 500f, 1, editable, refused) {
                 rocket = rocket.copy(diameterMm = it)
             }
-            SimIntField(R.string.sim_flight_length, rocket.lengthMm, 100..5000, editable, refused) {
+            SimIntField(stringResource(R.string.sim_flight_length, "mm"), rocket.lengthMm, 100..5000, editable, refused) {
                 rocket = rocket.copy(lengthMm = it)
+            }
             }
             SimDecimalField(stringResource(R.string.sim_flight_stability), rocket.stabilityCal, 0.5f, 10f, 1, editable, refused) {
                 rocket = rocket.copy(stabilityCal = it)
@@ -280,16 +297,21 @@ fun SimulatedFlightScreen(
 
             // ── Launch and day ─────────────────────────────────────────────
             SimSection(R.string.sim_flight_section_launch)
-            SimIntField(R.string.sim_flight_rail_length, rocket.railLengthCm, 0..2000, editable, refused) {
+            if (english) {
+                SimUnitField(R.string.sim_flight_rail_length, Units.simRailLength(units), rocket.railLengthCm.toDouble(), 0.0, 2000.0,
+                    { Math.round(it).toDouble() }, "cm", editable, refused) { rocket = rocket.copy(railLengthCm = it.toInt()) }
+            } else {
+            SimIntField(stringResource(R.string.sim_flight_rail_length, "cm"), rocket.railLengthCm, 0..2000, editable, refused) {
                 rocket = rocket.copy(railLengthCm = it)
+            }
             }
             SimDecimalField(stringResource(R.string.sim_flight_rail_angle), rocket.railAngleTenths / 10f, 0f, 20f, 1, editable, refused) {
                 rocket = rocket.copy(railAngleTenths = (it * 10f).roundToInt())
             }
-            SimIntField(R.string.sim_flight_launch_direction, rocket.launchAzDeg, 0..359, editable, refused) {
+            SimIntField(stringResource(R.string.sim_flight_launch_direction), rocket.launchAzDeg, 0..359, editable, refused) {
                 rocket = rocket.copy(launchAzDeg = it)
             }
-            val tempLabel = stringResource(R.string.sim_flight_temperature)
+            val tempLabel = stringResource(R.string.sim_flight_temperature, Units.simTemperature(units).unit)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
                     checked = rocket.tempC == null,
@@ -303,8 +325,13 @@ fun SimulatedFlightScreen(
                 Text(stringResource(R.string.sim_flight_temp_from_baro), style = MaterialTheme.typography.bodyMedium)
             }
             rocket.tempC?.let { t ->
+                if (english) {
+                    SimUnitField(R.string.sim_flight_temperature, Units.simTemperature(units), t.toDouble(), -40.0, 50.0,
+                        { Math.round(it).toDouble() }, "°C", editable, refused) { rocket = rocket.copy(tempC = it.toInt()) }
+                } else {
                 SimDecimalField(tempLabel, t.toFloat(), -40f, 50f, 0, editable, refused) {
                     rocket = rocket.copy(tempC = it.roundToInt())
+                }
                 }
             }
 
@@ -312,8 +339,13 @@ fun SimulatedFlightScreen(
             SimSection(R.string.sim_flight_section_recovery)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
-                    SimIntField(R.string.sim_flight_drogue, rocket.drogueMps, 5..60, editable, refused) {
+                    if (english) {
+                        SimUnitField(R.string.sim_flight_drogue, Units.simDrogueRate(units), rocket.drogueMps.toDouble(), 5.0, 60.0,
+                            { Math.round(it).toDouble() }, "m/s", editable, refused) { rocket = rocket.copy(drogueMps = it.toInt()) }
+                    } else {
+                    SimIntField(stringResource(R.string.sim_flight_drogue, "m/s"), rocket.drogueMps, 5..60, editable, refused) {
                         rocket = rocket.copy(drogueMps = it)
+                    }
                     }
                 }
                 OutlinedButton(onClick = { canopyFor = "drogue" }, enabled = editable) {
@@ -322,9 +354,9 @@ fun SimulatedFlightScreen(
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
-                    SimIntField(R.string.sim_flight_main, rocket.mainMps, 2..15, editable, refused) {
-                        rocket = rocket.copy(mainMps = it)
-                    }
+                    // Tenths of a m/s, which the wire always carried (main_dmps).
+                    SimUnitField(R.string.sim_flight_main, Units.simMainRate(units), rocket.mainMps.toDouble(), 2.0, 15.0,
+                        { Math.round(it * 10.0) / 10.0 }, "m/s", editable, refused) { rocket = rocket.copy(mainMps = it.toFloat()) }
                 }
                 OutlinedButton(onClick = { canopyFor = "main" }, enabled = editable) {
                     Text(stringResource(R.string.sim_flight_canopy_calculate))
@@ -333,10 +365,15 @@ fun SimulatedFlightScreen(
 
             // ── Wind ───────────────────────────────────────────────────────
             SimSection(R.string.sim_flight_section_wind)
-            SimIntField(R.string.sim_flight_wind, rocket.windMps, 0..20, editable, refused) {
+            if (english) {
+                SimUnitField(R.string.sim_flight_wind, Units.simWind(units), rocket.windMps.toDouble(), 0.0, 20.0,
+                    { Math.round(it).toDouble() }, "m/s", editable, refused) { rocket = rocket.copy(windMps = it.toInt()) }
+            } else {
+            SimIntField(stringResource(R.string.sim_flight_wind, "m/s"), rocket.windMps, 0..20, editable, refused) {
                 rocket = rocket.copy(windMps = it)
             }
-            SimIntField(R.string.sim_flight_wind_from, rocket.windFromDeg, 0..359, editable, refused) {
+            }
+            SimIntField(stringResource(R.string.sim_flight_wind_from), rocket.windFromDeg, 0..359, editable, refused) {
                 rocket = rocket.copy(windFromDeg = it)
             }
 
@@ -448,9 +485,11 @@ fun SimulatedFlightScreen(
         CanopyDialog(
             burnoutMassKg = rocket.burnoutMassKg(motor),
             tempC = (rocket.tempC ?: 15).toFloat(),
+            units = units,
             onDismiss = { canopyFor = null },
             onUse = { rate ->
-                rocket = if (which == "drogue") rocket.copy(drogueMps = rate) else rocket.copy(mainMps = rate)
+                rocket = if (which == "drogue") rocket.copy(drogueMps = rate.roundToInt())
+                    else rocket.copy(mainMps = Math.round(rate * 10f) / 10f)
                 canopyFor = null
             },
         )
@@ -466,14 +505,13 @@ private fun SimSection(titleRes: Int) {
 /** A whole-number field: the settings screens' own, with their range refusal. */
 @Composable
 private fun SimIntField(
-    labelRes: Int,
+    label: String,
     value: Int,
     range: IntRange,
     enabled: Boolean,
     refused: MutableMap<String, Boolean>,
     onUpdate: (Int) -> Unit,
 ) {
-    val label = stringResource(labelRes)
     ConfigurationItemNumeric(
         configItemName = label,
         initialConfigValue = value,
@@ -482,6 +520,82 @@ private fun SimIntField(
         configMessageState = if (enabled) LocatorMessageState.Idle else LocatorMessageState.SendRequested,
         onRefusedChange = { refused[label] = it },
         onConfigUpdate = onUpdate,
+    )
+}
+
+/**
+ * A simulated-flight input shown in the display unit and stored in SI (locator
+ * ADR "Units are SI underneath; English is a display choice"). [valueSi] and the
+ * limits are SI; [q] converts; [stored] rounds an SI value to what the rocket
+ * holds. Out of range is refused, never clamped (ADR-0034 decision 3).
+ *
+ * A [Units.SimQuantity.snapped] input (drogue rate, wind, temperature: whole
+ * m/s or °C on the wire) is committed when the field is left or Done is
+ * pressed, then shows the nearest value the locator holds, and always says what
+ * that is in SI ("Locator uses 4 m/s"): 10 mph reads back 9 mph. Committing on
+ * every keystroke would rewrite the text under the cursor.
+ */
+@Composable
+private fun SimUnitField(
+    labelRes: Int,
+    q: Units.SimQuantity,
+    valueSi: Double,
+    minSi: Double,
+    maxSi: Double,
+    stored: (Double) -> Double,
+    siUnit: String,
+    enabled: Boolean,
+    refused: MutableMap<String, Boolean>,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    onSi: (Double) -> Unit,
+) {
+    val label = stringResource(labelRes, q.unit)
+    val focusManager = LocalFocusManager.current
+    fun fmt(v: Double) = String.format(Locale.US, "%.${q.decimals}f", v)
+    var text by remember(q.unit) { mutableStateOf(fmt(q.toShown(valueSi))) }
+    var focused by remember { mutableStateOf(false) }
+    // Follow the value when it changes for another reason (a saved rocket, the
+    // canopy calculator), but never under the user's cursor.
+    LaunchedEffect(valueSi, q.unit) { if (!focused) text = fmt(q.toShown(valueSi)) }
+    val (lo, hi) = q.shownRange(minSi, maxSi)
+    val parsed = text.toDoubleOrNull()
+    val bad = parsed == null || parsed < lo || parsed > hi
+    LaunchedEffect(bad) { refused[label] = bad }
+    fun commit() {
+        val p = text.toDoubleOrNull() ?: return
+        if (p < lo || p > hi) return
+        val si = stored(q.fromShown(p))
+        onSi(si)
+        text = fmt(q.toShown(si))
+    }
+    val siNow = parsed?.takeIf { !bad }?.let { stored(q.fromShown(it)) } ?: valueSi
+    OutlinedTextField(
+        value = text,
+        onValueChange = { t ->
+            text = t.filter { it.isDigit() || it == '.' || it == '-' }.take(9)
+            if (!q.snapped) text.toDoubleOrNull()?.let { if (it in lo..hi) onSi(stored(q.fromShown(it))) }
+        },
+        modifier = modifier.onFocusChanged { fs ->
+            if (focused && !fs.isFocused && !bad) commit()
+            focused = fs.isFocused
+        },
+        enabled = enabled,
+        label = { Text(label) },
+        isError = bad,
+        supportingText = when {
+            bad -> { { Text(stringResource(R.string.sim_flight_range_decimal, fmt(lo), fmt(hi))) } }
+            q.snapped -> { {
+                val siText = if (siNow == Math.floor(siNow)) siNow.toInt().toString() else siNow.toString()
+                Text(stringResource(R.string.sim_flight_locator_uses, "$siText $siUnit"))
+            } }
+            else -> null
+        },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (minSi < 0.0) KeyboardType.Text else KeyboardType.Decimal,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(onDone = { commit(); focusManager.clearFocus() }),
     )
 }
 
@@ -627,10 +741,12 @@ private fun MotorSearch(enabled: Boolean, onPicked: (MotorHit) -> Unit) {
 
 /** Descent rate from a canopy's diameter and Cd at the rocket's burnout mass. */
 @Composable
-private fun CanopyDialog(burnoutMassKg: Float, tempC: Float, onDismiss: () -> Unit, onUse: (Int) -> Unit) {
-    var diameterCm by remember { mutableStateOf("91") }
+private fun CanopyDialog(burnoutMassKg: Float, tempC: Float, units: UnitSystem, onDismiss: () -> Unit, onUse: (Float) -> Unit) {
+    // In the display unit: 91 cm, or 36 in. Never stored, so it converts freely.
+    val dq = Units.simCanopyDiameter(units)
+    var diameterCm by remember { mutableStateOf(if (units == UnitSystem.English) "36" else "91") }
     var cdText by remember { mutableStateOf("0.75") }
-    val d = diameterCm.toFloatOrNull()
+    val d = diameterCm.toDoubleOrNull()?.let { dq.fromShown(it).toFloat() }
     val cd = cdText.toFloatOrNull()
     val rate = if (d != null && cd != null) Canopy.descentRate(burnoutMassKg, d / 100f, cd, tempC) else 0f
     AlertDialog(
@@ -638,10 +754,12 @@ private fun CanopyDialog(burnoutMassKg: Float, tempC: Float, onDismiss: () -> Un
         title = { Text(stringResource(R.string.sim_flight_canopy_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.sim_flight_canopy_mass, String.format(Locale.US, "%.0f", burnoutMassKg * 1000f)))
+                val mq = Units.simMass(units)
+                Text(stringResource(R.string.sim_flight_canopy_mass,
+                    String.format(Locale.US, "%.${mq.decimals}f %s", mq.toShown(burnoutMassKg * 1000.0), mq.unit)))
                 OutlinedTextField(
                     value = diameterCm, onValueChange = { diameterCm = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
-                    label = { Text(stringResource(R.string.sim_flight_canopy_diameter)) }, singleLine = true,
+                    label = { Text(stringResource(R.string.sim_flight_canopy_diameter, dq.unit)) }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 )
                 OutlinedTextField(
@@ -650,14 +768,16 @@ private fun CanopyDialog(burnoutMassKg: Float, tempC: Float, onDismiss: () -> Un
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 )
                 Text(
-                    if (rate > 0f) stringResource(R.string.sim_flight_canopy_result, String.format(Locale.US, "%.1f", rate))
+                    if (rate > 0f) stringResource(R.string.sim_flight_canopy_result,
+                        if (units == UnitSystem.English) "${Units.speed(rate, units).roundToInt()} ft/s"
+                        else String.format(Locale.US, "%.1f m/s", rate))
                     else stringResource(R.string.sim_flight_canopy_incomplete),
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onUse(rate.roundToInt()) }, enabled = rate > 0f) {
+            TextButton(onClick = { onUse(rate) }, enabled = rate > 0f) {
                 Text(stringResource(R.string.sim_flight_canopy_use))
             }
         },

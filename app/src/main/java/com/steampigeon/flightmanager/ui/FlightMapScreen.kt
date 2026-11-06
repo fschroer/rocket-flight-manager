@@ -159,6 +159,8 @@ import com.steampigeon.flightmanager.data.FlightStates
 import com.steampigeon.flightmanager.data.FullRecordHub
 import com.steampigeon.flightmanager.data.fullrecord.FullRecordTransfer
 import com.steampigeon.flightmanager.data.LocatorConfig
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.PadAlertState
 import com.steampigeon.flightmanager.data.Quaternionf
@@ -534,14 +536,14 @@ internal fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Doubl
 private fun isInFlight(armedState: Boolean, state: RocketState): Boolean =
     armedState || state.flightState != FlightStates.WaitingLaunch
 
-private fun launchRelativePhrase(state: RocketState, vector: Vector?): String? =
+private fun launchRelativePhrase(state: RocketState, vector: Vector?, units: UnitSystem): String? =
     // The range ceiling is checked here too, not just on the displayed figure: an
     // impossible distance read aloud as a recovery bearing is worse than the same
     // number sitting in a corner of the screen, because it is instruction rather
     // than readout. Callers word the no-position case themselves.
     if (state.gpsStatus == SensorHealth.Ok && vector != null &&
         distanceWithinRadioRange(vector.distance))
-        " ${vector.distance} meters ${vector.ordinal} of launch point."
+        " ${Units.spokenDistance(vector.distance, units)} ${vector.ordinal} of launch point."
     else null
 
 /**
@@ -579,7 +581,7 @@ internal fun landedThroughBlackout(aglM: Float, descentRateMs: Float, messageAge
 
 /** Returns the display string for a single deployment channel based on its mode.
  *  Format: "Ch \[n]: [DP|DB|MP|MB|NA] \[value]" */
-private fun deployChannelText(channel: Int, mode: DeployMode?, config: LocatorConfig): String {
+private fun deployChannelText(channel: Int, mode: DeployMode?, config: LocatorConfig, units: UnitSystem): String {
     val abbr = when (mode) {
         DeployMode.DroguePrimary -> "Drogue Prm "
         DeployMode.DrogueBackup  -> "Drogue Bkp "
@@ -593,9 +595,9 @@ private fun deployChannelText(channel: Int, mode: DeployMode?, config: LocatorCo
         DeployMode.DrogueBackup ->
             " ${config.drogueBackupDeployDelay / 10}.${config.drogueBackupDeployDelay % 10} s"
         DeployMode.MainPrimary ->
-            " ${config.mainPrimaryDeployAltitude} m"
+            " ${Units.formatDeployAltitude(config.mainPrimaryDeployAltitude, units)}"
         DeployMode.MainBackup ->
-            " ${config.mainBackupDeployAltitude} m"
+            " ${Units.formatDeployAltitude(config.mainBackupDeployAltitude, units)}"
         else -> ""
     }
     return "Ch $channel: $abbr$value"
@@ -756,6 +758,7 @@ fun HomeScreen(
         CameraPreviewScreen(
             handheldCameraAzimuth, azimuthToLocator, handheldDevicePitch, locatorElevation,
             rocketSpeed = rocketState.velocity,
+            units = viewModel.unitSystem.collectAsState().value,
             rocketAttitude = rocketState.attitude,
             inFlight = isInFlight(armedState, rocketState),
             lastMessageAge = lastMessageAge,
@@ -901,7 +904,7 @@ private fun FlightSpeechAnnouncer(
             // Still worth saying once, if the blackout dead-reckoning below hasn't
             // already — this is the number the user walks toward.
             if (!landingSpoken) {
-                announcer.flush("Landing${launchRelativePhrase(rocketState, vectorFromLaunch)
+                announcer.flush("Landing${launchRelativePhrase(rocketState, vectorFromLaunch, viewModel.unitSystem.value)
                         ?: ", location unknown."}", mark = true)
             }
             // Reset all announcement guards for the next flight
@@ -932,7 +935,7 @@ private fun FlightSpeechAnnouncer(
             noseoverTime = System.currentTimeMillis()
             if (!apogeeSpoken) {
                 apogeeSpoken = true
-                announcer.add("Apogee, ${rocketState.altitudeAboveGroundLevel.toInt()} meters.")
+                announcer.add("Apogee, ${Units.spokenAltitude(rocketState.altitudeAboveGroundLevel, viewModel.unitSystem.value)}.")
             }
         }
         // Each stays pending until its charge actually fires, so a charge that
@@ -1030,7 +1033,9 @@ private fun FlightSpeechAnnouncer(
             // about 5.5 s apart (ADR-0040); that is not a lost link.
             val linkLive = messageAge < linkLossTimeout ||
                 FullRecordHub.radioTransferLive(now, state.lastMessageTime)
-            val fromLaunch = launchRelativePhrase(state, vector)
+            // Read at each pass, not captured: the setting can change mid-session.
+            val units = viewModel.unitSystem.value
+            val fromLaunch = launchRelativePhrase(state, vector, units)
 
             // Link health.  Announced only after the link has been live at least
             // once, so starting the app out of range is silence rather than a
@@ -1062,13 +1067,14 @@ private fun FlightSpeechAnnouncer(
                 gpsOkLast = gpsOk
             }
 
-            // Ascent altitude callouts every 100 m during coast to apogee.
+            // Ascent altitude callouts during coast to apogee: every 100 m, or
+            // every 500 ft (Units.ascentCalloutStep).
             if (state.flightState == FlightStates.Burnout) {
-                val roundedAGL = (state.altitudeAboveGroundLevel / 100).toInt() * 100
+                val roundedAGL = Units.ascentCalloutMark(state.altitudeAboveGroundLevel, units)
                 if (roundedAGL > previousAGL) {
                     if (state.velocity > minimumSpokenAGLVelocity)
                         // A reading, not an event: dropped rather than said late.
-                        announcer.addCurrent("$roundedAGL meters.")
+                        announcer.addCurrent("$roundedAGL ${if (units == UnitSystem.English) "feet" else "meters"}.")
                     previousAGL = roundedAGL
                 }
             }
@@ -1097,7 +1103,7 @@ private fun FlightSpeechAnnouncer(
                     descentRate >= freefallDescentRate &&
                             now - lastDescentWarningTime >= descentWarningIntervalMillis -> {
                         lastDescentWarningTime = now
-                        announcer.flush("Descent warning, ${descentRate.toInt()} meters per second" +
+                        announcer.flush("Descent warning, ${Units.spokenSpeed(descentRate, units)}" +
                                     (fromLaunch ?: ""))
                     }
                 }
@@ -1456,6 +1462,7 @@ private fun MapWithOverlays(
                 .align(Alignment.BottomStart)
                 .offset(x = 8.dp, y = (-36).dp),
             width = scaleBarMaxWidth,
+            units = viewModel.unitSystem.collectAsState().value,
             barColor = MaterialTheme.colorScheme.primary,
             textColor = MaterialTheme.colorScheme.secondary,
         )
@@ -2139,6 +2146,7 @@ private fun GenericScaleBar(
     cameraState: MapLibreCameraState,
     modifier: Modifier = Modifier,
     width: Dp = 192.dp,
+    units: UnitSystem = UnitSystem.Metric,
     barColor: Color = MaterialTheme.colorScheme.primary,
     textColor: Color = MaterialTheme.colorScheme.secondary,
 ) {
@@ -2154,11 +2162,9 @@ private fun GenericScaleBar(
     // scale — which is exactly how it was reported.
     val totalMeters = metersPerDp(zoom, lat) * width.value
 
-    val niceDistances = listOf(1, 2, 5, 10, 20, 50, 100, 200, 500,
-        1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000)
-    val niceDistM = niceDistances.lastOrNull { it.toDouble() <= totalMeters } ?: niceDistances.first()
-    val barFraction = (niceDistM.toDouble() / totalMeters).toFloat().coerceIn(0.05f, 1f)
-    val label = if (niceDistM >= 1000) "${niceDistM / 1000} km" else "$niceDistM m"
+    // A "nice" 1/2/5 x 10^n in the display unit (feet and miles in English).
+    val (niceDistM, label) = Units.scaleBar(totalMeters.toDouble(), units)
+    val barFraction = (niceDistM / totalMeters).toFloat().coerceIn(0.05f, 1f)
 
     Column(modifier = modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
         Text(
@@ -2703,6 +2709,7 @@ fun LocatorStats(
     announcer: Announcer,
     modifier: Modifier
 ) {
+    val units = viewModel.unitSystem.collectAsState().value
     var columnWidth by remember { mutableStateOf(0) }
     var columnHeight by remember { mutableStateOf(0) }
     var locatorStatisticsOffset by remember { mutableStateOf(IntOffset(0, 0)) }
@@ -2738,7 +2745,7 @@ fun LocatorStats(
                 // is exactly when someone wants to hear state and altitude without
                 // looking, so this cannot be gated on arm state either (#36).
                 if (isInFlight(armedState, rocketState))
-                    announcer.flush("${locatorConfig.deviceName}, ${rocketState.flightState}, ${rocketState.altitudeAboveGroundLevel} meters")
+                    announcer.flush("${locatorConfig.deviceName}, ${rocketState.flightState}, ${Units.spokenAltitude(rocketState.altitudeAboveGroundLevel, units)}")
             }
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
@@ -2790,7 +2797,7 @@ fun LocatorStats(
         // believable distance is still shown: it is what the user walks toward.
         val distancePlausible = viewModel.locatorDistancePlausible.collectAsState().value
         val dst = if (validLatLng(rocketState.latitude, rocketState.longitude) && distancePlausible)
-            String.format(Locale.US, "%15d", distanceToLocator) + " m"
+            Units.distanceField(distanceToLocator, units, 15)
         else stringResource(R.string.unknown)
         Text(
             text = "Dist: $dst",
@@ -2798,13 +2805,13 @@ fun LocatorStats(
             style = TelemetryTextStyle,
         )
         Text(
-            text = "AGL : ${String.format(Locale.US, "%15.1f", rocketState.altitudeAboveGroundLevel)} m",
+            text = "AGL : ${Units.altitudeNumber(rocketState.altitudeAboveGroundLevel, units, 15)} ${Units.altitudeUnit(units)}",
             style = TelemetryTextStyle,
             color = if (rocketState.baroStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
         )
         if (inFlight) {
             Text(
-                text = "Spd: ${String.format(Locale.US, "%6.1f", rocketState.velocity)} m/s",
+                text = "Spd: ${Units.speedNumber(rocketState.velocity, units, 6)} ${Units.speedUnit(units)}",
                 style = TelemetryTextStyle,
             )
             val inc = rocketState.attitude.inclinationDeg()
@@ -2856,7 +2863,7 @@ fun LocatorStats(
                 ChannelConfig(locatorConfig.deploymentChannel4Mode, rocketState.deployChannel4Armed),
             ).forEachIndexed { index, (mode, isArmed) ->
                 Text(
-                    text = deployChannelText(index + 1, mode, locatorConfig),
+                    text = deployChannelText(index + 1, mode, locatorConfig, units),
                     style = TelemetryTextStyle,
                     color = if (isArmed) Color.Unspecified else MaterialTheme.colorScheme.error,
                 )
@@ -2928,8 +2935,11 @@ fun LocatorStats(
 // ── CameraPreview overlay helpers ────────────────────────────────────────────
 
 private fun DrawScope.drawVelocityGauge(
+    // In the display unit, as are maxSpeed and tickSpeeds.
     speed: Float,
     maxSpeed: Float,
+    tickSpeeds: List<Float>,
+    unit: String,
     cx: Float,
     cy: Float,
     radius: Float,
@@ -2954,8 +2964,7 @@ private fun DrawScope.drawVelocityGauge(
         size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
     )
 
-    // Tick marks at 0, 100, 200, 300, 400, 500 m/s
-    val tickSpeeds = listOf(0f, 100f, 200f, 300f, 400f, 500f)
+    // Tick marks from Units.speedGaugeScale: every 100 m/s, or every 400 ft/s.
     for (tickSpeed in tickSpeeds) {
         val frac = (tickSpeed / maxSpeed).coerceIn(0f, 1f)
         val angleDeg = startDeg + frac * sweepDeg
@@ -3015,7 +3024,7 @@ private fun DrawScope.drawVelocityGauge(
         isAntiAlias = true
     }
     drawContext.canvas.nativeCanvas.drawText(
-        "${speed.toInt()} m/s", cx, cy + radius * 0.35f, speedPaint)
+        "${speed.toInt()} $unit", cx, cy + radius * 0.35f, speedPaint)
 }
 
 private fun DrawScope.drawRocket3D(
@@ -3190,6 +3199,7 @@ fun CameraPreviewScreen(
     handheldDevicePitch: Float,
     locatorElevation: Float,
     rocketSpeed: Float = 0f,
+    units: UnitSystem = UnitSystem.Metric,
     rocketAttitude: Quaternionf = Quaternionf.IDENTITY,
     // Whether the rocket is FLYING, not whether it is armed — this screen has no
     // RocketState to decide for itself, so the caller passes the verdict (#36).
@@ -3416,9 +3426,12 @@ fun CameraPreviewScreen(
 
             if (inFlight && lastMessageAge < messageTimeout) {
                 // ── Velocity arc gauge (top-left) ─────────────────────────────
+                val (gaugeMax, gaugeTicks) = Units.speedGaugeScale(units)
                 drawVelocityGauge(
-                    speed = rocketSpeed,
-                    maxSpeed = 500f,
+                    speed = Units.speed(rocketSpeed, units),
+                    maxSpeed = gaugeMax,
+                    tickSpeeds = gaugeTicks,
+                    unit = Units.speedUnit(units),
                     cx = 100.dp.toPx(),
                     cy = 100.dp.toPx(),
                     radius = 80.dp.toPx(),

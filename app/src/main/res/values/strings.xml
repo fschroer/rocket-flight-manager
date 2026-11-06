@@ -50,8 +50,8 @@
     <string name="increment">Increment</string>
     <string name="locator_satellites">Locator Satellites</string>
     <string name="locator_settings">Locator Settings</string>
-    <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (m)</string>
-    <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (m)</string>
+    <string name="main_backup_deploy_altitude">Main Backup Deploy Altitude (%1$s)</string>
+    <string name="main_primary_deploy_altitude">Main Primary Deploy Altitude (%1$s)</string>
     <string name="next">Next</string>
     <string name="receiver_name">Receiver Name</string>
     <string name="receiver_settings">Receiver Settings</string>
@@ -72,6 +72,17 @@
     <string name="settings_range">Must be %1$d to %2$d</string>
     <string name="settings_enter_value">Enter a value</string>
     <string name="settings_tenths_only">Use steps of 0.1 s</string>
+    <!-- English deployment altitudes move in 10 ft steps: the locator holds whole
+         meters, and only 10 ft steps convert back to the same number of feet. -->
+    <string name="settings_feet_step">Use steps of %1$d ft</string>
+    <!-- Under a deployment altitude shown in feet: what the locator itself holds,
+         which is also what its USB console shows. -->
+    <string name="settings_on_locator">%1$d m on the locator</string>
+    <!-- Display units (locator ADR "Units are SI underneath; English is a display choice"). -->
+    <string name="units_setting">Units</string>
+    <string name="units_metric">Metric (m, m/s)</string>
+    <string name="units_english">English (ft, ft/s)</string>
+    <string name="units_setting_summary">How the app shows, speaks and takes numbers. The locator, its USB console and every exported file stay in meters.</string>
     <string name="settings_out_of_order">A backup is not after its primary. Use the arrows to fix it.</string>
     <string name="update_failed">Send Failed</string>
     <string name="update_not_acknowledged">Not Received</string>
@@ -301,9 +312,9 @@
     <string name="sim_flight_section_wind">Wind</string>
     <string name="sim_flight_saved_rockets">Saved rockets</string>
     <string name="sim_flight_name">Name</string>
-    <string name="sim_flight_dry_mass">Mass without motor (g)</string>
-    <string name="sim_flight_diameter">Body diameter (mm)</string>
-    <string name="sim_flight_length">Length (mm)</string>
+    <string name="sim_flight_dry_mass">Mass without motor (%1$s)</string>
+    <string name="sim_flight_diameter">Body diameter (%1$s)</string>
+    <string name="sim_flight_length">Length (%1$s)</string>
     <string name="sim_flight_stability">Stability margin (calibers)</string>
     <string name="sim_flight_stability_help">The margin OpenRocket shows with the motor loaded. With the length, it sets how quickly the rocket turns into the wind off the rail.</string>
     <string name="sim_flight_drag_help">Type one Cd and press Spread to fill the Mach points with a typical rise near Mach 1, type each point, or fit them from an OpenRocket simulation exported as CSV.</string>
@@ -320,17 +331,17 @@
     <string name="sim_flight_motor_none_found">Nothing found, or no connection.</string>
     <string name="sim_flight_motor_import">Import .eng or .rse file</string>
     <string name="sim_flight_motor_file_failed">That motor could not be read.</string>
-    <string name="sim_flight_rail_length">Rail length (cm)</string>
+    <string name="sim_flight_rail_length">Rail length (%1$s)</string>
     <string name="sim_flight_rail_angle">Rail angle from vertical (degrees)</string>
     <string name="sim_flight_launch_direction">Rail leans toward (degrees)</string>
     <string name="sim_flight_temp_from_baro">Use the locator\'s barometer temperature</string>
-    <string name="sim_flight_temperature">Ground temperature (°C)</string>
+    <string name="sim_flight_temperature">Ground temperature (%1$s)</string>
     <string name="sim_flight_canopy_calculate">Calculate</string>
     <string name="sim_flight_canopy_title">Descent rate from a canopy</string>
-    <string name="sim_flight_canopy_mass">Rocket after burnout: %1$s g</string>
-    <string name="sim_flight_canopy_diameter">Canopy diameter (cm)</string>
+    <string name="sim_flight_canopy_mass">Rocket after burnout: %1$s</string>
+    <string name="sim_flight_canopy_diameter">Canopy diameter (%1$s)</string>
     <string name="sim_flight_canopy_cd">Canopy Cd</string>
-    <string name="sim_flight_canopy_result">About %1$s m/s</string>
+    <string name="sim_flight_canopy_result">About %1$s</string>
     <string name="sim_flight_canopy_incomplete">Enter a diameter and Cd.</string>
     <string name="sim_flight_canopy_use">Use</string>
     <string name="sim_flight_save_rocket">Save Rocket</string>
@@ -338,9 +349,12 @@
     <string name="sim_flight_delete_title">Delete saved rocket?</string>
     <string name="sim_flight_delete_text">\"%1$s\" is removed from the saved rockets on this phone. Its values stay on screen until you pick another rocket.</string>
     <string name="sim_flight_range_decimal">Must be %1$s to %2$s</string>
-    <string name="sim_flight_drogue">Drogue descent rate (m/s)</string>
-    <string name="sim_flight_main">Main descent rate (m/s)</string>
-    <string name="sim_flight_wind">Wind speed (m/s)</string>
+    <string name="sim_flight_drogue">Drogue descent rate (%1$s)</string>
+    <string name="sim_flight_main">Main descent rate (%1$s)</string>
+    <!-- Under a simulated-flight field shown in English whose value the locator
+         holds only to a whole m/s or °C: what it will actually use. -->
+    <string name="sim_flight_locator_uses">Locator uses %1$s</string>
+    <string name="sim_flight_wind">Wind speed (%1$s)</string>
     <string name="sim_flight_wind_from">Wind from (degrees)</string>
     <string name="sim_flight_start">Start Simulated Flight</string>
     <string name="sim_flight_starting">Starting…</string>

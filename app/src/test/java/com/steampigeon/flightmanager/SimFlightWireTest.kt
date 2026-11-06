@@ -21,7 +21,7 @@ class SimFlightWireTest {
     private val rocket = SimRocket(name = "vector", dryMassG = 1200, diameterMm = 54f,
         cd = listOf(0.45f, 0.45f, 0.45f, 0.459f, 0.504f, 0.6975f, 0.6525f, 0.585f),
         lengthMm = 1350, stabilityCal = 2.7f,
-        drogueMps = 25, mainMps = 7, railLengthCm = 244, railAngleTenths = 50, launchAzDeg = 90,
+        drogueMps = 25, mainMps = 7f, railLengthCm = 244, railAngleTenths = 50, launchAzDeg = 90,
         tempC = -5, windMps = 7, windFromDeg = 315)
 
     @Test fun startMatchesTheFirmwareStruct() {

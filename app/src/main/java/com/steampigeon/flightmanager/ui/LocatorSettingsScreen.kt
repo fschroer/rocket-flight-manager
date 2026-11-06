@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberUpdatedState
@@ -60,6 +61,8 @@ import com.steampigeon.flightmanager.R
 import com.steampigeon.flightmanager.data.DeployMode
 import com.steampigeon.flightmanager.data.LocatorConfig
 import com.steampigeon.flightmanager.data.LocatorSettingsBounds
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 import com.steampigeon.flightmanager.data.LocatorSettingsBounds.Setting
 import com.steampigeon.flightmanager.data.LocatorMessageState
 import com.steampigeon.flightmanager.data.NoseAxis
@@ -97,6 +100,10 @@ fun LocatorSettingsScreen(
     // primary passes through 3 and 30 on the way, and pushing from each of those
     // would leave the backup dragged down to 29 by a number nobody meant.
     var typingBase by remember { mutableStateOf<LocatorConfig?>(null) }
+    // Display units (locator ADR "Units are SI underneath; English is a display
+    // choice"). The staged config is whole meters either way; only the field's
+    // numbers and the values its arrows land on change.
+    val units = viewModel.unitSystem.collectAsState().value
 
     // The delay or altitude field for whichever deployment a channel is set to.
     // Both channels of a pair edit the same two values, and moving one onto the
@@ -118,21 +125,23 @@ fun LocatorSettingsScreen(
                     Setting.DrogueBackup -> R.string.drogue_backup_deploy_delay
                     Setting.MainPrimary -> R.string.main_primary_deploy_altitude
                     Setting.MainBackup -> R.string.main_backup_deploy_altitude
-                }
+                },
+                Units.altitudeUnit(units)
             ),
+            units = units,
             setting = setting,
             value = LocatorSettingsBounds.valueOf(stagedLocatorConfig, setting),
-            canIncrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, +1) != stagedLocatorConfig,
-            canDecrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, -1) != stagedLocatorConfig,
+            canIncrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, +1, units) != stagedLocatorConfig,
+            canDecrement = LocatorSettingsBounds.step(stagedLocatorConfig, setting, -1, units) != stagedLocatorConfig,
             configMessageState = locatorConfigMessageState,
             modifier = modifier,
             onEditStart = { typingBase = stagedLocatorConfig },
             onTyped = { value ->
-                stagedLocatorConfig = LocatorSettingsBounds.withValue(typingBase ?: stagedLocatorConfig, setting, value)
+                stagedLocatorConfig = LocatorSettingsBounds.withValue(typingBase ?: stagedLocatorConfig, setting, value, units)
                 viewModel.updateLocatorConfigChanged(true)
             },
             onStep = { delta ->
-                stagedLocatorConfig = LocatorSettingsBounds.step(stagedLocatorConfig, setting, delta)
+                stagedLocatorConfig = LocatorSettingsBounds.step(stagedLocatorConfig, setting, delta, units)
                 typingBase = stagedLocatorConfig
                 viewModel.updateLocatorConfigChanged(true)
             },
@@ -449,6 +458,7 @@ fun ConfigurationItemNumeric(configItemName: String,
 fun DeploymentSettingField(
     configItemName: String,
     setting: Setting,
+    units: UnitSystem,
     value: Int,
     canIncrement: Boolean,
     canDecrement: Boolean,
@@ -459,19 +469,27 @@ fun DeploymentSettingField(
     onStep: (Int) -> Unit,
     onRefusedChange: (Boolean) -> Unit,
 ) {
+    // Re-made when the units change, so a field never keeps text typed in the other unit.
+    key(units) {
     val focusManager = LocalFocusManager.current
-    var text by remember { mutableStateOf(LocatorSettingsBounds.format(setting, value)) }
+    var text by remember { mutableStateOf(LocatorSettingsBounds.format(setting, value, units)) }
     var focused by remember { mutableStateOf(false) }
-    val parsed = LocatorSettingsBounds.validate(setting, text)
-    val problem = (parsed as? LocatorSettingsBounds.Parsed.Refused)?.problem
+    val parsed = LocatorSettingsBounds.validate(setting, text, units)
+    // A value the locator already holds is never refused just for how it reads in
+    // feet: the 130 m default shows as 427 ft, off the 10 ft grid, and a backup of
+    // 498 m set in meters shows above the 1,630 ft the arrows reach. Both are valid
+    // and stay until the user changes them. Only the meter bounds can refuse them.
+    val showsHeldValue = text == LocatorSettingsBounds.format(setting, value, units) &&
+        value in setting.min..setting.max
+    val problem = if (showsHeldValue) null else (parsed as? LocatorSettingsBounds.Parsed.Refused)?.problem
 
     // Follow the value when it moves for any other reason: an arrow, a push from
     // the pair's other member, or a field for the same setting on another
     // channel.  Text that already reads as this value is left alone, so "1."
     // stays "1." while the user is still typing "1.5".
     LaunchedEffect(value) {
-        if ((LocatorSettingsBounds.validate(setting, text) as? LocatorSettingsBounds.Parsed.Ok)?.value != value)
-            text = LocatorSettingsBounds.format(setting, value)
+        if ((LocatorSettingsBounds.validate(setting, text, units) as? LocatorSettingsBounds.Parsed.Ok)?.value != value)
+            text = LocatorSettingsBounds.format(setting, value, units)
     }
     val currentOnRefusedChange by rememberUpdatedState(onRefusedChange)
     LaunchedEffect(problem != null) { currentOnRefusedChange(problem != null) }
@@ -479,8 +497,19 @@ fun DeploymentSettingField(
     // and hold Update disabled with nothing on screen to fix.
     DisposableEffect(Unit) { onDispose { currentOnRefusedChange(false) } }
 
-    fun shown(v: Int) =
-        if (setting.tenths) "${LocatorSettingsBounds.format(setting, v)} s" else "$v m"
+    // A refusal quotes its limit in the field's own unit: "Max 1640 ft".
+    fun shown(v: Int) = LocatorSettingsBounds.shown(setting, v, units)
+    // In feet, the whole meters the locator will hold, always on screen: the
+    // number its USB console shows, and the check on a feet/meters mix-up.
+    val onLocator = units == UnitSystem.English && !setting.tenths
+    val supporting: String? = when (problem) {
+        null -> if (onLocator) stringResource(R.string.settings_on_locator, value) else null
+        LocatorSettingsBounds.Problem.Empty -> stringResource(R.string.settings_enter_value)
+        LocatorSettingsBounds.Problem.TooPrecise -> stringResource(R.string.settings_tenths_only)
+        is LocatorSettingsBounds.Problem.BelowMin -> stringResource(R.string.settings_min, shown(problem.min))
+        is LocatorSettingsBounds.Problem.AboveMax -> stringResource(R.string.settings_max, shown(problem.max))
+        is LocatorSettingsBounds.Problem.NotOnStep -> stringResource(R.string.settings_feet_step, problem.step)
+    }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -491,7 +520,7 @@ fun DeploymentSettingField(
             value = text,
             onValueChange = { newText ->
                 text = newText
-                val p = LocatorSettingsBounds.validate(setting, newText)
+                val p = LocatorSettingsBounds.validate(setting, newText, units)
                 if (p is LocatorSettingsBounds.Parsed.Ok) onTyped(p.value)
             },
             modifier = Modifier
@@ -500,25 +529,14 @@ fun DeploymentSettingField(
                     // Tidy an accepted entry ("05" -> "5", "1." -> "1.0").  A refused
                     // one is left exactly as typed, so the user sees what was wrong.
                     if (!focusState.isFocused && focused && problem == null)
-                        text = LocatorSettingsBounds.format(setting, value)
+                        text = LocatorSettingsBounds.format(setting, value, units)
                     focused = focusState.isFocused
                 }
                 .weight(configItemWidth),
             enabled = configMessageState == LocatorMessageState.Idle,
             label = { Text(configItemName) },
             isError = problem != null,
-            supportingText = problem?.let {
-                {
-                    Text(
-                        when (it) {
-                            LocatorSettingsBounds.Problem.Empty -> stringResource(R.string.settings_enter_value)
-                            LocatorSettingsBounds.Problem.TooPrecise -> stringResource(R.string.settings_tenths_only)
-                            is LocatorSettingsBounds.Problem.BelowMin -> stringResource(R.string.settings_min, shown(it.min))
-                            is LocatorSettingsBounds.Problem.AboveMax -> stringResource(R.string.settings_max, shown(it.max))
-                        }
-                    )
-                }
-            },
+            supportingText = supporting?.let { message -> { Text(message) } },
             singleLine = true,
             keyboardOptions = KeyboardOptions(
                 keyboardType = if (setting.tenths) KeyboardType.Decimal else KeyboardType.Number,
@@ -538,6 +556,7 @@ fun DeploymentSettingField(
             }
         }
     }
+    } // key(units)
 }
 
 /**

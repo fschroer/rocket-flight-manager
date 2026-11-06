@@ -98,7 +98,7 @@ class SimFlightStore(context: Context) {
         put("name", r.name); put("dryMassG", r.dryMassG); put("diameterMm", r.diameterMm.toDouble())
         put("lengthMm", r.lengthMm); put("stabilityCal", r.stabilityCal.toDouble())
         put("cd", JSONArray(r.cd.map { it.toDouble() })); put("motorId", r.motorId ?: JSONObject.NULL)
-        put("drogueMps", r.drogueMps); put("mainMps", r.mainMps)
+        put("drogueMps", r.drogueMps); put("mainMps", r.mainMps.toDouble())
         put("railLengthCm", r.railLengthCm); put("railAngleTenths", r.railAngleTenths)
         put("launchAzDeg", r.launchAzDeg); put("tempC", r.tempC ?: JSONObject.NULL)
         put("windMps", r.windMps); put("windFromDeg", r.windFromDeg)
@@ -115,7 +115,7 @@ class SimFlightStore(context: Context) {
             lengthMm = o.optInt("lengthMm", d.lengthMm),
             stabilityCal = o.optDouble("stabilityCal", d.stabilityCal.toDouble()).toFloat(),
             motorId = if (o.isNull("motorId")) null else o.optString("motorId"),
-            drogueMps = o.optInt("drogueMps", d.drogueMps), mainMps = o.optInt("mainMps", d.mainMps),
+            drogueMps = o.optInt("drogueMps", d.drogueMps), mainMps = o.optDouble("mainMps", d.mainMps.toDouble()).toFloat(),
             railLengthCm = o.optInt("railLengthCm", d.railLengthCm),
             railAngleTenths = o.optInt("railAngleTenths", d.railAngleTenths),
             launchAzDeg = o.optInt("launchAzDeg", d.launchAzDeg), tempC = if (o.isNull("tempC")) null else o.optInt("tempC"),

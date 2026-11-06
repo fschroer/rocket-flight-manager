@@ -95,6 +95,8 @@ object LocatorSettingsBounds {
         data object TooPrecise : Problem
         data class BelowMin(val min: Int) : Problem
         data class AboveMax(val max: Int) : Problem
+        /** English deployment altitudes move in [Units.DEPLOY_STEP_FT] steps; see there. */
+        data class NotOnStep(val step: Int) : Problem
     }
 
     sealed interface Parsed {
@@ -137,4 +139,97 @@ object LocatorSettingsBounds {
     /** How a value is shown in its field: "2.0" for tenths, "500" for meters. */
     fun format(s: Setting, value: Int): String =
         if (s.tenths) "${value / 10}.${value % 10}" else value.toString()
+
+    // ── English entry (locator ADR "Units are SI underneath; English is a display
+    // choice") ─────────────────────────────────────────────────────────────────
+    //
+    // The functions above work in wire units and stay the rule. These wrap them
+    // for a field shown in feet: they take and give wire units (whole meters), so
+    // the staged config, isValid and what is sent are untouched; only the values a
+    // field can land on, and the numbers its refusals quote, are in feet.
+    //
+    // Feet ranges are 10 ft steps inside the meter ranges: main primary 10 to
+    // 1,640 ft (3 to 500 m), main backup 0 to 1,630 ft (0 to 497 m). A stored value
+    // outside them (a backup of 498 m set in meters) is still valid and still
+    // shown, to the foot; the arrows just cannot reach it in feet.
+
+    const val MAIN_PRIMARY_MIN_FT = 10
+    const val MAIN_PRIMARY_MAX_FT = 1640    // 499.9 m -> 500 m
+    const val MAIN_BACKUP_MAX_FT = MAIN_PRIMARY_MAX_FT - Units.DEPLOY_STEP_FT
+
+    private fun inFeet(s: Setting, u: UnitSystem) = u == UnitSystem.English && !s.tenths
+
+    /** A setting's limits in the unit its field is shown in. */
+    fun minShown(s: Setting, u: UnitSystem) =
+        if (!inFeet(s, u)) s.min else if (s == Setting.MainPrimary) MAIN_PRIMARY_MIN_FT else 0
+
+    fun maxShown(s: Setting, u: UnitSystem) =
+        if (!inFeet(s, u)) s.max else if (s == Setting.MainPrimary) MAIN_PRIMARY_MAX_FT else MAIN_BACKUP_MAX_FT
+
+    /**
+     * [withValue] for a field shown in [u]. In feet a pushed partner moves to the
+     * next 10 ft step beyond [value] rather than one meter, so the pair stays on
+     * values the field can show and the arrows can return to.
+     */
+    fun withValue(c: LocatorConfig, s: Setting, value: Int, u: UnitSystem): LocatorConfig {
+        if (!inFeet(s, u)) return withValue(c, s, value)
+        val v = value.coerceIn(s.min, s.max)
+        val ft = Units.deployMetersToFeet(v)
+        return when (s) {
+            Setting.MainBackup -> c.copy(
+                mainBackupDeployAltitude = v,
+                mainPrimaryDeployAltitude =
+                    if (c.mainPrimaryDeployAltitude > v) c.mainPrimaryDeployAltitude
+                    else Units.deployFeetToMeters(Units.nextDeployStep(ft, +1)).coerceAtMost(MAIN_PRIMARY_MAX))
+            Setting.MainPrimary -> c.copy(
+                mainPrimaryDeployAltitude = v,
+                mainBackupDeployAltitude =
+                    if (c.mainBackupDeployAltitude < v) c.mainBackupDeployAltitude
+                    else Units.deployFeetToMeters(Units.nextDeployStep(ft, -1)).coerceAtLeast(0))
+            else -> withValue(c, s, value)
+        }
+    }
+
+    /** One arrow press in [u]: to the next 10 ft step in feet, stopping at the feet limits. */
+    fun step(c: LocatorConfig, s: Setting, delta: Int, u: UnitSystem): LocatorConfig {
+        if (!inFeet(s, u)) return step(c, s, delta)
+        val ft = Units.deployMetersToFeet(valueOf(c, s))
+        val target = Units.nextDeployStep(ft, delta).coerceIn(minShown(s, u), maxShown(s, u))
+        // At or past a limit the clamp can land behind where it started (a 2 m
+        // primary is 7 ft; down clamps to 10 ft, which is UP). That is no step.
+        if ((delta > 0 && target <= ft) || (delta < 0 && target >= ft)) return c
+        return withValue(c, s, Units.deployFeetToMeters(target), u)
+    }
+
+    /**
+     * [validate] for a field shown in [u]. In feet: whole feet, in range, on a
+     * 10 ft step, returned as the whole meters the locator will hold. Range is
+     * checked before the step, because 2,500 is a units mistake to name as one,
+     * and still refused, never clamped (decision 3): 2,500 ft is 762 m.
+     */
+    fun validate(s: Setting, text: String, u: UnitSystem): Parsed {
+        if (!inFeet(s, u)) return validate(s, text)
+        val t = text.trim()
+        if (t.isEmpty()) return Parsed.Refused(Problem.Empty)
+        if (!wholePattern.matches(t)) return Parsed.Refused(Problem.Empty)
+        if (t.length > 6) return Parsed.Refused(Problem.AboveMax(maxShown(s, u)))
+        val ft = t.toInt()
+        return when {
+            ft < minShown(s, u) -> Parsed.Refused(Problem.BelowMin(minShown(s, u)))
+            ft > maxShown(s, u) -> Parsed.Refused(Problem.AboveMax(maxShown(s, u)))
+            !Units.onDeployStep(ft) -> Parsed.Refused(Problem.NotOnStep(Units.DEPLOY_STEP_FT))
+            else -> Parsed.Ok(Units.deployFeetToMeters(ft))
+        }
+    }
+
+    /** [format] for a field shown in [u]: "600" for 183 m in feet. */
+    fun format(s: Setting, value: Int, u: UnitSystem): String =
+        if (!inFeet(s, u)) format(s, value) else Units.deployMetersToFeet(value).toString()
+
+    /** A value with its unit, for a refusal or a readback: "2.0 s", "500 m", "1640 ft". */
+    fun shown(s: Setting, valueShown: Int, u: UnitSystem): String = when {
+        s.tenths -> "${format(s, valueShown)} s"
+        inFeet(s, u) -> "$valueShown ft"
+        else -> "$valueShown m"
+    }
 }

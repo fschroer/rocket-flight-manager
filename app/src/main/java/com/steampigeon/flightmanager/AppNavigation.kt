@@ -443,7 +443,7 @@ fun RocketApp(
                     onCancelButtonClicked = { navigateToStart(navController) }, modifier)
             }
             composable(route = NavDestination.DownloadMap.name) {
-                DownloadMapScreen(modifier)
+                DownloadMapScreen(modifier, units = viewModel.unitSystem.collectAsState().value)
             }
             composable(route = NavDestination.AppFlightLogs.name) {
                 AppFlightLogsScreen(viewModel,

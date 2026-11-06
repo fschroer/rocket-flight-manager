@@ -74,6 +74,8 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import kotlin.math.roundToInt
+import com.steampigeon.flightmanager.data.UnitSystem
+import com.steampigeon.flightmanager.data.Units
 
 /** Default box size when jumping to a manually-entered coordinate. */
 private const val MANUAL_EXTENT_KM = 8.0
@@ -100,6 +102,9 @@ private const val OPENING_ZOOM = 5.0
 @Composable
 fun DownloadMapScreen(
     modifier: Modifier = Modifier,
+    // Display units (locator ADR "Units are SI underneath; English is a display
+    // choice"): region sizes in mi. The preset-sites CSV stays in km.
+    units: UnitSystem = UnitSystem.Metric,
 ) {
     val context = LocalContext.current
     var provider by remember { mutableStateOf(MapProviderPrefs.get(context)) }
@@ -272,7 +277,9 @@ fun DownloadMapScreen(
                 DropdownMenu(expanded = presetsExpanded, onDismissRequest = { presetsExpanded = false }) {
                     presets.forEach { site ->
                         DropdownMenuItem(
-                            text = { Text("${site.name}  (${site.widthKm.toInt()}x${site.heightKm.toInt()} km)") },
+                            text = { Text(if (units == UnitSystem.English)
+                                "${site.name}  (${Units.formatRegionKm(site.widthKm, units, Units.regionDecimals(site.widthKm)).substringBefore(' ')}x${Units.formatRegionKm(site.heightKm, units, Units.regionDecimals(site.heightKm))})"
+                                else "${site.name}  (${site.widthKm.toInt()}x${site.heightKm.toInt()} km)") },
                             onClick = {
                                 moveRequest = MoveRequest(site.bounds(), System.nanoTime())
                                 openingCenterSpent = true   // the user has chosen
@@ -400,7 +407,11 @@ fun DownloadMapScreen(
             // Coverage first: sizing a region is a "does this contain the flight + drift
             // footprint?" question, not a "does this match my screen?" one.
             Text(
-                text = groundSize?.let { (w, h) -> "Coverage: ≈ %.1f × %.1f km".format(w, h) }
+                text = groundSize?.let { (w, h) ->
+                    if (units == UnitSystem.English)
+                        "Coverage: ≈ ${Units.formatRegionKm(w.toDouble(), units).substringBefore(' ')} × ${Units.formatRegionKm(h.toDouble(), units)}"
+                    else "Coverage: ≈ %.1f × %.1f km".format(w, h)
+                }
                     ?: "Coverage: —",
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,

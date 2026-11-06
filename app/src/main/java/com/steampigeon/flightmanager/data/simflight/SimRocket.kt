@@ -265,7 +265,8 @@ data class SimRocket(
     val cd: List<Float> = Drag.spread(0.45f).toList(),
     val motorId: String? = null,
     val drogueMps: Int = 20,
-    val mainMps: Int = 6,
+    /** Tenths of a m/s are what the wire carries (main_dmps), so this is not whole. */
+    val mainMps: Float = 6f,
     val railLengthCm: Int = 180,
     val railAngleTenths: Int = 0,
     val launchAzDeg: Int = 0,
@@ -286,7 +287,7 @@ data class SimRocket(
         if (Math.round(stabilityCal * 10f) !in 5..100) add("Stability margin out of range")
         if (cd.size != Drag.MACH_GRID.size || cd.any { it !in 0.05f..3.0f }) add("Cd out of range")
         if (drogueMps !in 5..60) add("Drogue rate out of range")
-        if (mainMps !in 2..15) add("Main rate out of range")
+        if (Math.round(mainMps * 10f) !in 20..150) add("Main rate out of range")
         if (railLengthCm !in 0..2000) add("Rail length out of range")
         if (railAngleTenths !in 0..200) add("Rail angle out of range")
         if (launchAzDeg !in 0..359) add("Launch direction out of range")
