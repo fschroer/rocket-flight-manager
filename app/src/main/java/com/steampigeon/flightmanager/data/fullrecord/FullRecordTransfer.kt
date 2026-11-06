@@ -83,7 +83,12 @@ class FullRecordTransfer(
             val totalSamples: Int,     // 0 until the first packet
             val page: Int,
             val pageCount: Int,
-        ) : Status()
+        ) : Status() {
+            /** Percent of this record decoded. Every screen and the notification
+             *  show this one number, so they cannot disagree. */
+            val percent: Int
+                get() = if (totalSamples > 0) (100L * decoded / totalSamples).toInt() else 0
+        }
         data class Finished(val records: Int, val failed: Int) : Status()
     }
 

@@ -2060,7 +2060,20 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
-            val held = FlightDataRepository.incompleteDownload()
+            var held = FlightDataRepository.incompleteDownload()
+            // The full record of the held record has arrived: the quick look has
+            // nothing left to add, so drop it rather than resume it afterwards.
+            val h = held
+            if (h != null && !onChart && _connectedLocatorId.value == h.second) {
+                val ts = FlightDataRepository.metadata.value
+                    .firstOrNull { it.position == h.first }?.timestampS ?: 0L
+                if (ts > 0L && FullRecordHub.finishedRecord(h.second, ts) != null) {
+                    SpLog.d(TAG, "Background download dropped: record ${h.first} arrived in full")
+                    FlightDataRepository.discard()
+                    downloadController.stop(now, lastTransferFrameMs)
+                    held = null
+                }
+            }
             val progress = FlightDataRepository.progress.value
             val state = _rocketState.value
             val broadcasting = now - state.lastPreLaunchDataTime < DOWNLOAD_LOCATOR_FRESH_MS
@@ -2071,6 +2084,7 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                 percent = if (progress.packetCount > 0)
                     100 * progress.receivedCount / progress.packetCount else 0,
                 linkHeld = linkHolds.value.isNotEmpty(),
+                fullRecordRunning = FullRecordHub.active,
                 locatorFree = held != null &&
                     BluetoothManagerRepository.bluetoothConnectionState.value == BluetoothConnectionState.Ready &&
                     _connectedLocatorId.value == held.second &&
