@@ -133,9 +133,21 @@ object Units {
         else String.format(Locale.US, "%.2f mi", ft / FEET_PER_MILE)
     }
 
-    /** [formatDistance] right-aligned to [width] characters, unit included. */
-    fun distanceField(m: Int, u: UnitSystem, width: Int): String =
-        formatDistance(m, u).padStart(width)
+    /**
+     * [formatDistance] for a fixed-width readout: the NUMBER right-aligned to
+     * [width], then a space and the unit, so its last digit lines up with the
+     * other rows ("AGL : %15.1f m") whatever the unit's length.
+     */
+    fun distanceField(m: Int, u: UnitSystem, width: Int): String {
+        val text = formatDistance(m, u)
+        val number = text.substringBefore(' ')
+        return number.padStart(width) + text.substring(number.length)
+    }
+
+    /** A map-region size for the download screen: "12.3 km" or "7.6 mi". */
+    fun formatRegionKm(km: Double, u: UnitSystem, decimals: Int = 1): String =
+        if (u == UnitSystem.English) String.format(Locale.US, "%.${decimals}f mi", km * 1000.0 * FEET_PER_METER / FEET_PER_MILE)
+        else String.format(Locale.US, "%.${decimals}f km", km)
 
     /** "250 meters", "820 feet", "0.42 miles". */
     fun spokenDistance(m: Int, u: UnitSystem): String {

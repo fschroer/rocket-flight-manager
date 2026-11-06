@@ -189,6 +189,22 @@ class UnitsTest {
     }
 
     @Test
+    fun distanceFieldLinesUpWithTheOtherRows() {
+        // The last digit sits where "AGL : %15.1f m" puts its last digit,
+        // whatever the unit's length.
+        assertEquals("%15d m".format(250), Units.distanceField(250, Metric, 15))
+        assertEquals("%15d ft".format(820), Units.distanceField(250, English, 15))
+        assertEquals("%15s mi".format("0.21"), Units.distanceField(340, English, 15))
+    }
+
+    @Test
+    fun regionSizes() {
+        assertEquals("10.0 km", Units.formatRegionKm(10.0, Metric))
+        assertEquals("6.2 mi", Units.formatRegionKm(10.0, English))
+        assertEquals("16 mi", Units.formatRegionKm(25.0, English, 0))
+    }
+
+    @Test
     fun scaleBar() {
         assertEquals(200.0 to "200 m", Units.scaleBar(250.0, Metric))
         assertEquals(2000.0 to "2 km", Units.scaleBar(2500.0, Metric))

@@ -2797,7 +2797,7 @@ fun LocatorStats(
         // believable distance is still shown: it is what the user walks toward.
         val distancePlausible = viewModel.locatorDistancePlausible.collectAsState().value
         val dst = if (validLatLng(rocketState.latitude, rocketState.longitude) && distancePlausible)
-            Units.distanceField(distanceToLocator, units, 17)
+            Units.distanceField(distanceToLocator, units, 15)
         else stringResource(R.string.unknown)
         Text(
             text = "Dist: $dst",
