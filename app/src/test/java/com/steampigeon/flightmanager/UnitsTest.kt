@@ -202,6 +202,8 @@ class UnitsTest {
         assertEquals("10.0 km", Units.formatRegionKm(10.0, Metric))
         assertEquals("6.2 mi", Units.formatRegionKm(10.0, English))
         assertEquals("16 mi", Units.formatRegionKm(25.0, English, 0))
+        assertEquals(1, Units.regionDecimals(2.0))     // 1.2 mi, not "1"
+        assertEquals(0, Units.regionDecimals(25.0))
     }
 
     @Test

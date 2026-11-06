@@ -144,6 +144,12 @@ object Units {
         return number.padStart(width) + text.substring(number.length)
     }
 
+    /**
+     * Decimals for a preset site's size in miles: one below 10 mi, so a 2 km site
+     * reads 1.2 mi rather than 1, and none above, as the km label had.
+     */
+    fun regionDecimals(km: Double): Int = if (km * 1000.0 * FEET_PER_METER / FEET_PER_MILE < 9.95) 1 else 0
+
     /** A map-region size for the download screen: "12.3 km" or "7.6 mi". */
     fun formatRegionKm(km: Double, u: UnitSystem, decimals: Int = 1): String =
         if (u == UnitSystem.English) String.format(Locale.US, "%.${decimals}f mi", km * 1000.0 * FEET_PER_METER / FEET_PER_MILE)

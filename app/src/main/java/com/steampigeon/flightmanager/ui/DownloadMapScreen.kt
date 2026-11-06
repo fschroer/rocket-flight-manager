@@ -278,7 +278,7 @@ fun DownloadMapScreen(
                     presets.forEach { site ->
                         DropdownMenuItem(
                             text = { Text(if (units == UnitSystem.English)
-                                "${site.name}  (${Units.formatRegionKm(site.widthKm.toDouble(), units, 0).substringBefore(' ')}x${Units.formatRegionKm(site.heightKm.toDouble(), units, 0)})"
+                                "${site.name}  (${Units.formatRegionKm(site.widthKm, units, Units.regionDecimals(site.widthKm)).substringBefore(' ')}x${Units.formatRegionKm(site.heightKm, units, Units.regionDecimals(site.heightKm))})"
                                 else "${site.name}  (${site.widthKm.toInt()}x${site.heightKm.toInt()} km)") },
                             onClick = {
                                 moveRequest = MoveRequest(site.bounds(), System.nanoTime())
