@@ -37,7 +37,7 @@ private const val TAG = "FirebaseCloud"
  * Each finished record goes up as two files, its raw v8 bytes and the CSV the
  * locator's USB export prints, under
  *     users/{uid}/locators/{locator_id}/{record_ts}_{crc}.{bin,csv}
- * which `firebase/storage.rules` limits to the signed-in owner.  Sharing is the
+ * which `storage.rules` in steam-pigeon-web limits to the signed-in owner.  Sharing is the
  * file's download URL and its token (decision 9), so nothing here grants access.
  *
  * Off unless the app was built with a google-services.json: without one the
@@ -61,6 +61,14 @@ object FirebaseCloud : FlightUploader {
 
     var available = false
         private set
+
+    /**
+     * The name the locator calls itself, for the web viewer's list (locator ADR-0042,
+     * amendment 2026-11-05).  The ViewModel owns the remembered names and sets this;
+     * null or blank means the upload simply carries no name.
+     */
+    @Volatile
+    var locatorName: (Long) -> String? = { null }
 
     fun init(context: Context) {
         if (appContext != null) return
@@ -159,6 +167,7 @@ object FirebaseCloud : FlightUploader {
 
     private fun meta(r: FullRecordStore.Finished, type: String) = StorageMetadata.Builder()
         .setContentType(type)
+        .apply { locatorName(r.key.locatorId)?.takeIf { it.isNotBlank() }?.let { setCustomMetadata("locator_name", it) } }
         .setCustomMetadata("locator_id", r.key.locatorId.toString())
         .setCustomMetadata("record_ts", r.key.recordTs.toString())
         .setCustomMetadata("record_crc", "%08x".format(r.key.crc))
