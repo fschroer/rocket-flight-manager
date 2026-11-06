@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import com.steampigeon.flightmanager.data.BluetoothConnectionState
 import com.steampigeon.flightmanager.data.BluetoothManagerRepository
 import com.steampigeon.flightmanager.data.DeployMode
+import com.steampigeon.flightmanager.data.TimeZoneWire
 import com.steampigeon.flightmanager.data.simflight.SimMotor
 import com.steampigeon.flightmanager.data.simflight.SimRocket
 import com.steampigeon.flightmanager.data.SimFlightWire
@@ -307,6 +308,10 @@ class BluetoothService : Service() {
      */
     fun snoozePadAlert(minutes: Int): Boolean =
         sendMessage(MsgType.PadAlertSnoozeRequest, byteArrayOf(minutes.toByte()))
+
+    /** The phone's UTC offset, for the times the locator prints (ADR-0043). */
+    fun sendTimeZone(offsetMin: Int): Boolean =
+        sendMessage(MsgType.TimeZoneSet, TimeZoneWire.payload(offsetMin))
 
     private fun changeLocatorArmedState(armedState: Boolean) {
         if (sendMessage(if (armedState) MsgType.ArmRequest else MsgType.DisarmRequest, null))

@@ -170,6 +170,9 @@ object FirebaseCloud : FlightUploader {
         .apply { locatorName(r.key.locatorId)?.takeIf { it.isNotBlank() }?.let { setCustomMetadata("locator_name", it) } }
         .setCustomMetadata("locator_id", r.key.locatorId.toString())
         .setCustomMetadata("record_ts", r.key.recordTs.toString())
+        // The same instant for a person reading the console: ISO 8601, in UTC and
+        // saying so (locator ADR-0043).  Blank for a record with no GPS time.
+        .apply { flightTimeIso(r.key.recordTs)?.let { setCustomMetadata("flight_time", it) } }
         .setCustomMetadata("record_crc", "%08x".format(r.key.crc))
         .setCustomMetadata("samples", r.samples.toString())
         .setCustomMetadata("slot", r.slot.toString())

@@ -452,9 +452,10 @@ fun FlightProfilesScreen(
                                         },
                                 ) {
                                     if (item.apogee > 0) {
-                                        item.date?.format(
-                                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                                        )?.let { Text(it) }
+                                        // With its offset (locator ADR-0043).
+                                        item.date?.let {
+                                            com.steampigeon.flightmanager.data.TimeText.format(it)
+                                        }?.let { Text(it) }
                                         Text(
                                             "Apogee: ${
                                                 item.apogee.toBigDecimal()

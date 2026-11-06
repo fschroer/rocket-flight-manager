@@ -107,6 +107,8 @@ object Protocol {
     const val SIM_FLIGHT_REQUEST_SIZE = 30
     // SimFlightStart: header 6 + target 4 + the 189-byte rocket profile.
     const val SIM_FLIGHT_START_SIZE = 199
+    // TimeZoneSet: header 6 + target 4 + int16 utc_offset_min (ADR-0043).
+    const val TIME_ZONE_SET_SIZE = 12
 }
 
 /**
@@ -550,7 +552,11 @@ enum class MsgType(val value: UByte) {
     // 2026-11-03 amendment).
     SimFlightRequest(30u),
     // Start a simulated flight from a rocket profile (ADR-0041 amendment).
-    SimFlightStart(31u);
+    SimFlightStart(31u),
+    // App→locator: the phone's current UTC offset, so the locator's console and
+    // USB export print local times with their offset (locator ADR "Times are
+    // stored in UTC and shown with their offset", 0043).  TimeZoneWire.
+    TimeZoneSet(32u);
 
     companion object {
         fun fromUByte(v: UByte) = entries.firstOrNull { it.value == v }
