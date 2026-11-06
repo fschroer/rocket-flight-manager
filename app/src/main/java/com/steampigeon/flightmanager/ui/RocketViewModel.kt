@@ -78,6 +78,7 @@ import com.steampigeon.flightmanager.data.ReceiverInfoParsed
 import com.steampigeon.flightmanager.data.SensorHealth
 import com.steampigeon.flightmanager.data.VersionInfoParsed
 import com.steampigeon.flightmanager.data.TelemetryParsed
+import com.steampigeon.flightmanager.data.TimeZoneWire
 import com.steampigeon.flightmanager.data.UserPreferencesSerializer
 import com.steampigeon.flightmanager.data.Vec3f
 import kotlinx.coroutines.Job
@@ -3320,15 +3321,31 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
             fun lastLocatorRxMs() = maxOf(_rocketState.value.lastMessageTime, lastFullRecordRxMs)
             var linkWasUp =
                 System.currentTimeMillis() - lastLocatorRxMs() < 5_000L
+            // The phone's UTC offset, for the times the locator prints (locator
+            // ADR-0043).  Rides this loop because it has the same needs: only
+            // while the link is up, and never on top of the VersionRequest.
+            var tzSentOffsetMin: Int? = null
+            var tzSentMs = 0L
             while (true) {
                 delay(1_000L)
-                val age = System.currentTimeMillis() - lastLocatorRxMs()
+                val now = System.currentTimeMillis()
+                val age = now - lastLocatorRxMs()
                 val linkUp = age < 5_000L
-                if (linkUp && !linkWasUp) versionInfoStale.value = true
+                if (linkUp && !linkWasUp) {
+                    versionInfoStale.value = true
+                    tzSentOffsetMin = null   // a locator that went off the air may have reset
+                }
                 linkWasUp = linkUp
                 if (linkUp && versionInfoStale.value) {
                     service.requestVersionInfo()
                     delay(5_000L)
+                    continue
+                }
+                val offsetMin = TimeZoneWire.offsetMinutes(ZoneId.systemDefault(), java.time.Instant.ofEpochMilli(now))
+                if (TimeZoneWire.shouldSend(linkUp, offsetMin, tzSentOffsetMin, tzSentMs, now) &&
+                    service.sendTimeZone(offsetMin)) {
+                    tzSentOffsetMin = offsetMin
+                    tzSentMs = now
                 }
             }
         }

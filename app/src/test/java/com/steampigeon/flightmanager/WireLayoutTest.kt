@@ -11,6 +11,7 @@ import com.steampigeon.flightmanager.data.LocatorConfigWire
 import com.steampigeon.flightmanager.data.MsgType
 import com.steampigeon.flightmanager.data.NoseAxis
 import com.steampigeon.flightmanager.data.Protocol
+import com.steampigeon.flightmanager.data.TimeZoneWire
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -164,6 +165,15 @@ class WireLayoutTest {
     @Test fun simFlightRequestSize() =
         assertEquals(Protocol.SIM_FLIGHT_REQUEST_SIZE, Protocol.HEADER_SIZE + targetIdSize + SimFlightWire.CANCEL_PAYLOAD_SIZE)
     @Test fun simFlightCancelOffset() = assertEquals(24, SimFlightWire.OFFSET_CANCEL_ACTION)
+
+    // ── Time zone (locator ADR-0043) ────────────────────────────────────────────
+    // Firmware: static_assert(sizeof(TimeZoneSet) == 12), offsetof(utc_offset_min)
+    // == 10, MsgType 32.  int16 little-endian minutes east of UTC.
+    @Test fun timeZoneSetType() = assertEquals(32.toUByte(), MsgType.TimeZoneSet.value)
+    @Test fun timeZoneSetSize() =
+        assertEquals(Protocol.TIME_ZONE_SET_SIZE, Protocol.HEADER_SIZE + targetIdSize + TimeZoneWire.PAYLOAD_SIZE)
+    @Test fun timeZoneSetOffset() =
+        assertEquals(TimeZoneWire.OFFSET_UTC_OFFSET_MIN, Protocol.HEADER_SIZE + targetIdSize)
 
     // Firmware: static_assert(sizeof(SimFlightStart) == 199), MsgType 31, and the
     // offsetof asserts below (ADR-0041 amendment, 2026-11-03).
