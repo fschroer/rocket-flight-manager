@@ -35,6 +35,12 @@ message UserPreferences {
   // install that never chose reads absent and gets the default, ON.
   optional bool transfer_on_signal = 9;
   optional bool transfer_on_pickup = 10;
+  // Display units (locator ADR "Units are SI underneath; English is a display
+  // choice"): 0 = metric, 1 = English. Changes only how numbers are printed,
+  // spoken and typed; nothing stored or sent is ever in feet. `optional` so an
+  // install that never chose reads absent: the app then picks a default ONCE
+  // (Units.defaultFor) and writes it, so it cannot flip later.
+  optional int32 units = 11;
 }
 
 message KnownLocator {

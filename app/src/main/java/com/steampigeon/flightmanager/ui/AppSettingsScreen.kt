@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
@@ -17,6 +18,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -37,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.steampigeon.flightmanager.R
+import com.steampigeon.flightmanager.data.UnitSystem
 import kotlinx.coroutines.launch
 import androidx.compose.material3.MenuAnchorType
 import kotlin.math.roundToInt
@@ -90,6 +93,23 @@ fun AppSettingsScreen(
                     onCheckedChange = { viewModel.updateVoiceEnabled(it) }
                 )
                 Text("Enable Speech")
+            }
+            // Display units (locator ADR "Units are SI underneath; English is a
+            // display choice"). Only how numbers are shown, spoken and typed: the
+            // locator, the radio and every exported file stay metric.
+            val units = viewModel.unitSystem.collectAsState().value
+            Column(modifier = modifier) {
+                Text(stringResource(R.string.units_setting))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = units == UnitSystem.Metric,
+                        onClick = { viewModel.setUnitSystem(UnitSystem.Metric) })
+                    Text(stringResource(R.string.units_metric))
+                    Spacer(modifier = Modifier.width(16.dp))
+                    RadioButton(selected = units == UnitSystem.English,
+                        onClick = { viewModel.setUnitSystem(UnitSystem.English) })
+                    Text(stringResource(R.string.units_english))
+                }
+                Text(stringResource(R.string.units_setting_summary), style = MaterialTheme.typography.bodySmall)
             }
             // Automatic starts of the background full-record transfer (locator ADR
             // "The radio download becomes the primary data path", decision 6). Same
