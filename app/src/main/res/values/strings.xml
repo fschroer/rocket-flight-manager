@@ -65,6 +65,12 @@
          no device name of its own. -->
     <string name="rocket_pin_label">Rocket</string>
     <string name="unknown">Unknown</string>
+    <!-- Header of the map's statistics panel when its values are old. The panel
+         stays up with the last values when the locator goes quiet; %1$s is a short
+         age such as "12 s" or "4 min". -->
+    <string name="stats_signal_lost">Signal lost · %1$s ago</string>
+    <!-- Same, while a record download is why the locator is quiet. -->
+    <string name="stats_last_heard">Last heard %1$s ago</string>
     <string name="update">Update</string>
     <!-- Deployment settings bounds (ADR-0034): a typed value out of range is refused, not clamped. -->
     <string name="settings_max">Max %1$s</string>

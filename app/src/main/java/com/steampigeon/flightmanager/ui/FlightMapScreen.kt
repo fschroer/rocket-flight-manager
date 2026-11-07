@@ -1706,7 +1706,12 @@ private fun MapWithOverlays(
             }
         }
 
-        if (lastMessageAge < messageTimeout) {
+        // Shown once the locator has been heard at all, and KEPT when it goes
+        // quiet: the last altitude, state and position are what a flyer needs
+        // most when the link drops. The panel marks itself stale instead of
+        // disappearing (see StaleTelemetry). lastMessageTime is 0 only before
+        // the first message of this run.
+        if (rocketState.lastMessageTime != 0L) {
             LocatorStats(
                 rocketState = rocketState,
                 armedState = armedState,
@@ -2710,6 +2715,33 @@ fun LocatorStats(
     modifier: Modifier
 ) {
     val units = viewModel.unitSystem.collectAsState().value
+
+    // ── Staleness ─────────────────────────────────────────────────────────────
+    // The panel stays up when the locator goes quiet (it used to vanish after
+    // 2 s), so it must say how old its numbers are. Nothing else recomposes this
+    // panel once messages stop, so it keeps its own clock: one wakeup at the
+    // moment the data turns stale, then a 1 s tick, restarted by every message.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(rocketState.lastMessageTime) {
+        while (true) {
+            now = System.currentTimeMillis()
+            val age = now - rocketState.lastMessageTime
+            delay(if (StaleTelemetry.isStale(age)) 1_000L
+                  else StaleTelemetry.STALE_AFTER_MS - age + 50L)
+        }
+    }
+    val messageAge = now - rocketState.lastMessageTime
+    val stale = StaleTelemetry.isStale(messageAge)
+    // During a record download the locator is quiet because the app asked it to
+    // be (#49, ADR-0040). The numbers are just as old, but that is not a lost
+    // signal, so the header says so in a neutral color.
+    val downloadingRecord =
+        viewModel.backgroundDownload.collectAsState().value?.phase == RocketViewModel.DownloadPhase.Downloading ||
+            FullRecordHub.radioTransferLive(now, rocketState.lastMessageTime)
+    // Applied to the value rows, never to the header: the header is the one line
+    // on the panel that is current.
+    val valueAlpha = if (stale) 0.55f else 1f
+
     var columnWidth by remember { mutableStateOf(0) }
     var columnHeight by remember { mutableStateOf(0) }
     var locatorStatisticsOffset by remember { mutableStateOf(IntOffset(0, 0)) }
@@ -2744,8 +2776,14 @@ fun LocatorStats(
                 // Same reasoning as the layout below: a disarmed rocket in flight
                 // is exactly when someone wants to hear state and altitude without
                 // looking, so this cannot be gated on arm state either (#36).
-                if (isInFlight(armedState, rocketState))
-                    announcer.flush("${locatorConfig.deviceName}, ${rocketState.flightState}, ${Units.spokenAltitude(rocketState.altitudeAboveGroundLevel, units)}")
+                // A stale readout is spoken as one, so a number heard without
+                // looking is never taken for a live one.
+                if (isInFlight(armedState, rocketState)) {
+                    val age = System.currentTimeMillis() - rocketState.lastMessageTime
+                    val heard = if (StaleTelemetry.isStale(age))
+                        ", last heard ${StaleTelemetry.spokenAge(age)} ago" else ""
+                    announcer.flush("${locatorConfig.deviceName}$heard, ${rocketState.flightState}, ${Units.spokenAltitude(rocketState.altitudeAboveGroundLevel, units)}")
+                }
             }
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
@@ -2789,6 +2827,21 @@ fun LocatorStats(
         // Armed-and-waiting still gets the flight layout, exactly as before.
         val inFlight = isInFlight(armedState, rocketState)
 
+        // ── Stale header ──────────────────────────────────────────────────────
+        // Red "Signal lost" when the locator has simply gone quiet; neutral
+        // "Last heard" while a record download is the reason.
+        if (stale) {
+            Text(
+                text = stringResource(
+                    if (downloadingRecord) R.string.stats_last_heard else R.string.stats_signal_lost,
+                    StaleTelemetry.shortAge(messageAge),
+                ),
+                style = TelemetryTextStyle,
+                color = if (downloadingRecord) Color.Unspecified else MaterialTheme.colorScheme.error,
+            )
+        }
+
+        Column(modifier = Modifier.alpha(valueAlpha)) {
         // ── Telemetry rows ────────────────────────────────────────────────────
         // "Unknown" beats a number that cannot be true. The figure is suppressed
         // for a coordinate that is no fix at all (0,0 before the locator has one,
@@ -2855,7 +2908,11 @@ fun LocatorStats(
                 },
                 style = TelemetryTextStyle,
             )
-        } else {
+        } else if (!stale) {
+            // Not shown stale. Each row is a claim about continuity NOW, and a
+            // dropped BLE link resets locatorConfig to defaults
+            // (releaseLocatorOnLinkLoss), so a stale row could describe a
+            // configuration the locator never had.
             listOf(
                 ChannelConfig(locatorConfig.deploymentChannel1Mode, rocketState.deployChannel1Armed),
                 ChannelConfig(locatorConfig.deploymentChannel2Mode, rocketState.deployChannel2Armed),
@@ -2924,6 +2981,7 @@ fun LocatorStats(
                 textDecoration = if (navigable) TextDecoration.Underline else null,
             )
         }
+        } // end value rows (dimmed while stale)
     }
 
     LaunchedEffect(locatorStatisticsOffset) {
