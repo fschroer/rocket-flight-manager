@@ -2,6 +2,8 @@ package com.steampigeon.flightmanager.ui
 
 import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,9 +65,15 @@ fun AppSettingsScreen(
             .fillMaxHeight()
             .padding(16.dp)
     ) {
+        // The settings scroll and the Return button stays pinned below them.
+        // Without the scroll, a phone that shows this list taller than the
+        // screen (a larger default font or display size, e.g. the Motorola Edge
+        // 2025) could not reach the bottom settings, and the overflow drew over
+        // the Return button.
         Column(
-            modifier = modifier
-//            .verticalScroll(scrollState)
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
                 .padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
@@ -241,7 +249,6 @@ fun AppSettingsScreen(
             )
             // Capture initial and updated app configuration data.
         }
-        Spacer (modifier = modifier.weight(1f))
         Row(
             modifier = modifier,
             //.fillMaxWidth()

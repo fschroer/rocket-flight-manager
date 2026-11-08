@@ -7,6 +7,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
@@ -429,65 +433,74 @@ fun FlightProfilesScreen(
                 .fillMaxHeight()
                 .padding(16.dp)
         ) {
-            Column(
-                modifier = modifier.weight(11f),
-                verticalArrangement = Arrangement.SpaceAround
-            ) {
-                when {
-                    flightProfileMetadata.isNotEmpty() ->
-                        // Always show the list while metadata is populated, regardless of
-                        // message state, so a background state change never hides the list.
-                        flightProfileMetadata.forEach { item ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    painter = painterResource(R.drawable.u_turn_right),
-                                    contentDescription = stringResource(R.string.flight_profiles)
-                                )
-                                Text("${item.position}")
-                                Spacer(modifier = modifier.weight(1f))
-                                Column(
-                                    modifier = Modifier
-                                        .weight(5f)
-                                        .clickable {
-                                            if (item.apogee > 0) {
-                                                viewModel.updateFlightProfileArchivePosition(item.position)
-                                                if (service != null)
-                                                    viewModel.getFlightProfileData(service)
-                                            }
-                                        },
-                                ) {
-                                    if (item.apogee > 0) {
-                                        // With its offset (locator ADR-0043).
-                                        item.date?.let {
-                                            com.steampigeon.flightmanager.data.TimeText.format(it)
-                                        }?.let { Text(it) }
-                                        Text(
-                                            if (units == UnitSystem.English)
-                                                "Apogee: ${Units.formatAltitude(item.apogee, units)}"
-                                            else "Apogee: ${
-                                                item.apogee.toBigDecimal()
-                                                    .setScale(1, RoundingMode.UP).toFloat()
-                                            }m"
-                                        )
-                                    } else {
-                                        Text("No flight data")
-                                        Text("")
+            // The list scrolls when its rows are taller than the space (a large
+            // font or display size, e.g. the Motorola Edge 2025), instead of
+            // drawing over the buttons below.  heightIn(min = maxHeight) keeps
+            // the rows spread down the screen when they do fit, as before.
+            BoxWithConstraints(modifier = Modifier.weight(11f)) {
+                val listHeight = maxHeight
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(min = listHeight),
+                    verticalArrangement = Arrangement.SpaceAround
+                ) {
+                    when {
+                        flightProfileMetadata.isNotEmpty() ->
+                            // Always show the list while metadata is populated, regardless of
+                            // message state, so a background state change never hides the list.
+                            flightProfileMetadata.forEach { item ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.u_turn_right),
+                                        contentDescription = stringResource(R.string.flight_profiles)
+                                    )
+                                    Text("${item.position}")
+                                    Spacer(modifier = modifier.weight(1f))
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(5f)
+                                            .clickable {
+                                                if (item.apogee > 0) {
+                                                    viewModel.updateFlightProfileArchivePosition(item.position)
+                                                    if (service != null)
+                                                        viewModel.getFlightProfileData(service)
+                                                }
+                                            },
+                                    ) {
+                                        if (item.apogee > 0) {
+                                            // With its offset (locator ADR-0043).
+                                            item.date?.let {
+                                                com.steampigeon.flightmanager.data.TimeText.format(it)
+                                            }?.let { Text(it) }
+                                            Text(
+                                                if (units == UnitSystem.English)
+                                                    "Apogee: ${Units.formatAltitude(item.apogee, units)}"
+                                                else "Apogee: ${
+                                                    item.apogee.toBigDecimal()
+                                                        .setScale(1, RoundingMode.UP).toFloat()
+                                                }m"
+                                            )
+                                        } else {
+                                            Text("No flight data")
+                                            Text("")
+                                        }
                                     }
                                 }
+                                HorizontalDivider()
                             }
-                            HorizontalDivider(modifier = modifier.weight(1f))
-                        }
-                    flightProfileMetadataMessageState == LocatorMessageState.AckUpdated ->
-                        Text("No flights recorded on locator ${locatorConfig.deviceName}")
-                    else ->
-                        // Show the attempt count once we're retrying, so a lossy
-                        // link reads as "still trying" rather than a frozen screen.
-                        Text(
-                            "Fetching flight data from locator ${locatorConfig.deviceName}" +
-                                    if (metadataAttempt > 1) " (attempt $metadataAttempt)" else ""
-                        )
+                        flightProfileMetadataMessageState == LocatorMessageState.AckUpdated ->
+                            Text("No flights recorded on locator ${locatorConfig.deviceName}")
+                        else ->
+                            // Show the attempt count once we're retrying, so a lossy
+                            // link reads as "still trying" rather than a frozen screen.
+                            Text(
+                                "Fetching flight data from locator ${locatorConfig.deviceName}" +
+                                        if (metadataAttempt > 1) " (attempt $metadataAttempt)" else ""
+                            )
+                    }
                 }
-                Spacer(modifier = modifier.weight(1f))
             }
             FullRecordTransferStatus(transferStatus)
             // The row is as tall as its taller button and both fill it, so the two
