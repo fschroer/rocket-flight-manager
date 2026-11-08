@@ -1288,6 +1288,11 @@ private fun MapWithOverlays(
         val liveMapMaxZoom =
             resolveMapMaxZoom(viewModel.mapMaxZoom.collectAsState().value).toDouble()
         val locatorLatLng = LatLng(rocketState.latitude, rocketState.longitude)
+        // Under canopy with the fix lost, the marker and its ring follow the last
+        // fix carried forward on the wind (ADR-0022 amendment 2026-11-08, #72).
+        // Only the drawing moves: distance, bearing and callouts use the real fix.
+        val coasted = viewModel.coastedMarker.collectAsState().value
+        val markerLatLng = coasted?.let { LatLng(it.latitude, it.longitude) } ?: locatorLatLng
         val surveyInProgress by viewModel.surveyInProgress.collectAsState()
         val locatorSearchRunning =
             viewModel.locatorSearch.collectAsState().value?.running == true
@@ -1342,9 +1347,9 @@ private fun MapWithOverlays(
             modifier = Modifier.fillMaxSize(),
             styleJson = styleJson,
             cameraState = cameraState,
-            rocketLatLng = locatorLatLng,
+            rocketLatLng = markerLatLng,
             markerState = markerState,
-            accuracyRadiusM = rocketState.hacc.toDouble(),
+            accuracyRadiusM = coasted?.radiusM ?: rocketState.hacc.toDouble(),
             // Altitude and capture time are carried through, not dropped: they
             // drive the 3D altitude curtain and its one-second markers.
             //
@@ -2857,6 +2862,14 @@ fun LocatorStats(
             color = if (rocketState.gpsStatus == SensorHealth.Ok) Color.Unspecified else MaterialTheme.colorScheme.error,
             style = TelemetryTextStyle,
         )
+        // The marker is an estimate, not a fix: say so where the numbers are read.
+        viewModel.coastedMarker.collectAsState().value?.let { c ->
+            Text(
+                text = stringResource(R.string.stats_marker_estimated, StaleTelemetry.shortAge(c.sinceFixMs)),
+                color = MaterialTheme.colorScheme.error,
+                style = TelemetryTextStyle,
+            )
+        }
         Text(
             text = "AGL : ${Units.altitudeNumber(rocketState.altitudeAboveGroundLevel, units, 15)} ${Units.altitudeUnit(units)}",
             style = TelemetryTextStyle,
