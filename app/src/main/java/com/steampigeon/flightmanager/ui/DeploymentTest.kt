@@ -1,9 +1,10 @@
 package com.steampigeon.flightmanager.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -67,8 +68,13 @@ fun DeploymentTestScreen(
     Column (
         modifier = modifier.fillMaxHeight().padding(16.dp)
     ) {
+        // Scrolls, with Return pinned below, so a large font or display size
+        // cannot push the Stop button off the screen or under Return.
         Column(
-            modifier = modifier.padding(start = 40.dp),
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 40.dp),
             verticalArrangement = Arrangement.SpaceAround
         ) {
             // Perform remote deployment test
@@ -142,7 +148,6 @@ fun DeploymentTestScreen(
                 )
             }
         }
-        Spacer (modifier = modifier.weight(1f))
         Row(
             modifier = modifier,
             //.fillMaxWidth()
