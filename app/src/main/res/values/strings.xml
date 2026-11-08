@@ -71,6 +71,8 @@
     <string name="stats_signal_lost">Signal lost · %1$s ago</string>
     <!-- Same, while a record download is why the locator is quiet. -->
     <string name="stats_last_heard">Last heard %1$s ago</string>
+    <!-- The map marker is the last fix carried forward on the wind under canopy, not a fix (locator ADR-0022 amendment 2026-11-08, #72). -->
+    <string name="stats_marker_estimated">Marker est. · fix %1$s ago</string>
     <string name="update">Update</string>
     <!-- Deployment settings bounds (ADR-0034): a typed value out of range is refused, not clamped. -->
     <string name="settings_max">Max %1$s</string>

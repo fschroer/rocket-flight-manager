@@ -714,6 +714,15 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
      */
     private val _locatorDistancePlausible = MutableStateFlow(true)
     val locatorDistancePlausible: StateFlow<Boolean> = _locatorDistancePlausible.asStateFlow()
+    /**
+     * Where to draw the marker under canopy while the fix is lost: the last fix
+     * carried forward on the wind (locator ADR-0022 amendment 2026-11-08, #72).
+     * Null whenever the map should draw the locator's own position. Drawn only:
+     * distance, bearing and callouts keep using the last real fix.
+     */
+    private val windCoast = WindCoast()
+    private val _coastedMarker = MutableStateFlow<WindCoast.Coasted?>(null)
+    val coastedMarker: StateFlow<WindCoast.Coasted?> = _coastedMarker.asStateFlow()
     // The last distance measured while the locator actually had a fix. The anchor
     // for the jump test, so the envelope of believable movement always grows from
     // a real measurement rather than from another unverified reading.
@@ -2890,6 +2899,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 parsed.msg.padAlertSnoozeMinutes)
                             val verdict = classifyLink(
                                 parsed.msg.rssi, parsed.msg.snr, parsed.msg.noiseFloor, parsed.msg.badFrames, currentTime)
+                            windCoast.reset()
+                            _coastedMarker.value = null
                             _rocketState.update { currentState ->
                                 currentState.copy(
                                     lastMessageTime = currentTime,
@@ -3077,6 +3088,17 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                     linkQuality = verdict,
                                 )
                             }
+                            _coastedMarker.value = windCoast.update(
+                                nowMs = currentTime,
+                                hasFix = locatorHasFix(parsed.msg.satellites, parsed.msg.gpsStatus),
+                                inDescent = WindCoast.isDescent(parsed.msg.flightState.flightStates.toInt()),
+                                landed = parsed.msg.flightState == FlightStates.Landed,
+                                latitude = parsed.msg.latitude,
+                                longitude = parsed.msg.longitude,
+                                velNorthMps = parsed.msg.velNed.x,
+                                velEastMps = parsed.msg.velNed.y,
+                                haccM = parsed.msg.hacc,
+                            )
                             // Reset path on new launch; accumulate during flight.
                             // See startsNewFlight for why the trigger is any
                             // grounded → airborne transition.
@@ -3089,6 +3111,8 @@ class RocketViewModel(application: Application) : AndroidViewModel(application) 
                                 // itself is kept; Flight Profiles can draw it again.
                                 _flightPath.value = emptyList()
                                 saveFlightPath()
+                                windCoast.reset()
+                                _coastedMarker.value = null
                                 landingConcludedThisFlight = false
                                 landedStatusReceived = false
                                 _archivedFlightPath.value = emptyList()
