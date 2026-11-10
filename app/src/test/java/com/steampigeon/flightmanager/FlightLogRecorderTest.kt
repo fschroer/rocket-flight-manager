@@ -274,16 +274,28 @@ class FlightLogRecorderTest {
     // ── Naming ───────────────────────────────────────────────────────────────
 
     @Test
-    fun `the file is named for the locator and the local launch time`() {
+    fun `the file is named for the locator, the app and the local launch time`() {
         val sink = FakeSink()
         recorder(sink).onLaunch(1_756_000_000_000, "Kestrel", "header")
-        assertEquals("Kestrel_2025-08-24_014640.csv", sink.opened.single())
+        assertEquals("Kestrel_App_2025-08-24_014640.csv", sink.opened.single())
+    }
+
+    /**
+     * The `App` field sits BETWEEN the locator and the stamp, so a shared log is
+     * distinguishable from the locator's own full-record export of the same flight
+     * without opening it — and so the stamp stays the last two fields, which is where
+     * [com.steampigeon.flightmanager.data.FlightLogFile.captureKey] reads it from.
+     */
+    @Test
+    fun `the app marker separates the locator name from the datestamp`() {
+        val name = FlightLog.fileName("Kestrel", 1_756_000_000_000, zone)
+        assertEquals(listOf("Kestrel", "App", "2025-08-24", "014640"), name.removeSuffix(".csv").split("_"))
     }
 
     @Test
     fun `a locator name that would escape the directory is made safe`() {
         assertEquals(
-            ".._etc_passwd_2025-08-24_014640.csv",
+            ".._etc_passwd_App_2025-08-24_014640.csv",
             FlightLog.fileName("../etc/passwd", 1_756_000_000_000, zone),
         )
     }
@@ -291,7 +303,7 @@ class FlightLogRecorderTest {
     @Test
     fun `an unnamed locator still produces a usable filename`() {
         val name = FlightLog.fileName("", 1_756_000_000_000, zone)
-        assertEquals("locator_2025-08-24_014640.csv", name)
+        assertEquals("locator_App_2025-08-24_014640.csv", name)
     }
 
     // ── Format ───────────────────────────────────────────────────────────────

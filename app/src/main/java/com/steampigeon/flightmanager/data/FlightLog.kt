@@ -100,7 +100,13 @@ object FlightLog {
     // ── Naming ───────────────────────────────────────────────────────────────
 
     /**
-     * `<locator>_YYYY-MM-DD_HHmmss.csv`, in the phone's own zone.
+     * `<locator>_App_YYYY-MM-DD_HHmmss.csv`, in the phone's own zone.
+     *
+     * [APP_LOG_MARKER] sits between the two because a shared log lands in an inbox
+     * or a Downloads folder next to the locator's own full-record export of the same
+     * flight, and the two files are not the same data: this one is the app's view of
+     * the telemetry it received, gaps and all.  A name that says which is which is
+     * the only thing the recipient has to go on.
      *
      * Local time rather than UTC because the name is read by a person deciding
      * which of six logs was the flight after lunch, and a launch at 14:20 local
@@ -115,6 +121,15 @@ object FlightLog {
      */
     const val UNNAMED_LOCATOR = "locator"
 
+    /**
+     * Marks a file as this app's recording rather than a locator full-record export.
+     *
+     * Read back by `FlightLogFile.locatorName`, which has to strip it again: logs
+     * recorded before this marker existed carry no `App` field, so the parse has to
+     * accept both shapes for as long as a phone can still be holding one.
+     */
+    const val APP_LOG_MARKER = "App"
+
     fun fileName(locatorName: String, epochMs: Long, zone: ZoneId): String {
         val safe = locatorName
             .map { if (it.isLetterOrDigit() || it == '.' || it == '-' || it == '_') it else '_' }
@@ -123,7 +138,7 @@ object FlightLog {
             .take(MAX_NAME_CHARS)
             .ifEmpty { UNNAMED_LOCATOR }
         val stamp = Instant.ofEpochMilli(epochMs).atZone(zone).format(FILENAME_TIME_FORMAT)
-        return "${safe}_$stamp$FILE_EXTENSION"
+        return "${safe}_${APP_LOG_MARKER}_$stamp$FILE_EXTENSION"
     }
 
     private const val MAX_NAME_CHARS = 24

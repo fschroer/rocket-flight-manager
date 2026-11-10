@@ -240,9 +240,14 @@ data class FlightLogFile(
             // and was reported as a locator named "whatever" — a guess presented as
             // fact, on the one screen whose job is to say which airframe flew.
             val key = captureKey ?: return FlightLog.UNNAMED_LOCATOR
-            return name.substringBeforeLast(FlightLog.FILE_EXTENSION)
+            val head = name.substringBeforeLast(FlightLog.FILE_EXTENSION)
                 .removeSuffix(key)
                 .trimEnd('_')
+            // Stripped as a whole `_App` FIELD, not as the letters: a locator named
+            // "Snapp" keeps its last three characters, a locator actually named "App"
+            // still reads as itself, and a log recorded before the marker existed has
+            // no such field to lose.
+            return head.removeSuffix("_" + FlightLog.APP_LOG_MARKER)
                 .ifEmpty { FlightLog.UNNAMED_LOCATOR }
         }
 

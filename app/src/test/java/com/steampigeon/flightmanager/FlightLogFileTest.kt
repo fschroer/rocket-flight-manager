@@ -82,10 +82,39 @@ class FlightLogFileTest {
 
     @Test
     fun `the locator name and capture time are recovered from the filename`() {
-        val f = log("Kestrel_2025-08-24_014640.csv")
+        val f = log("Kestrel_App_2025-08-24_014640.csv")
         assertEquals("Kestrel", f.locatorName)
         assertEquals("2025-08-24 01:46:40", f.capturedAt)
         assertEquals("2025-08-24_014640", f.captureKey)
+    }
+
+    /**
+     * Logs recorded before the `App` field existed are still sitting on phones, and
+     * the screen that lists them has no other source for the airframe's name — so the
+     * old shape parses exactly as it always did.
+     */
+    @Test
+    fun `a log named before the App field still reads as its own locator`() {
+        val f = log("Kestrel_2025-08-24_014640.csv")
+        assertEquals("Kestrel", f.locatorName)
+        assertEquals("2025-08-24 01:46:40", f.capturedAt)
+    }
+
+    /**
+     * The field is stripped as a field, not as three letters: the marker is removed
+     * only with the separator in front of it.
+     */
+    @Test
+    fun `a locator whose name ends in those letters keeps them`() {
+        assertEquals("Snapp", log("Snapp_App_2025-08-24_014640.csv").locatorName)
+        assertEquals("Snapp", log("Snapp_2025-08-24_014640.csv").locatorName)
+    }
+
+    /** A locator named for the marker itself is not mistaken for the marker. */
+    @Test
+    fun `a locator actually named App survives`() {
+        assertEquals("App", log("App_App_2025-08-24_014640.csv").locatorName)
+        assertEquals("App", log("App_2025-08-24_014640.csv").locatorName)
     }
 
     /**
